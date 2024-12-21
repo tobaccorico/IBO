@@ -1,0 +1,57 @@
+@keyframes root-opacity {
+  0% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.85;
+    transform: scale(0.95); 
+  }
+}
+
+.summary-root {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  align-items: flex-start;
+  height: 100%;
+  max-height: 500px;
+  animation: root-opacity 0.75s ease-out forwards;
+  text-shadow: 2.5px 2.5px 5px #000, 1px 1px 2px #000;
+}
+.summary-section{
+  margin-top: 20px;
+}
+
+.summary-title {
+  color: #54b420;
+  font-size: 18px;
+  line-height: 24px;
+  font-family: "Outfit";
+  margin-bottom: 2px;
+}
+
+.summary-value {
+  font-family: "Road Rage";
+  font-size: 50px;
+  line-height: 54px;
+  color: #ffffff;
+}
+
+.summary-valueSmall {
+  font-family: "Road Rage";
+  font-size: 28px;
+  line-height: 32px;
+  color: #ffffff;
+}
+
+.summary-cents {
+  font-family: inherit;
+  font-size: 30px;
+  line-height: 34px;
+  margin-right: 8px;
+}
