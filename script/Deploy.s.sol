@@ -17,8 +17,8 @@ import {AggregatorV3Interface} from "../src/imports/AggregatorV3Interface.sol";
 import {IV3SwapRouter as ISwapRouter} from "../src/imports/IV3SwapRouter.sol"; // used on Base and Taiko...
 import {MorphoBalancesLib} from "../src/imports/morpho/libraries/MorphoBalancesLib.sol";
 import {MorphoChainlinkOracleV2} from "../src/imports/morpho/MorphoChainlinkOracleV2.sol";
-import {IMorphoChainlinkOracleV2Factory} from "../src/imports/morpho/IMorphoChainlinkOracleV2Factory.sol";
 import {INonfungiblePositionManager} from "../src/imports/INonfungiblePositionManager.sol";
+import {IMorphoChainlinkOracleV2Factory} from "../src/imports/morpho/IMorphoChainlinkOracleV2Factory.sol";
 
 contract Deploy is Script {
     Quid public quid; 
@@ -55,7 +55,7 @@ contract Deploy is Script {
 
     address public IRM = 0x46415998764C29aB2a25CbeA6254146D50D22687;
     IMorpho public morpho = IMorpho(0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb);
-    IMorphoChainlinkOracleV2Factory public morphoFactory = IMorphoChainlinkOracleV2Factory(0x2DC205F24BCb6B311E5cdf0745B0741648Aebd3d);
+    // IMorphoChainlinkOracleV2Factory public morphoFactory = IMorphoChainlinkOracleV2Factory(0x2DC205F24BCb6B311E5cdf0745B0741648Aebd3d);
     bytes32 public ID = 0xb1c74e62cbe3721a37040c248e481d175cffb45c686b5b423cd446a063261431;
 
     IUniswapV3Factory public factory = IUniswapV3Factory(0x33128a8fC17869897dcE68Ed026d694621f6FDfD);
@@ -76,6 +76,13 @@ contract Deploy is Script {
     // Unichain : 0x4200000000000000000000000000000000000006
     // Sepolia : 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14
     // Taiko : 0xA51894664A773981C6C112C43ce576f315d5b1B6
+
+    // Milestone 2
+    /*
+    function launchMorphoMarket(address collateral, address loan) {
+        
+    }
+    */
 
     function run() public {
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));

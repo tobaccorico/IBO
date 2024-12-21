@@ -116,6 +116,26 @@ contract MO is ReentrancyGuard {
         return FullMath.mulDiv(amt, cap, 100);
     }
 
+    // TODO why is it necessary to charge interst
+    // continuously, if, in theory we can actually
+    // do totally interest-free provide leverage, 
+    // not like liquity does with its product sum...
+    // quid is a sum of products. it's not constant
+    // product or constant sum, but it's a balancer.
+    // we no longer need a method that blythe masters
+    // invented and liquity copied, "they want a piece 
+    // of me? I ain't the one that's serving slices"
+    // see fold() and the rest of the rap the reason
+    // liquity has their "redemption" feature, is not 
+    // just for the hard peg. it's also so that we 
+    // never run into the scenario where someone 
+    // creates a debt they never pay off...that's 
+    // a form of denial of service. to prevent it,
+    // in our own way, we decide to charge `FEE` 
+    // in annualised terms (over time). if it 
+    // remains below 12%...this is relatively 
+    // the same as a CDP with a 1 month life
+    // span, considering liquity's 0.5% x 2
     function set_price_eth(bool up,
         bool refresh) external {
         (uint160 sqrtPriceX96

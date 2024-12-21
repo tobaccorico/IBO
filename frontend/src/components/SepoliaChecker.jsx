@@ -42,7 +42,7 @@ export const SepoliaChecker = () => {
           }
         } catch (error) {
           if (error.code === 4902) {
-            setNotifications('error', 'Sepolia network not found in wallet. Please add it manually.')
+            setNotifications('error', 'Base mainnet not found in wallet. Please add the network manually.')
           } else if (error.code === 4001) {
             setNotifications('info', 'Network switch request was rejected by the user.')
           } else {
