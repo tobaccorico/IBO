@@ -618,6 +618,13 @@ contract Quid is ERC20, // OFTOwnable2Step,
         // TODO use to Public Allocator to retrieve market liquidity
         // as well as available liquidity for a market, using multiple
         // markets (assuming we have deployed several) if we need to
+        // ALSO...to prevent the case where we need to repay, and we 
+        // have no DAI on hand, we need to obtain DAI by selling...
+        // instead of integrating with Curve (sorry, our contract is
+        // already phat enough) we can create discount to get needed $
+        // as we have already demonstrated that we are capable of, but
+        // perhaps in a more non-linear method. speaking of which, fold()
+        // needs a revisit on that front ;)
         else if (collat > 0 && delta > 0 
                 && inDollars > delta) {
             IMorpho(MORPHO).supplyCollateral(
