@@ -27,7 +27,7 @@ export const SepoliaChecker = () => {
           if (currentChainId.toLowerCase() === chainHex) return
           
 
-          setNotifications('info', 'Requesting to switch to Sepolia Testnet...')
+          setNotifications('info', 'Requesting to switch to Base mainnet...')
 
           await window.ethereum.request({
             method: 'wallet_switchEthereumChain',
@@ -36,9 +36,9 @@ export const SepoliaChecker = () => {
 
           const newChainId = await window.ethereum.request({ method: 'eth_chainId' })
           if (newChainId.toLowerCase() === chainHex) {
-            setNotifications('success', 'Successfully switched to Sepolia Testnet')
+            setNotifications('success', 'Successfully switched to Base mainnet')
           } else {
-            setNotifications('error', 'Failed to switch to Sepolia Testnet')
+            setNotifications('error', 'Failed to switch to Base mainnet')
           }
         } catch (error) {
           if (error.code === 4902) {
@@ -57,9 +57,9 @@ export const SepoliaChecker = () => {
 
     const onChainChanged = (chainId) => {
       if (chainId.toLowerCase() === chainHex) {
-        setNotifications('success', 'Connected to Sepolia Testnet')
+        setNotifications('success', 'Connected to Base mainnet')
       } else {
-        setNotifications('info', 'Requesting a switch to Sepolia Testnet...')
+        setNotifications('info', 'Requesting a switch to Base mainnet...')
         checkAndSwitchChain()
       }
     }
