@@ -31,7 +31,6 @@ interface IERC721Receiver {
 } // http://42.fr Piscine
 import "./MOulinette.sol";
 contract Quid is ERC20, // OFTOwnable2Step, 
-    // LayerZero commented out save gas on deployment
     IERC721Receiver, ReentrancyGuard { 
     using SafeTransferLib for ERC4626;
     using SafeTransferLib for ERC20;
@@ -76,7 +75,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     address public immutable FRAX;
     address public immutable SUSDE;
     address public immutable VAULT;
-    // ^ Morpho curated USDC vault  
+    // ^ Morpho curated USDC vault
 
     IDSROracle internal DSR;
     ISCRVOracle internal CRV;
@@ -194,7 +193,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
             token == SUSDE ||
             token == SUSDS) { 
             isDollar = true;
-            // commented out for compilation purposes (less bytecode)
+            // commented out for 
+            // compilation only 
+            // (less bytecode)
             /* if (!l2) { // L1
                 amount = FullMath.min(
                       ERC4626(token).balanceOf(from),
@@ -228,12 +229,11 @@ contract Quid is ERC20, // OFTOwnable2Step,
                                     usd, address(this));
                         perVault[vault].debit += amount;
                     } else { perVault[token].debit += usd; }
-        }             require(isDollar && amount > 0, "$");
+        }               require(isDollar && amount > 0, "$");
     }
 
-    // used in MO _swap();
-    // to mirror, there's
-    // mint function in MO
+    // used in MO _swap(); to mirror this sense,
+    // there's mint function in MO(Mounlinette)
     function withdrawUSDC(uint amount) public
         onlyGenerators returns (uint withdrawn) {
         withdrawn = FullMath.min(amount, 
@@ -243,6 +243,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
         ERC4626(VAULT).convertToShares(withdrawn),
                         Moulinette, address(this)); 
     }
+ 
+    // x.com/OneTrueKirk/status/1823948647412683248
     function lastRedeem(address who) public view
         returns (uint) { return lastRedeemed[who]; }
     function qd_amt_to_dollar_amt(uint qd_amt) public
@@ -296,8 +298,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         public view returns (uint total) {
         uint batches = matureBatches();
         for (uint i = 0; i < batches; i++) {
-            total += consideration[account][i];
-        }
+        total += consideration[account][i]; }
     }
     // turning a generator is what redeems it
     function turn(address from, uint value)
@@ -314,7 +315,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint balance_from = this.balanceOf(msg.sender);
         uint value = FullMath.min(amount, balance_from);
         uint from_vote = feeVotes[msg.sender];
-        bool result = true;
+        bool result = true; 
         if (to == Moulinette) {
             _burn(msg.sender, value);
         } else if (to != address(0)) {
@@ -374,8 +375,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             _transferHelper(from, to, value);
             _calculateMedian(this.balanceOf(from),
                 from_vote, balance_from, from_vote);
-        }
-        return result;
+        } return result;
     }
 
     function vote(uint new_vote) external {
@@ -404,32 +404,26 @@ contract Quid is ERC20, // OFTOwnable2Step,
      *  in the same range range(0, len(Weights)) such that
      *  sum(Weights[0:k]) > sum(Weights) / 2
      */ // TODO debug
-    function _calculateMedian(uint old_stake, uint old_vote,
+    function _calculateMedian( // for fee
+        uint old_stake, uint old_vote,
         uint new_stake, uint new_vote) internal {
         if (old_vote != 17 && old_stake != 0) {
             WEIGHTS[old_vote] -= FullMath.min(
-                WEIGHTS[old_vote], old_stake
-            );
-            if (old_vote <= K) {
-                SUM -= FullMath.min(SUM, old_stake);
-            }
-        }   if (new_stake != 0) {
-                if (new_vote <= K) {
-                    SUM += new_stake;
-                }
-                WEIGHTS[new_vote] += new_stake;
-        } uint mid = this.totalSupply() / 2;
-        if (mid != 0) {
+                WEIGHTS[old_vote], old_stake);
+            if (old_vote <= K) { SUM -= FullMath.min(
+                                      SUM, old_stake); }
+        }   if (new_stake != 0) { if (new_vote <= K) {
+                                      SUM += new_stake; }
+                      WEIGHTS[new_vote] += new_stake; }
+        uint mid = this.totalSupply() / 2; if (mid != 0) {
             if (K > new_vote) {
                 while (K >= 1 && (
                     (SUM - WEIGHTS[K]) >= mid
                 )) { SUM -= WEIGHTS[K]; K -= 1; }
-            } else {
-                while (SUM < mid) {
-                    K += 1; SUM += WEIGHTS[K];
-                }
+            } else { while (SUM < mid) { K += 1; 
+                            SUM += WEIGHTS[K]; }
             } MO(Moulinette).setFee(K);
-        }  else { SUM = 0; } // reset
+        } else { SUM = 0; } // re^
     }
     function _getPrice(address token) internal 
         view returns (uint price) { // L2 only
@@ -477,6 +471,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
          address constant F8N = 0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405;
         address constant QUID = 0x42cc020Ef5e9681364ABB5aba26F39626F1874A4;
       address constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
+    // basescan.org/tx/0xdad5990d8164f9908d25fce906cb8863e458471a1d645e5215f3a39eb42f006d
     /** Whenever an {IERC721} `tokenId` token is transferred to this ERC20: ratcheting batch
      * @dev Safe transfer `tokenId` token from `from` to `address(this)`, checking that the
     recipient prevent tokens from being forever locked. An NFT is used as the _delegate is 
@@ -496,16 +491,14 @@ contract Quid is ERC20, // OFTOwnable2Step,
         external override returns (bytes4) { 
         uint batch = currentBatch(); // 1 - 25 (3 years)
         require(block.timestamp > START + DAYS, "early");
-        // pay if batch raised 70% only, otherwise if all TODO
-        // refunds were paid out (this piece is gas comp.)
-        // doing it discretely as one taxable event is best
         if (tokenId == LAMBO && ICollection(F8N).ownerOf(
             LAMBO) == address(this)) { address winner;
             uint cut = GRIEVANCES / 2; uint count = 0;
-            // "I put my key, you put your key in..."
+            // "my mint spits with an enormous kickback"
             this.morph(QUID, cut); this.morph(from, cut);
             ICollection(F8N).transferFrom( // return
                 address(this), QUID, LAMBO); // NFT...
+                // "I put my key, you put your key in"
 
             // TODO do the following allocation in ETH, 
             // instead of splitting the BACKEND in QD...
@@ -543,62 +536,40 @@ contract Quid is ERC20, // OFTOwnable2Step,
             amount = FullMath.min(amount,
                      FullMath.mulDiv(total,
                                 CUT, WAD));
-        } // total does not include USDC as
-        // we never transfer it out, we only
-        // keep it in curation, or (per need):
-        // use it for the Uniswap LP position
-        // converting to WETH in MO.withdraw
+        } require(amount > 0, "no thing");
         uint dai; uint usde; uint inDollars; 
-        uint usds; uint crvusd; // uint usdc;
-        address repay = l2 ? VAULT : SDAI; 
-        require(amount > 0, "no thing");
-        uint frax; uint sharesWithdrawn;
+        uint usds; uint crvusd; address vault;
+        uint[5] memory amounts; address[5] memory tokens; uint frax; 
+        uint sharesWithdrawn; address repay = l2 ? VAULT : SDAI; uint i;
         MarketParams memory params = IMorpho(MORPHO).idToMarketParams(ID);
         (uint delta, uint cap) = MO(Moulinette).capitalisation(0, false);
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
                         // on L2 this is USDC, on L1 it's DAI...
                         IMorpho(MORPHO), params, address(this));  
-        
-        // we over-collateralise a
-        // bit beyond what's needed...
-        uint collat = delta + delta / 9;
-        /* if (!l2) { // ^ may be zero, in that case ignore
-            dai =  FullMath.min(ERC4626(SDAI).maxWithdraw(
-                address(this)), ERC4626(SDAI).convertToAssets(
-                                perVault[SDAI].debit - 
-                                perVault[SDAI].credit));
-            frax = FullMath.min(ERC4626(SFRAX).maxWithdraw(
-                address(this)), ERC4626(SFRAX).convertToAssets(
-                                         perVault[SFRAX].debit));      
-            usds = FullMath.min(ERC4626(SUSDS).maxWithdraw(
-                address(this)), ERC4626(SUSDS).convertToAssets(
-                                         perVault[SUSDS].debit));
-            crvusd = FullMath.min(ERC4626(SCRVUSD).maxWithdraw(
-                  address(this)), ERC4626(SCRVUSD).convertToAssets(
-                                           perVault[SCRVUSD].debit));
-            inDollars = FullMath.min(ERC4626(SUSDE).maxWithdraw(
-                     address(this)), ERC4626(SUSDE).convertToAssets(
-                                              perVault[SUSDE].debit));
-            inDollars = FullMath.min(collat, inDollars);
-            collat = ERC4626(SUSDE).convertToShares(
-                                          inDollars);
-        } else { */
-            usds = perVault[USDS].debit +
-            FullMath.mulDiv(_getPrice(SUSDS),
-                perVault[SUSDS].debit, WAD);
-                dai = perVault[DAI].debit;
-            crvusd = perVault[CRVUSD].debit +
-            FullMath.mulDiv(_getPrice(SCRVUSD),
-                perVault[SCRVUSD].debit, WAD);
-            uint price = _getPrice(SUSDE);
-            inDollars = FullMath.mulDiv(
-            price, perVault[SUSDE].debit, WAD);
-            collat = FullMath.min(collat, inDollars);
-            collat = FullMath.mulDiv(WAD, collat, price);
-        // }
-        if (delta == 0 && borrowed > 0) {
-        // there is no shortfall, but we 
-        // owe debt from a previous state
+                        tokens = [DAI, USDS, USDE, CRVUSD, FRAX]; 
+        uint collat;
+        if (!l2) { 
+            for (i = 0; i < 5; i++) { vault = vaults[tokens[i]];
+                amounts[i] = FullMath.min(ERC4626(vault).maxWithdraw(
+                address(this)), ERC4626(vault).convertToAssets(
+                                perVault[vault].debit - 
+                                perVault[vault].credit));
+            } inDollars = FullMath.min(delta + delta / 9, 
+                                            amounts[2]);
+              collat = ERC4626(SUSDE).convertToShares(
+                                            inDollars);
+        } else { amounts[0] = perVault[DAI].debit;
+            for (i = 1; i < 4; i++) { vault = vaults[tokens[i]];
+                amounts[i] = perVault[tokens[i]].debit +
+                FullMath.mulDiv(_getPrice(vault),
+                    perVault[vault].debit, WAD);
+            }   inDollars = FullMath.mulDiv(_getPrice(SUSDE), 
+                                 perVault[SUSDE].debit, WAD);
+            collat = FullMath.min(delta + delta / 9, inDollars);
+            collat = FullMath.mulDiv(WAD, collat, _getPrice(SUSDE));
+        }
+        if (delta == 0 && borrowed > 0) { // no shortfall,
+            // but we owe debt from a previous...^^^^^^^
             sharesWithdrawn = ERC4626(repay).withdraw(
                 borrowed, address(this), address(this));
             // USDC shares in that vault were borrowed    
@@ -611,20 +582,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
             uint collateral = perVault[SUSDE].credit;
             IMorpho(MORPHO).withdrawCollateral(params, 
                 collateral, address(this), address(this));
-            
-            perVault[SUSDE].credit -= collateral;
-            perVault[SUSDE].debit += collateral;
-        } 
-        // TODO use to Public Allocator to retrieve market liquidity
-        // as well as available liquidity for a market, using multiple
-        // markets (assuming we have deployed several) if we need to
-        // ALSO...to prevent the case where we need to repay, and we 
-        // have no DAI on hand, we need to obtain DAI by selling...
-        // instead of integrating with Curve (sorry, our contract is
-        // already phat enough) we can create discount to get needed $
-        // as we have already demonstrated that we are capable of, but
-        // perhaps in a more non-linear method. speaking of which, fold()
-        // needs a revisit on that front ;)
+                perVault[SUSDE].credit -= collateral;
+                perVault[SUSDE].debit += collateral;
+        }
         else if (collat > 0 && delta > 0 
                 && inDollars > delta) {
             IMorpho(MORPHO).supplyCollateral(
@@ -638,133 +598,50 @@ contract Quid is ERC20, // OFTOwnable2Step,
             ERC4626(repay).deposit( // curated
             // vault on Base, sDAI on Ethereum
                 dai, address(this));
-        }
-        /*
-        if (!l2) { // this code is good, commented out to compile
-            dai = FullMath.mulDiv(amount, FullMath.mulDiv(WAD,
-                                               dai, total), WAD);
-            usds = FullMath.mulDiv(amount, FullMath.mulDiv(WAD,
-                                               usds, total), WAD);
-            usde = FullMath.mulDiv(amount, FullMath.mulDiv(WAD,
-                                          inDollars, total), WAD);
-            frax = FullMath.mulDiv(amount, FullMath.mulDiv(WAD,
-                                               frax, total), WAD);
-            crvusd = FullMath.mulDiv(amount, FullMath.mulDiv(WAD,
-                                               crvusd, total), WAD);
-            if (dai > 0) {
-                sharesWithdrawn = FullMath.min(ERC4626(SDAI).balanceOf(address(this)),
-                                               ERC4626(SDAI).convertToShares(dai));
-                require(sharesWithdrawn == ERC4626(SDAI).withdraw(sharesWithdrawn, 
-                                                         to, address(this)), "$a");
-                perVault[SDAI].debit -= sharesWithdrawn;
-                dai = ERC4626(SDAI).convertToAssets(
-                                    sharesWithdrawn);
-            } if (usds > 0) {
-                sharesWithdrawn = FullMath.min(ERC4626(SUSDS).balanceOf(address(this)),
-                                               ERC4626(SUSDS).convertToShares(usds));
-                require(sharesWithdrawn == ERC4626(SUSDS).withdraw(sharesWithdrawn,
-                                                          to, address(this)), "$b");
-                perVault[SUSDS].debit -= sharesWithdrawn;
-                usds = ERC4626(SUSDS).convertToAssets(
-                                      sharesWithdrawn);
-            } if (usde > 0) {
-                sharesWithdrawn = FullMath.min(ERC4626(SUSDE).balanceOf(address(this)),
-                                               ERC4626(SUSDE).convertToShares(usde));
-                require(sharesWithdrawn == ERC4626(SUSDE).withdraw(sharesWithdrawn,
-                                                          to, address(this)), "$c");
-                perVault[SUSDE].debit -= sharesWithdrawn;
-                usde = ERC4626(SUSDE).convertToAssets(
-                                      sharesWithdrawn);
-            } if (frax > 0) {
-                sharesWithdrawn = FullMath.min(ERC4626(SFRAX).balanceOf(address(this)),
-                                               ERC4626(SFRAX).convertToShares(frax));
-                require(sharesWithdrawn == ERC4626(SFRAX).withdraw(sharesWithdrawn, 
-                                                          to, address(this)), "$d");
-                perVault[SFRAX].debit -= sharesWithdrawn;
-                frax = ERC4626(SFRAX).convertToAssets(
-                                     sharesWithdrawn);
-            } if (crvusd > 0) {
-                sharesWithdrawn = FullMath.min(ERC4626(SCRVUSD).balanceOf(address(this)),
-                                               ERC4626(SCRVUSD).convertToShares(crvusd));
-                
-                require(sharesWithdrawn == ERC4626(SCRVUSD).withdraw(sharesWithdrawn, 
-                                                            to, address(this)), "$e");
-                perVault[SCRVUSD].debit -= sharesWithdrawn;
-                crvusd = ERC4626(SCRVUSD).convertToAssets(
-                                          sharesWithdrawn);
-            }   return (dai + usds + usde + frax + crvusd);
-        } else { // all of the above except ^^^^
-        */  uint sending; // ^
-            if (dai > 0) {
-                sending = FullMath.min(dai,
-                ERC20(DAI).balanceOf(address(this)));
-                ERC20(DAI).transfer(to, dai);
-            }
-            if (usds > 0) {
-                inDollars = FullMath.min(usds,
-                        ERC20(USDS).balanceOf(
-                                address(this)));
-                sending += inDollars;
-                ERC20(USDS).transfer(to, 
-                            inDollars);
-                    usds -= inDollars;
-                if (usds > 0) {
-                    // reuse inDollars 
-                    // although this
-                    // represents "shares"
-                    inDollars = FullMath.min(
-                        // perVault[SUSDS].debit
-                        ERC20(SUSDS).balanceOf(
-                                 address(this)),
-                        FullMath.mulDiv(usds, WAD, 
-                                _getPrice(SUSDS)));
-                    ERC20(SUSDS).transfer(to,
-                                inDollars); // not dollars
-                    sending += FullMath.mulDiv(inDollars,
-                         _getPrice(SUSDS), WAD);
-                }   
-            }
-            if (usde > 0) {
-                inDollars = FullMath.min(usde,
-                        ERC20(USDE).balanceOf(
-                                address(this)));
-                sending += inDollars;
-                ERC20(USDE).transfer(to, 
-                            inDollars);
-                    usde -= inDollars;
-                if (usde > 0) {
-                    inDollars = FullMath.min(
-                        // perVault[SUSDE].debit
-                        ERC20(SUSDE).balanceOf(
-                                 address(this)),
-                        FullMath.mulDiv(usde, WAD, 
-                                _getPrice(SUSDE)));
-                    ERC20(SUSDE).transfer(to,
-                                inDollars); // not dollars
-                    sending += FullMath.mulDiv(inDollars,
-                         _getPrice(SUSDE), WAD);
+        } 
+        amounts = [dai, usds, inDollars, crvusd, frax];
+        if (!l2) { 
+            for (i = 0; i < 5; i++) { 
+                amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
+                                        WAD, amounts[i], total), WAD);
+                if (amounts[i] > 0) { 
+                    vault = vaults[tokens[i]];
+                    sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),
+                                               ERC4626(vault).convertToShares(dai));
+                    require(sharesWithdrawn == ERC4626(vault).withdraw(sharesWithdrawn, 
+                                                            to, address(this)), "$a");
+                    perVault[vault].debit -= sharesWithdrawn;
+                    amounts[i] = ERC4626(vault).convertToAssets(
+                        sharesWithdrawn); sent += amounts[i];
                 }
             }
-            if (crvusd > 0) {
-                inDollars = FullMath.min(crvusd,
-                        ERC20(CRVUSD).balanceOf(
-                                  address(this)));
-                ERC20(CRVUSD).transfer(to, 
+        } else { 
+            if (amounts[0] > 0) { sent = FullMath.min(amounts[0],
+                ERC20(tokens[0]).balanceOf(address(this)));
+                ERC20(tokens[0]).transfer(to, amounts[0]);
+            }
+            for (i = 1; i < 4; i++) {
+                inDollars = FullMath.min(amounts[i],
+                        ERC20(tokens[i]).balanceOf(
+                                address(this)));
+                ERC20(tokens[i]).transfer(to, 
                               inDollars);
-                    crvusd -= inDollars;
-                if (crvusd > 0) {
+                amounts[i] -= inDollars;
+                      sent += inDollars;
+                if (amounts[i] > 0) {
+                    // reuse inDollars...
+                    // represents "shares"
+                    vault = vaults[tokens[i]];
                     inDollars = FullMath.min(
-                        // perVault[SCRVUSD].debit
-                        ERC20(SCRVUSD).balanceOf(
-                                   address(this)),
-                        FullMath.mulDiv(crvusd, WAD, 
-                                _getPrice(SCRVUSD)));
-                    ERC20(SCRVUSD).transfer(to,
-                                  inDollars); // not dollars
-                    sending += FullMath.mulDiv(inDollars,
-                       _getPrice(SCRVUSD), WAD);
-                }    
-            } return sending;
-        // } 
-    } 
+                    ERC20(vault).balanceOf(
+                        address(this)), FullMath.mulDiv(
+                                        amounts[i], WAD, 
+                                        _getPrice(vault)));
+                    ERC20(vault).transfer(to, inDollars);
+                    sent += FullMath.mulDiv(inDollars,
+                                _getPrice(vault), WAD);
+                }   
+            }
+        }
+    }
 }
