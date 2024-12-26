@@ -86,6 +86,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
                 sender == address(this), "!?");
         _;
     } // en.wiktionary.org/wiki/moulinette
+    // i'm like a clock no one can unwind
+    // stables in a time lock to back ETH
     constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
         address _usde, address _susde,
@@ -96,20 +98,18 @@ contract Quid is ERC20, // OFTOwnable2Step,
         /* OFTOwnable2Step("QU!D", "QD", 
         LZ, QUID) { VAULT = _vault; */
         ERC20("QU!D", "QD", 18) {
-            VAULT = _vault;
-
-        ID = _morpho; START = block.timestamp; 
+        VAULT = _vault; ID = _morpho; 
+        START = block.timestamp; 
         /* SDAI = _sdai; */ deployed = START; 
-        USDC = _usdc; USDE = _usde; 
-        DAI = _dai; SUSDE = _susde; 
-        USDS = _usds; SUSDS = _susds; 
-        CRVUSD = _crv; SCRVUSD = _scrv;
-        vaults[CRVUSD] = SCRVUSD;
+        USDC = _usdc; USDE = _usde; DAI = _dai; 
+        SUSDE = _susde; USDS = _usds; SUSDS = _susds; 
+        CRVUSD = _crv; SCRVUSD = _scrv; 
         vaults[USDC] = VAULT; 
         vaults[USDE] = SUSDE;
-        vaults[USDS] = SUSDS;
+        vaults[USDS] = SUSDS; 
+        vaults[CRVUSD] = SCRVUSD;
         Moulinette = payable(_mo);
-        _mint(address(this), BACKEND * 24);
+        _mint(address(this), BACKEND);
         // ^ used for special withdrawals in MO...
         ERC20(USDC).approve(VAULT, type(uint).max);
         if (address(MO(Moulinette).token0()) == USDC) { // L1
@@ -134,8 +134,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
         }
     } uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3 years
-    uint constant BACKEND = 666666666666666666666666; 
-    uint constant QD = 41666666666666664; // ~4.2% ^
+    uint constant BACKEND = 666666666666666666666666 * 24; 
+    uint constant QD = 41666666666666664; // ^ ~4.2% 
     mapping(address => uint[24]) public consideration;
     // https://www.law.cornell.edu/wex/consideration
     uint constant public MAX_PER_DAY = 777_777 * WAD;
@@ -236,7 +236,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     // there's mint function in MO(Mounlinette)
     function withdrawUSDC(uint amount) public
         onlyGenerators returns (uint withdrawn) {
-        withdrawn = FullMath.min(amount, 
+        withdrawn = FullMath.min(amount / 1e12, 
             ERC4626(VAULT).maxWithdraw(
                          address(this)));
         ERC4626(VAULT).withdraw(
@@ -423,7 +423,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             } else { while (SUM < mid) { K += 1; 
                             SUM += WEIGHTS[K]; }
             } MO(Moulinette).setFee(K);
-        } else { SUM = 0; } // re^
+        } else { SUM = 0; }
     }
     function _getPrice(address token) internal 
         view returns (uint price) { // L2 only
@@ -507,6 +507,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
             // as collat to winners, borrow max against:
             // re-deposit QD back into address(this)...
 
+            // split a portion of the backend into QD
+
             /* uint backend = BACKEND; cut = backend / 12;
             if (voters[batch - 1].length >= 10 && data.length >= 32) {
                 bytes32 _seed = abi.decode(data[:32], (bytes32));
@@ -526,23 +528,23 @@ contract Quid is ERC20, // OFTOwnable2Step,
             consideration[from][batch] += cut; */
             _batchUp(batch); // "same level, same rebel"
         } return this.onERC721Received.selector;
-    }
+    } // 
     
-    function morph(address to, uint amount)
+    function morph(address to, uint amount) // 5
         public onlyGenerators returns (uint sent) {
         bool l2 = !MO(Moulinette).token1isWETH();
         uint total = get_total_deposits(false);
         if (msg.sender == address(this)) {    
             amount = FullMath.min(amount,
-                     FullMath.mulDiv(total,
-                                CUT, WAD));
+                       FullMath.mulDiv(total,
+                                 CUT, WAD));
         } require(amount > 0, "no thing");
         uint dai; uint usde; uint inDollars; 
         uint usds; uint crvusd; address vault;
         uint[5] memory amounts; address[5] memory tokens; uint frax; 
         uint sharesWithdrawn; address repay = l2 ? VAULT : SDAI; uint i;
         MarketParams memory params = IMorpho(MORPHO).idToMarketParams(ID);
-        (uint delta, uint cap) = MO(Moulinette).capitalisation(0, false);
+        (uint delta,) = MO(Moulinette).capitalisation(0, false);
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
                         // on L2 this is USDC, on L1 it's DAI...
                         IMorpho(MORPHO), params, address(this));  
@@ -572,7 +574,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             // but we owe debt from a previous...^^^^^^^
             sharesWithdrawn = ERC4626(repay).withdraw(
                 borrowed, address(this), address(this));
-            // USDC shares in that vault were borrowed    
+            // DAI or USDC shares in vault were borrowed    
             perVault[repay].credit -= sharesWithdrawn;
             IMorpho(MORPHO).repay(params,
                 sharesWithdrawn, 0, 
@@ -585,25 +587,24 @@ contract Quid is ERC20, // OFTOwnable2Step,
                 perVault[SUSDE].credit -= collateral;
                 perVault[SUSDE].debit += collateral;
         }
-        else if (collat > 0 && delta > 0 
-                && inDollars > delta) {
+        else if (collat > 0 && 
+            delta > 0 && inDollars > delta) {
             IMorpho(MORPHO).supplyCollateral(
             params, collat, address(this), "");
-            perVault[SUSDE].debit -= collat;
-            perVault[SUSDE].credit += collat; 
             delta = inDollars - inDollars / 9;
+            perVault[SUSDE].credit += collat; 
+            perVault[SUSDE].debit -= collat;
             (borrowed, ) = IMorpho(MORPHO).borrow(params, delta, 0,
-                                     address(this), address(this));
+                                    address(this), address(this));
             perVault[repay].credit += borrowed;
             ERC4626(repay).deposit( // curated
             // vault on Base, sDAI on Ethereum
                 dai, address(this));
         } 
-        amounts = [dai, usds, inDollars, crvusd, frax];
         if (!l2) { 
             for (i = 0; i < 5; i++) { 
                 amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                        WAD, amounts[i], total), WAD);
+                                          WAD, amounts[i], total), WAD);
                 if (amounts[i] > 0) { 
                     vault = vaults[tokens[i]];
                     sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),

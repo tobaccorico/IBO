@@ -149,7 +149,7 @@ contract MO is ReentrancyGuard {
         // needed as order is swapped on Base
     } 
 
-    // present value of the expected cash flows...
+    // present value of the expected cash flows
     function capitalisation(uint qd, bool burn)
         public view returns (uint, uint) { // ^ in QD
         (uint160 sqrtPriceX96,,,,,,) = POOL.slot0();
@@ -407,107 +407,82 @@ contract MO is ReentrancyGuard {
          % since != 0)) mean--;
     } // TODO reverts with "OLD"
 
-    function _swap(uint eth, uint usdc, 
-        uint price) internal returns 
-        (uint delta0, uint delta1) {
-        uint scaled = usdc * 1e12;
-        uint in_usd = FullMath.mulDiv(eth, 
-                          price, WAD);
-        
-        // if we assume a 1:1 ratio of eth value
-        // to usdc, then this is how we balance:
-        // int delta = (int(in_usd) - int(scaled))
-        //            / int(2 * price / 1e18);
-        // but the thing is,
-        // the ratio is not
-        // consistently 1:1
-        int delta = 0;
 
-        uint selling; uint surplus;
-        if (delta > 0) { // sell eth
-            selling = uint(delta);
-            eth -= selling;
-            usdc += ROUTER.exactInput(
-                ISwapRouter.ExactInputParams(abi.encodePacked(
-                    address(WETH9), POOL_FEE, USDC), address(this),
-                    block.timestamp, selling, 0));
-        }
-        else if (delta < 0) { // sell $
-            selling = uint(delta * -1);
-            selling = FullMath.mulDiv(
-                selling, price, 1e30);
-            usdc -= selling;
-            eth += ROUTER.exactInput(
-                ISwapRouter.ExactInputParams(abi.encodePacked(
-                    USDC, POOL_FEE, address(WETH9)), address(this),
-                    block.timestamp, selling, 0));
-        }
-        
+    function _swap(uint eth, uint usdc, uint price)
+        internal returns (uint delta0, uint delta1) {
+        // uint usd = FullMath.mulDiv(eth, price, WAD);
+        // if we assumed a 1:1 ratio of eth value
+        // to usdc, then this is how'd we balance:
+        // int delta = (int(usd) - int(scaled))
+        //            / int(2 * price / 1e18);
+        // if (delta < 0) { // sell $
+        //     selling = uint(delta * -1);
+        //     selling = FullMath.mulDiv(
+        //         selling, price, 1e30);
+        //     usdc -= selling;
+        //     eth += ROUTER.exactInput(
+        //         ISwapRouter.ExactInputParams(abi.encodePacked(
+        //             USDC, POOL_FEE, address(WETH9)), address(this),
+        //             block.timestamp, selling, 0));
+        // } the thing is, ratio isn't consitently 1:1
         uint160 lower = TickMath.getSqrtPriceAtTick(LOWER_TICK);
         uint160 upper = TickMath.getSqrtPriceAtTick(UPPER_TICK);
         uint160 current = TickMath.getSqrtPriceAtTick(LAST_TICK);
-        uint128 liquidity = token1isWETH ?
-            LiquidityAmounts.getLiquidityForAmount1(
-                              lower, current, eth) :
-            LiquidityAmounts.getLiquidityForAmount0(
-                              current, upper, eth);
-        (delta0,
-         delta1) = LiquidityAmounts.getAmountsForLiquidity(
-                          current, lower, upper, liquidity);
-
-        // First determine if we need to sell ETH or buy it
-        
-        // remember to do an extra division by WAD at the end
-        uint ratio = FullMath.mulDiv(eth, WAD, scaled); // k
-        uint denom = WAD + FullMath.mulDiv(ratio, price, WAD);
-
-        // assume eth is X and usdc is Y...
-        // our formula is (x - ky)/(1 + kp)
-        // we are spending Y to buy X, where
-        // p is the price of eth, and our
-        // "denom" is the term (1 + kp)
-        // derivation steps: assume n
-        // is amount of eth to sell,
-        // (x - n)/(y + np) = k
-        // x - n = ky + knp
-        // x - ky = n + knp
-        // x - ky = n(1 + kp)
-        // for the opposite direction...
-        // where n is eth (we're buying
-        // by spending y), we get this:
-        // (ky - x)/(1 + kp) TODO
-
+        uint128 liquidity; uint scaled = usdc * 1e12; // precision
         if (token1isWETH) {
-            if (usdc > delta0) {
-                surplus = usdc - delta0;
-                // send surplus to Morpho
-                ERC4626(QUID.VAULT()).deposit(
-                        surplus, address(QUID));
-                                usdc = delta0;
-            }
-            else if (usdc < delta0) {
-                usdc += QUID.withdrawUSDC(
-                            delta0 - usdc);
-            }
-        } else {
-            if (usdc > delta1) {
-                surplus = usdc - delta1;
-                ERC4626(QUID.VAULT()).deposit(
-                        surplus, address(QUID));
-                                 usdc = delta1;
-            }
-            else if (usdc < delta1) {
-                usdc += QUID.withdrawUSDC(
-                            delta1 - usdc);
-            }
-        } return (eth, usdc); 
+            liquidity = LiquidityAmounts.getLiquidityForAmount1(
+                                            lower, current, eth);
+            (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
+                                    current, lower, upper, liquidity);
+        } else { liquidity = LiquidityAmounts.getLiquidityForAmount0(
+                                                current, upper, eth);
+            (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
+                                    current, lower, upper, liquidity);
+        } usdc *= 1e12;
+        if (scaled > usdc) { scaled -= usdc;
+            ERC4626(QUID.VAULT()).deposit(
+             scaled / 1e12, address(QUID));
+             scaled = usdc / 1e12;
+        } else { scaled += QUID.withdrawUSDC(
+                             usdc - scaled) * 1e12;
+        } if (scaled < usdc) {
+            uint k = FullMath.mulDiv(eth, 
+                        WAD, scaled); // TODO extra WAD
+            uint denom = WAD + FullMath.mulDiv(
+                                k, price, WAD);
+            uint ky = FullMath.mulDiv(
+                        k, scaled, WAD);
+            // assume eth is X and usdc is Y...
+            // our formula is (x - ky)/(1 + kp)
+            // we are selling X to buy Y, where
+            // p is the price of eth, and the
+            // derivation steps: assume n
+            // is amount being swapped...
+            // (x - n)/(y + np) = k
+            // x - n = ky + knp
+            // x - ky = n + knp
+            // x - ky = n(1 + kp)
+            uint selling = (eth - ky) / denom;
+            usdc = scaled + ROUTER.exactInput(
+                ISwapRouter.ExactInputParams(abi.encodePacked(
+                    address(WETH9), POOL_FEE, USDC), address(this),
+                    block.timestamp, selling, 0)); 
+                    eth -= selling; usdc /= 1e12;
+        }
     }
 
-    function deposit(address beneficiary, uint amount,
-        bool long) external nonReentrant payable {
-        Offer memory pledge = pledges[beneficiary];
-        (uint160 sqrtPriceX96, int24 tick,,,,,) = POOL.slot0();
-        LAST_TICK = tick; uint price = getPrice(sqrtPriceX96);
+    // this is essentially a syethetic short position as
+    // you can withdraw it for free, or pay if it's ITM
+    // but half of the deductible is upfront either way
+    // longs are cheaper than shorts, withdraw(quid true)
+    // allows swapping out USDC from carry.debit in exchange
+    // for clearing carry.credit (unbacked QD, clearing is
+    // made possible as such because withdrawn QD is backed)
+    function deposit(address beneficiary, 
+        uint amount, bool long) external 
+        nonReentrant payable { 
+        (Offer memory pledge, 
+         uint price, ) = charge(beneficiary);
         if (amount > 0) { WETH9.transferFrom(
             msg.sender, address(this), amount);
         } else { require(msg.value > 0, "ETH!"); }
@@ -517,6 +492,9 @@ contract MO is ReentrancyGuard {
             pledges[address(this)].work.credit += amount;
         } //
         else { uint in_dollars = FullMath.mulDiv(price, amount, WAD);
+            (,uint cap) = capitalisation(dollar_amt_to_qd_amt(
+                70, in_dollars), false); require(cap > 70,
+                "not enough dollars in solvency capital");
             uint deductible = FullMath.mulDiv(in_dollars, FEE, WAD);
             // change deductible to be in units of ETH instead...
             deductible = FullMath.mulDiv(WAD, deductible, price);
@@ -553,7 +531,7 @@ contract MO is ReentrancyGuard {
     // (insurers with higher ROI absorb more)...
     // "you never count your money while you're
     // sittin' at the table...there'll be time
-    function redeem(uint amount) // into $...
+    function redeem(uint amount) // into $
         external nonReentrant { // amount QD
         amount = FullMath.min(
             QUID.matureBalanceOf(
@@ -566,7 +544,7 @@ contract MO is ReentrancyGuard {
         // coverage includes 30% of QD minted in QUID.mint...
         // as this % supply is not 1:1 backed; also includes
         // any remaining debt on a fully liquidated pledge,
-        // and QD minted in fold() as insurance coverage...
+        // and QD minted in fold() as insurance coverage
         uint absorb = FullMath.mulDiv(FullMath.mulDiv(
         // max $ pledge would absorb if redeemed 100%
         pledges[address(this)].carry.credit, // updated in helper
@@ -586,15 +564,21 @@ contract MO is ReentrancyGuard {
         amount -= absorb; amount -= QUID.morph(msg.sender, amount);
         if (amount > 0) {  
             (uint160 sqrtPriceX96,
-            int24 tick,,,,,) = POOL.slot0(); LAST_TICK = tick;
-            (uint amount0, uint amount1) = _withdrawAndCollect(
-            LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96,
-                        TickMath.getSqrtPriceAtTick(LOWER_TICK),
-                        TickMath.getSqrtPriceAtTick(UPPER_TICK),
-                        amount / (2 * 1e12), FullMath.mulDiv(WAD,
-                        amount / 2, getPrice(sqrtPriceX96))));
-                        amount = token1isWETH ? amount0 : amount1;
-                        uint eth = token1isWETH ? amount1 : amount0;
+            int24 tick,,,,,) = POOL.slot0(); 
+            LAST_TICK = tick; uint amount0;
+            uint amount1; uint eth = FullMath.mulDiv(WAD,
+                 amount / 2, getPrice(sqrtPriceX96));
+            
+            amount1 = token1isWETH ? eth : amount / (2 * 1e12);
+            amount0 = !token1isWETH ? amount / (2 * 1e12) : eth;        
+            
+            (amount0, amount1) = _withdrawAndCollect(
+                LiquidityAmounts.getLiquidityForAmounts(
+                    sqrtPriceX96, TickMath.getSqrtPriceAtTick(LOWER_TICK),
+                    TickMath.getSqrtPriceAtTick(UPPER_TICK), amount0, amount1));
+            
+            amount = token1isWETH ? amount0 : amount1;
+            eth = token1isWETH ? amount1 : amount0;
             amount += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                         abi.encodePacked(address(WETH9), POOL_FEE, USDC),
                         address(this), block.timestamp, eth, 0));
@@ -605,6 +589,40 @@ contract MO is ReentrancyGuard {
         // I hold no resentment in my heart, that's that maturity;
     } // and we don't keep it on us anymore," ain't no securities
 
+    // this function is used for 
+    // automating leverage loops:
+    // instead of borrowing QD,
+    // selling it for USDC on
+    // Uni, only to then sell
+    // the USDC for ETH (which
+    // can get quite costly if
+    // repeated for 10x lever)
+    // we directly achieve the 
+    // result of this loop in
+    // just one function step,
+    // saving on gas and fees
+    function borrow(uint eth)
+        public returns (uint) { // TODO
+        // can deposit QD to borrow ETH,
+        // sell for all USDC, or all ETH
+
+        // this way pledge.work.credit is QD
+        // now, and collateral in ETH based
+        // LTV. Max geometric sum = 1/(1-LTV)
+        // So if your target LTV is 84% then 
+        // 1/(1-0.84) =6.25x leverage and CR
+        // is the inverse pledge.work.debit
+
+
+        // collateral management as a service.
+        // collateral refinancing according to 
+        // an options-based investment strategy
+        // with diversified crypto beta: automate 
+        // LTV. reduce smart contract risk, treat
+        // rebalance gas cost as a ratchet charge
+        // callable often as profitable (par gas)
+    }
+
     // Quid says if amount is QD...
     // ETH can only be withdrawn from
     // pledge.work.debit; if ETH was
@@ -613,14 +631,11 @@ contract MO is ReentrancyGuard {
     function withdraw(uint amount, bool quid)
         external nonReentrant payable {
         uint amount0; uint amount1;
-        (uint160 sqrtPriceX96,
-        int24 tick,,,,,) = POOL.slot0();
-        LAST_TICK = tick; // chinches
-        uint price = getPrice(sqrtPriceX96);
-        Offer memory pledge = pledges[msg.sender]; // TODO uncomment
+        (Offer memory pledge, uint price, 
+        uint160 sqrtPrice) = charge(msg.sender);
         // require(flashLoanProtect[msg.sender] != block.number,
         //             "can't fold & withdraw in same block");
-        if (quid) { // amount is in units of QD
+        if (quid) { // amount is in units of QD...
             if (msg.value > 0) { amount1 = msg.value;
                 WETH9.deposit{ value: amount1 }();
                 pledges[address(this)].work.credit +=
@@ -652,17 +667,20 @@ contract MO is ReentrancyGuard {
                 uint on_hand = qd_amt_to_dollar_amt(0,
                         QUID.balanceOf(address(QUID)));
                 if (on_hand >= pledge.work.credit) {
+                    // 
                     QUID.transferFrom(address(QUID), msg.sender, 
                          dollar_amt_to_qd_amt(0, pledge.work.credit));
             
                     // Turned the back gate to a 16...
-                    // oh dr. dre's debt? it's locked
-                    // in my based mint. travel rule 16
                     pledge.work.debit -= withdrawable;
                     // sell ETH...to clear work.credit of pledge...
                     pledges[address(this)].weth.debit += withdrawable; 
                     transfer = FullMath.min(amount, pledge.work.debit);
                     pledge.work.debit -= transfer;
+                } else {
+                    // TODO borrow against the pledges[address(this)].weth.debit
+                    // as it becomes pledges[address(this)].work.credit, we add
+                    // up to 16M in total (between balanceOf(QD) and credit QD)
                 }
             } require(transfer > 0, "nothing to withdraw");
             pledges[address(this)].work.credit -= transfer;
@@ -675,7 +693,7 @@ contract MO is ReentrancyGuard {
             } else { amount1 = usdc;
                 amount0 = transfer / 2;
             }  (amount0, amount1) = _withdrawAndCollect(
-                LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96,
+                LiquidityAmounts.getLiquidityForAmounts(sqrtPrice,
                     TickMath.getSqrtPriceAtTick(LOWER_TICK),
                     TickMath.getSqrtPriceAtTick(UPPER_TICK),
                     amount0, amount1));      
@@ -773,7 +791,7 @@ contract MO is ReentrancyGuard {
                     state.minting -= state.cap;
                     state.repay -= state.cap;
                 }   (, state.cap) = capitalisation(state.delta, false);
-                if (state.minting > state.delta || state.cap > 69) {
+                if (state.minting > state.delta || state.cap > 69) { // TODO
                 // minting will equal delta unless it's a sell, and 
                 // if not, can't mint coverage if under-capitalised
                     state.minting = dollar_amt_to_qd_amt(
@@ -826,15 +844,14 @@ contract MO is ReentrancyGuard {
                                             // 1008 hours is 42 days...
                                             // 6 * 10 mins per hour...
                     pledges[address(this)].weth.debit += amount;
-                    pledge.work.debit -= amount;
+                                    pledge.work.debit -= amount;
                     amount = FullMath.min(pledge.work.credit,
                     FullMath.mulDiv(state.price,amount, WAD));
                     // "It's like inch by inch, and step by
                     // step, I'm closin' in on your position"
                     pledge.last.debit = amount; 
                     pledge.work.credit -= amount; 
-                    //
-                    pledge.last.credit = block.timestamp; // up to
+                    pledge.last.credit = block.timestamp;
                 } else { pledges[address(this)].weth.debit += pledge.work.debit;
                     pledges[address(this)].carry.credit += pledge.work.credit;
                     // debt surplus absorbed ^^^^^^^^^ as if it were coverage
@@ -846,10 +863,16 @@ contract MO is ReentrancyGuard {
             pledge.last.credit = 0;
             pledge.last.debit = 0;
         }   pledges[beneficiary] = pledge;
-    } // GHO facilitate in the future for QD,
-    // taking over that value of stable basket
-    // if it's $1, and if it's not borrow from
-    // morpho. debt in the reverse is work.debit
-    // work.credit is user eth, debit is owed eth
-    // 
+    }
+
+    function charge(address beneficiary) public returns 
+        (Offer memory, uint, uint160) { 
+        Offer memory pledge = pledges[beneficiary];
+        (uint160 sqrtPrice, int24 tick,,,,,) = POOL.slot0();
+        LAST_TICK = tick; uint price = getPrice(sqrtPrice);
+        
+
+
+        return (pledge, price, sqrtPrice);
+    } 
 }
