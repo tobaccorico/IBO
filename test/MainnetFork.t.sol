@@ -284,7 +284,7 @@ contract MainnetFork is Test {
         F8N.approve(address(quid), 16508);
         vm.stopPrank();
 
-        uint avg_roi_before = quid.AVG_ROI();
+        uint avg_roi_before = quid.ROI();
         
         vm.startPrank(address(quid));
         bytes32 seed = 0xfecf91618d752d88c3c7ed03b6040823a43b4a88edd2372a0a07aa348780c85b;
@@ -294,7 +294,7 @@ contract MainnetFork is Test {
         // ^^^^^ checks that the NFT was sent back properly 
         vm.stopPrank();
 
-        uint avg_roi_after = quid.AVG_ROI();
+        uint avg_roi_after = quid.ROI();
         uint afterBatch = quid.currentBatch();
         assertNotEq(beforeBatch, afterBatch);
         assertNotEq(avg_roi_before, avg_roi_after);

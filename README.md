@@ -1,7 +1,8 @@
 
-## `MO`ulinette `QD`
+## `MO`(Moulinette)
 
-`MO` has `ID` for [selling  
+For catching the wind...  
+`MO` has `ID` to [selling  
  puts](https://x.com/futurenomics/status/1766173245949014373) in a concentrated  
 liquidity [optimiser](https://x.com/guil_lambert/status/1772423853316219051) vault;  
 the `asset` of the vault,  
