@@ -344,7 +344,7 @@ export const Mint = () => {
 
           if (inputValue <= maturebalance) await mo.methods.redeem(valueDepo).send({ from: account })
           else if (inputValue <= workUsdBalance) await quid.methods.transfer(addressMO, valueDepo).send({ from: account })
-        }
+        } // sending QD to MO will clear debt (denominated in $ internally) if there is any borrowed QD against the ETH 
 
         setNotifications("success", "Your deposit has been pending completed!", true)
       }

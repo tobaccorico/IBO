@@ -38,8 +38,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
     // "Walked in the kitchen, found a
     // [Pod] to [Piscine]" ~ 2 tune chi
     Pod[43][24] Piscine; // 24 batches
-    uint constant PENNY = 1e16; // 0.01
-    // in for a penny, in for a pound...
+    uint constant PENNY = 1e16; // in
+    // for a penny...in for a pound...
     uint constant LAMBO = 16508; // NFT
     bytes32 public immutable ID; // Morph
     uint constant public DAYS = 42 days;
@@ -48,7 +48,6 @@ contract Quid is ERC20, // OFTOwnable2Step,
     mapping(address => Pod) internal perVault;
     mapping(address => address) internal vaults;
     mapping (address => bool[24]) public hasVoted;
-    mapping (address => uint) internal lastRedeemed;
     // token-holders vote for deductibles, and their
     // QD balances are applied to the total weights
     // for the voted % (weights are the balances)
@@ -153,7 +152,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += perVault[DAI].debit;
             total += FullMath.mulDiv(_getPrice(SCRVUSD),
                      perVault[SCRVUSD].debit, WAD);
-                     total += perVault[CRVUSD].debit;
+                   total += perVault[CRVUSD].debit;
         } /* TODO uncomment for Ethereum L1 mainnet
         else { // includes collateral deployed in ID,
             // as Pod.credit, initially only for SUSDE,
@@ -212,18 +211,16 @@ contract Quid is ERC20, // OFTOwnable2Step,
         }            require(isDollar && amount > 0, "$");
     }
 
+    // takes $ amount input in units of 1e18...
     function withdrawUSDC(uint amount) public
         onlyGenerators returns (uint withdrawn) {
         withdrawn = FullMath.min(amount / 1e12, 
             ERC4626(VAULT).maxWithdraw(
                          address(this)));
-        ERC4626(VAULT).withdraw(
-        ERC4626(VAULT).convertToShares(withdrawn),
-                        Moulinette, address(this)); 
-    } // TODO msig
+        withdrawn = ERC4626(VAULT).withdraw(
+        withdrawn, Moulinette, address(this)); 
+    }
 
-    function lastRedeem(address who) public view
-        returns (uint) { return lastRedeemed[who]; }
     function qd_amt_to_dollar_amt(uint qd_amt) public
         view returns (uint amount) { uint in_days = (
             (block.timestamp - START) / 1 days
@@ -278,12 +275,10 @@ contract Quid is ERC20, // OFTOwnable2Step,
         for (uint i = 0; i < batches; i++) {
         total += consideration[account][i]; }
     }
-    // turning a generator is what redeems it
-    // or when a cocoon turns into a butterfly
+   
     function turn(address from, uint value)
         public onlyGenerators returns (uint) {
         uint balance_from = this.balanceOf(from);
-        lastRedeemed[from] = currentBatch();
         _transferHelper(from, address(0), value);
         // carry.debit will be untouched here...
         return MO(Moulinette).transferHelper(from,
@@ -339,9 +334,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint balance_from = this.balanceOf(from);
         uint value = FullMath.min(amount, balance_from);
         uint from_vote = feeVotes[to]; bool result = true;
-        if (from == address(this)) {
+        if (to == address(this)) {
             require(msg.sender ==
-             Moulinette, "403");
+            Moulinette, "403");
             _burn(from, amount);
         } else {
             if (msg.sender != Moulinette) {
@@ -473,7 +468,14 @@ contract Quid is ERC20, // OFTOwnable2Step,
         if (tokenId == LAMBO && ICollection(F8N).ownerOf(
             LAMBO) == address(this)) { address winner;
             uint cut = GRIEVANCES / 2; uint count = 0;
-            // "my mind spits with an enormous kickback"
+            // my mind spits with an enormous kickback,
+            // open fire...open mind...this time is a 
+            // promise sounding like an oath...I wanna 
+            // know true feeling, but you can't decide
+            // if you're hooked on...only the kick...
+            // we'll throw our velvet pledges into...
+            // this delicate delight, for a MO mint, 
+            // drop the anchor down, make this body a home
             this.morph(QUID, cut); this.morph(from, cut);
             ICollection(F8N).transferFrom( // return
                 address(this), QUID, LAMBO); // NFT...
@@ -507,8 +509,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
             uint batch = currentBatch() - 1;
             uint raised = Piscine[batch][42].debit;
             uint cut = FullMath.mulDiv(raised, CUT, WAD); 
-            amount = FullMath.min(amount, cut); // TODO / 2
-            Piscine[batch][42].debit -= amount; // batchUp()
+            amount = FullMath.min(amount, cut);
+            Piscine[batch][42].debit -= amount;
         } require(amount > 0, "no thing");
         uint inDollars; address vault; uint i; // for loop
         uint[5] memory amounts; address[5] memory tokens; 
@@ -528,7 +530,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             } inDollars = FullMath.min(delta + delta / 9, amounts[2]);
               collat = ERC4626(SUSDE).convertToShares(inDollars);
         } else { amounts[0] = perVault[DAI].debit;
-            // amounts[5] = perVault[FRAX].debit; // TODO ARB
+            // amounts[5] = perVault[FRAX].debit; // TODO Arbitrum
             for (i = 1; i < 4; i++) { vault = vaults[tokens[i]];
                 amounts[i] = perVault[tokens[i]].debit +
                 FullMath.mulDiv(_getPrice(vault), // TODO cache the
@@ -540,6 +542,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         }
         if (delta == 0 && borrowed > 0) { // no shortfall,
             // but we owe debt from a previous...^^^^^^^
+            // first withdraw borrowed assets from vault
             sharesWithdrawn = ERC4626(repay).withdraw(
                 borrowed, address(this), address(this));
             // DAI or USDC shares in vault were borrowed    
@@ -613,11 +616,13 @@ contract Quid is ERC20, // OFTOwnable2Step,
                     sent += FullMath.mulDiv(inDollars,
                                 _getPrice(vault), WAD);
                 }   
-            } /* TODO
+            }
+            /* TODO uncomment
             if (amounts[4] > 0) { sent = FullMath.min(amounts[4],
                 ERC20(tokens[4]).balanceOf(address(this)));
                 ERC20(tokens[4]).transfer(to, amounts[4]);
-            } */ // ^ above only for Arbitrum, no FRAX on Base
+            } // ^ above only for Arbitrum, no FRAX on Base
+            */
         }
     }
 }
