@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.25; // EVM: london
-import "lib/forge-std/src/console.sol"; // TODO delete logging before mainnet
+// import "lib/forge-std/src/console.sol"; // TODO delete logging before mainnet
 import {MorphoBalancesLib} from "./imports/morpho/libraries/MorphoBalancesLib.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
@@ -48,9 +48,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
     mapping(address => Pod) internal perVault;
     mapping(address => address) internal vaults;
     mapping (address => bool[24]) public hasVoted;
-    // token-holders vote for deductibles, and their
-    // QD balances are applied to the total weights
-    // for the voted % (weights are the balances)
+    // token-holders vote for deductibles, their
+    // QD balances are applied to  total weights
+    // for voted % (weights are the balances)...
     // index 0 is the largest possible vote = 9%
     // index 89 represents the smallest one = 1%
     uint public deployed; uint internal K = 17;
@@ -58,7 +58,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     mapping (address => uint) public feeVotes;
     address[][24] public voters; // by batch
     mapping (address => bool) public winners;
-    // ^ the mapping prevents duplicates
+    // ^ the mapping prevents duplicates...
     address payable public Moulinette; 
     address public immutable SCRVUSD;
     address public immutable CRVUSD;
@@ -237,7 +237,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     }
     function batchUp()
         public nonReentrant {
-        if (block.timestamp > // 45
+        if (block.timestamp > // 45d
             START + DAYS + 3 days) {
             uint keep = GRIEVANCES;
             this.morph(QUID, keep);
@@ -253,10 +253,12 @@ contract Quid is ERC20, // OFTOwnable2Step,
         START = block.timestamp;
         consideration[to][batch] += cut;
         Pod memory day = Piscine[batch - 1][42];
+        // ROI aggregates all batches' days...
         ROI += FullMath.mulDiv(WAD, day.credit - 
                          day.debit, day.debit);
+        // ROI in MO is a snapshot (avg per day)
         MO(Moulinette).setMetrics(ROI / ((DAYS 
-                     / 1 days) * batch)); // TODO
+                     / 1 days) * batch)); 
     } function currentBatch() public view returns 
         (uint batch) { batch = (block.timestamp - 
                         deployed) / DAYS;
@@ -279,7 +281,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
     function turn(address from, uint value)
         public onlyGenerators returns (uint) {
         uint balance_from = this.balanceOf(from);
-        _transferHelper(from, address(0), value);
+        _burn(from, value); _transferHelper(from, 
+                                address(0), value);
         // carry.debit will be untouched here...
         return MO(Moulinette).transferHelper(from,
                 address(0), value, balance_from);
@@ -297,7 +300,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             uint balance_to = this.balanceOf(to);
             result = super.transfer(to, value);
             _calculateMedian(this.balanceOf(to),
-                to_vote, balance_to, to_vote);
+                    to_vote, balance_to, to_vote);
         } _transferHelper(msg.sender, to, value);
         uint sent = MO(Moulinette).transferHelper(
             msg.sender, to, value, balance_from);
@@ -305,19 +308,15 @@ contract Quid is ERC20, // OFTOwnable2Step,
             _mint(msg.sender, value);
             consideration[msg.sender][currentBatch()] += value;
         } else { _calculateMedian(this.balanceOf(msg.sender),
-                        from_vote, balance_from, from_vote);
+                         from_vote, balance_from, from_vote);
         } return result;
     }
     function _transferHelper(address from,
         address to, uint amount) internal {
-        require(amount > WAD, "min. 1 QD");
-        int i; // must be int or tx reverts
-        // when we go below 0 in the loop
-        if (to == address(0)) {
-            i = int(matureBatches());
-            _burn(from, amount);
-        } 
-        else { i = int(currentBatch()); }
+        require(amount > WAD, "minimum 1 QD");
+        // int or tx reverts when we go below 0 in loop
+        int i = to == address(0) ? int(matureBatches()) :
+                                      int(currentBatch());
         while (amount > 0 && i >= 0) { uint k = uint(i);
             uint amt = consideration[from][k]; // QD...
             if (amt > 0) { 
@@ -334,23 +333,20 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint balance_from = this.balanceOf(from);
         uint value = FullMath.min(amount, balance_from);
         uint from_vote = feeVotes[to]; bool result = true;
-        if (to == address(this)) {
-            require(msg.sender ==
-            Moulinette, "403");
-            _burn(from, amount);
-        } else {
-            if (msg.sender != Moulinette) {
-                uint to_vote = feeVotes[to];
-                uint balance_to = this.balanceOf(to);
-                result = super.transferFrom(from, to, value);
-                _calculateMedian(this.balanceOf(to), to_vote,
-                                      balance_to, to_vote);
-            } MO(Moulinette).transferHelper(
-              from, to, value, balance_from);
-            _transferHelper(from, to, value);
-            _calculateMedian(this.balanceOf(from),
-                from_vote, balance_from, from_vote);
-        } return result;
+        if (to == Moulinette) {
+            require(msg.sender == Moulinette, 
+            "403"); _burn(from, amount);
+        } if (msg.sender != Moulinette) {
+            uint to_vote = feeVotes[to];
+            uint balance_to = this.balanceOf(to);
+            result = super.transferFrom(from, to, value);
+            _calculateMedian(this.balanceOf(to), to_vote,
+                                    balance_to, to_vote);
+        } MO(Moulinette).transferHelper(
+        from, to, value, balance_from);
+        _transferHelper(from, to, value);
+        _calculateMedian(this.balanceOf(from),
+            from_vote, balance_from, from_vote); return result;
     }
 
     function vote(uint new_vote) external {
@@ -473,9 +469,6 @@ contract Quid is ERC20, // OFTOwnable2Step,
             // promise sounding like an oath...I wanna 
             // know true feeling, but you can't decide
             // if you're hooked on...only the kick...
-            // we'll throw our velvet pledges into...
-            // this delicate delight, for a MO mint, 
-            // drop the anchor down, make this body a home
             this.morph(QUID, cut); this.morph(from, cut);
             ICollection(F8N).transferFrom( // return
                 address(this), QUID, LAMBO); // NFT...

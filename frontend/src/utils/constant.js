@@ -1,6 +1,6 @@
 // Sepolia
-export const addressMO = '0x7bFc313539548B76dC30e598879d5e3569785A50'
-export const addressQD = '0x7dF77aa97514686DB58B084625967E64c4c73185';
+export const addressMO = '0x6bCEd029B9c4aA48DdB38335739F91cc077CFB15'
+export const addressQD = '0x5B7f7AB660e89029A37Fa057bb06c0cD4fa86bE0';
 export const addressUSDE = '0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34';
 export const addressSUSDE = '0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2';
 
@@ -229,7 +229,7 @@ export const MO = [
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "price",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -402,24 +402,6 @@ export const MO = [
   },
   {
     "type": "function",
-    "name": "set_price_eth",
-    "inputs": [
-      {
-        "name": "up",
-        "type": "bool",
-        "internalType": "bool"
-      },
-      {
-        "name": "refresh",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "token0",
     "inputs": [],
     "outputs": [
@@ -508,6 +490,50 @@ export const MO = [
     ],
     "outputs": [],
     "stateMutability": "payable"
+  },
+  {
+    "type": "event",
+    "name": "Fold",
+    "inputs": [
+      {
+        "name": "who",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Mint",
+    "inputs": [
+      {
+        "name": "who",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "paid",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
   }
 ]
 
@@ -575,19 +601,6 @@ export const QUID = [
   },
   {
     "type": "function",
-    "name": "AVG_ROI",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "CRVUSD",
     "inputs": [],
     "outputs": [
@@ -640,6 +653,19 @@ export const QUID = [
   },
   {
     "type": "function",
+    "name": "F8N",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "FRAX",
     "inputs": [],
     "outputs": [
@@ -666,6 +692,19 @@ export const QUID = [
   },
   {
     "type": "function",
+    "name": "LZ",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_PER_DAY",
     "inputs": [],
     "outputs": [
@@ -679,6 +718,19 @@ export const QUID = [
   },
   {
     "type": "function",
+    "name": "MORPHO",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "Moulinette",
     "inputs": [],
     "outputs": [
@@ -686,6 +738,32 @@ export const QUID = [
         "name": "",
         "type": "address",
         "internalType": "address payable"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "QUID",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ROI",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1073,25 +1151,6 @@ export const QUID = [
         "name": "",
         "type": "bool",
         "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "lastRedeem",
-    "inputs": [
-      {
-        "name": "who",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"

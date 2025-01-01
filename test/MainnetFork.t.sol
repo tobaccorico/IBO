@@ -101,7 +101,8 @@ contract MainnetFork is Test {
             address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)
         );  moulinette.setQuid(address(quid));
-        moulinette.set_price_eth(false, true);
+        // moulinette.set_price_eth(false, true);
+        // TODO uncomment
     }
     
     // TODO prank some SUSDE into the ERC20...
@@ -212,8 +213,8 @@ contract MainnetFork is Test {
 
         vm.stopPrank();
         console.log("price before drop", moulinette.getPrice(42));
-        moulinette.set_price_eth(false, false);
-        moulinette.set_price_eth(false, false);
+        // moulinette.set_price_eth(false, false); // TODO uncomment
+        // moulinette.set_price_eth(false, false);
         console.log("price AFTER drop", moulinette.getPrice(42));
         moulinette.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
 

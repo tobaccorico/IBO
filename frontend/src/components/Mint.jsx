@@ -59,6 +59,7 @@ const ChoiseBoxes = ({
 }
 
 
+/*
 const TestPrice = () => {
   const { account, mo } = useAppContext()
 
@@ -105,9 +106,8 @@ const TestPrice = () => {
       </div>
     </>
   )
-
 }
-
+*/ // TODO testing
 
 export const Mint = () => {
   const DELAY = 60 * 60 * 8
@@ -633,8 +633,10 @@ export const Mint = () => {
             onChange={() => handleVotes()}
           />
         </div>
-        {voteStatus ? <VoteButton minValue={1} maxValue={9} /> : <TestPrice />}
+        <VoteButton minValue={1} maxValue={9} /> 
       </div> : null}
     </div>
   )
 }
+// TODO testing
+// {voteStatus ? <VoteButton minValue={1} maxValue={9} /> : <TestPrice />}

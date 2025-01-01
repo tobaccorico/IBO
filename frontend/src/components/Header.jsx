@@ -10,7 +10,7 @@ import { SepoliaChecker } from "./SepoliaChecker"
 
 export const Header = () => {
   const {
-    connectToMetaMask, getTotalInfo, getUsde, getWalletBalance, getUserInfo,
+    connectToMetaMask, getTotalInfo, /* getUsde, */ getWalletBalance, getUserInfo,
     account, connected, notifications
   } = useAppContext()
 
@@ -47,11 +47,12 @@ export const Header = () => {
 
   const usdeToWallet = useCallback(async () => {
     try {
-      if (connected) await Promise.all([getUsde()]).then(() => updatedTotalInfo())
+      if (connected) await Promise.all([/*getUsde()*/updatedTotalInfo()])//.then(() => updatedTotalInfo())
     } catch (error) {
       console.warn(`Failed to getting usde on wallet:`, error)
     }
-  }, [getUsde, updatedTotalInfo, connected])
+  }, [/* getUsde, */ updatedTotalInfo, connected])
+  // TODO
 
   useEffect(() => {
     if (connected) {
@@ -95,7 +96,11 @@ export const Header = () => {
       </div>
     </>
   )
-
+  /*
+  <button className="header-wallet" onClick={() => usdeToWallet()}>
+      Mint USDe
+  </button>
+  */
   return (
     <header className="header-root">
       <div className="header-logoContainer fade-in">
@@ -108,9 +113,7 @@ export const Header = () => {
       <div className="header-walletContainer">
         {connected ? (
           <div className="header-wallet fade-in">
-            <button className="header-wallet" onClick={() => usdeToWallet()}>
-              Mint USDe
-            </button>
+            
             <div className="header-metamaskIcon">
               <img
                 width="18"

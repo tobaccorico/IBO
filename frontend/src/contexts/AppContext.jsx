@@ -10,7 +10,7 @@ import { QUID, USDE,  MO, addressQD, addressUSDE, addressMO } from "../utils/con
 
 const contextState = {
   connectToMetaMask: () => { },
-  getUsde: () => { },
+  // getUsde: () => { }, // TODO testing
   getSales: () => { },
   getTotalInfo: () => { },
   getUserInfo: () => { },
@@ -196,6 +196,7 @@ export const AppContextProvider = ({ children }) => {
     }
   }, [account, connected, mo])
 
+  /*
   const getUsde = useCallback(async () => {
     try {
       if (account && usde) await usde.methods.mint(account).send({ from: account })
@@ -203,6 +204,7 @@ export const AppContextProvider = ({ children }) => {
       console.warn(`Failed to connect:`, error)
     }
   }, [account, usde])
+  */
 
   const getWalletBalance = useCallback(async () => {
     try {
@@ -294,7 +296,7 @@ export const AppContextProvider = ({ children }) => {
     <AppContext.Provider
       value={{
         connectToMetaMask,
-        getUsde,
+        // getUsde, // TODO testing
         getTotalInfo,
         getUserInfo,
         getDepositInfo,
