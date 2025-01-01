@@ -10,11 +10,11 @@ import {ReentrancyGuard} from "lib/solmate/src/utils/ReentrancyGuard.sol";
 
 import {TickMath} from "./imports/math/TickMath.sol";
 import {FullMath} from "./imports/math/FullMath.sol";
-// import {ISwapRouter} from "./imports/ISwapRouter.sol"; // on L1 and Arbitrum
+import {ISwapRouter} from "./imports/ISwapRouter.sol"; // on L1 and Arbitrum
 import {IUniswapV3Pool} from "./imports/IUniswapV3Pool.sol";
 import {LiquidityAmounts} from "./imports/math/LiquidityAmounts.sol";
 import {INonfungiblePositionManager} from "./imports/INonfungiblePositionManager.sol";
-import {IV3SwapRouter as ISwapRouter} from "./imports/IV3SwapRouter.sol"; // TODO base
+// import {IV3SwapRouter as ISwapRouter} from "./imports/IV3SwapRouter.sol"; // TODO base
 // import "lib/forge-std/src/console.sol"; // TODO 
 
 contract MO is ReentrancyGuard {
@@ -146,11 +146,11 @@ contract MO is ReentrancyGuard {
         token1 = ERC20(POOL.token1());
         token0.approve(_router, 
             type(uint256).max);
+        token1.approve(_router,
+            type(uint256).max);
         token0.approve(_nfpm,
             type(uint256).max);
         token1.approve(_nfpm,
-            type(uint256).max);
-        token1.approve(_router,
             type(uint256).max);
         token1isWETH = address(token0) == USDC;
         // needed as order is swapped on L2
@@ -434,7 +434,7 @@ contract MO is ReentrancyGuard {
             (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
                                     current, lower, upper, liquidity);
         } usdc *= 1e12; // must also divide at the end for precision
-        address vault = QUID.VAULT();
+        /* address vault = QUID.VAULT();
         if (scaled > usdc) { scaled -= usdc;
             ERC4626(vault).deposit(
                 scaled / 1e12, 
@@ -443,7 +443,8 @@ contract MO is ReentrancyGuard {
         } else { 
             scaled += ERC4626(vault).convertToAssets(
                 QUID.withdrawUSDC(usdc - scaled)) * 1e12;
-        }  // x / y = k...
+        } */ // TODO deploy Morpho vault on Aribtrum
+        // x / y = k...
         if (usdc > scaled) {
             uint k = FullMath.mulDiv(eth, WAD, usdc); 
             uint denom = WAD + FullMath.mulDiv(
@@ -466,7 +467,7 @@ contract MO is ReentrancyGuard {
             scaled += ROUTER.exactInput(
                 ISwapRouter.ExactInputParams(abi.encodePacked(
                     address(WETH9), POOL_FEE, USDC), address(this),
-                    /* block.timestamp, */ selling, 0)) * 1e12; 
+                    block.timestamp, selling, 0)) * 1e12; 
                   eth -= selling; 
         } return (eth, scaled / 1e12);
     }
@@ -526,7 +527,8 @@ contract MO is ReentrancyGuard {
                        msg.sender), amount);
         require(amount > 0, "let it steep");
         // same can be said of tea as for a t-bill...
-        (uint delta, ) = capitalisation(amount, true);
+        (uint delta, 
+        uint cap) = capitalisation(amount, true);
         uint share = FullMath.mulDiv(WAD, amount,
                 QUID.matureBalanceOf(msg.sender));
    
@@ -542,12 +544,11 @@ contract MO is ReentrancyGuard {
             absorb = FullMath.mulDiv(absorb, share, WAD);
         } QUID.turn(msg.sender, amount); // creditHelper, 
         // in turn, will handle decrementing carry.credit
-        absorb = FullMath.min(absorb, amount / 3); // cap loss
-
-        // TODO temporary for chains with no Morpho deployed:
-        // amount = qd_amt_to_dollar_amt(cap, amount - absorb); 
-
-        amount -= absorb; amount -= QUID.morph(msg.sender, amount);
+        absorb = FullMath.min(absorb, 
+        amount / 3); // cap loss
+        amount -= absorb; 
+        amount = qd_amt_to_dollar_amt(cap, amount); 
+        // amount -= QUID.morph(msg.sender, amount); // TODO
         if (amount > 0) { (, uint price,) = _fetch(msg.sender);
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) { // TODO verify order of ticks for getLiquidity
@@ -641,12 +642,12 @@ contract MO is ReentrancyGuard {
             if (!token1isWETH) { // increase amount0 (eth) by amount1 sold
                 amount0 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(address(token1), POOL_FEE, address(token0)),
-                    address(this), /* block.timestamp, */ amount1, 0));
+                    address(this), block.timestamp, amount1, 0));
                     transfer = FullMath.min(transfer, amount0);
             } else { // increase amount1 by selling amount0 (usdc) for eth
                 amount1 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(address(token0), POOL_FEE, address(token1)),
-                    address(this), /* block.timestamp, */ amount0, 0)); 
+                    address(this), block.timestamp, amount0, 0)); 
                     transfer = FullMath.min(transfer, amount1);
             }   WETH9.withdraw(transfer);
             (bool success, ) = msg.sender.call{ 

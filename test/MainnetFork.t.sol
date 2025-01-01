@@ -93,12 +93,12 @@ contract MainnetFork is Test {
         );
         quid = new Quid(address(moulinette), 
         // app.morpho.org/vault?vault=0xd63070114470f685b75B74D60EEc7c1113d33a3D&network=mainnet
-            address(usdc), 0xd63070114470f685b75B74D60EEc7c1113d33a3D, // Usual Morpho Vault
-            0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
-            address(USDE), address(SUSDE), /* 
-            address(FRAX), address (SFRAX),
+            address(usdc), // 0xd63070114470f685b75B74D60EEc7c1113d33a3D, // Usual Morpho Vault
+            // 0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
+            address(USDE), address(SUSDE), 
+            address(FRAX), /* address (SFRAX),
             address (SDAI), */ address(DAI),
-            address(USDS), address(SUSDS),
+            // address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)
         );  moulinette.setQuid(address(quid));
         // moulinette.set_price_eth(false, true);

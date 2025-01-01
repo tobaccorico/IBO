@@ -11,9 +11,9 @@ import {IUniswapV3Pool} from "../src/imports/IUniswapV3Pool.sol";
 import {IMorpho, MarketParams} from "../src/imports/morpho/IMorpho.sol";
 import {IUniswapV3Factory} from "../src/imports/IUniswapV3Factory.sol";
 import {IERC4626} from "../src/imports/morpho/libraries/VaultLib.sol";
-// import {ISwapRouter} from "../src/imports/ISwapRouter.sol"; // TODO used for mainnet forking
+import {ISwapRouter} from "../src/imports/ISwapRouter.sol"; // TODO used for mainnet forking
 import {AggregatorV3Interface} from "../src/imports/AggregatorV3Interface.sol";
-import {IV3SwapRouter as ISwapRouter} from "../src/imports/IV3SwapRouter.sol"; // used on Base and Taiko...
+// import {IV3SwapRouter as ISwapRouter} from "../src/imports/IV3SwapRouter.sol"; // used on Base and Taiko...
 import {MorphoBalancesLib} from "../src/imports/morpho/libraries/MorphoBalancesLib.sol";
 import {MorphoChainlinkOracleV2} from "../src/imports/morpho/MorphoChainlinkOracleV2.sol";
 import {INonfungiblePositionManager} from "../src/imports/INonfungiblePositionManager.sol";
@@ -22,10 +22,11 @@ contract Deploy is Script {
     Quid public quid; 
     MO public moulinette;
     // ERC20 public M = ERC20();
-    ERC20 public USDC = ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); 
-    // Base: ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
-    // Arbitrum : ERC20(0xaf88d065e77c8cc2239327c5edb3a432268e5831);
+    ERC20 public USDC = ERC20(0xaf88d065e77c8cC2239327C5EDb3A432268e5831); 
     // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48) TODO Ethereum L1
+    // Base : 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    // Arbitrum : 0xaf88d065e77c8cc2239327c5edb3a432268e5831;
+    // BNB (tether) : 0x55d398326f99059ff775485246999027b3197955
     
      // TODO no USDS on Arbitrum (nor SUSDS or SFRAX)
     ERC20 public USDS = ERC20(0x820C137fa70C8691f0e44Dc420a5e53c168921Dc);
@@ -33,9 +34,10 @@ contract Deploy is Script {
     ERC20 public SUSDS = ERC20(0x5875eEE11Cf8398102FdAd704C9E96607675467a);
     // = ERC4626(0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD);
     
-    ERC20 public DAI = ERC20(0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb);
+    ERC20 public DAI = ERC20(0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1);
     // = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     // Arbitrum : 0xda10009cbd5d07dd0cecc66161fc93d7c9000da1
+    // Base : 0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb
     
     // Same addresses on Base as on Arbitrum
     ERC20 public USDE = ERC20(0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34); 
@@ -43,12 +45,14 @@ contract Deploy is Script {
     ERC20 public SUSDE = ERC20(0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2); 
     // = ERC4626(0x9D39A5DE30e57443BfF2A8307A4256c8797A3497);
     
-    ERC20 public CRVUSD = ERC20(0x417Ac0e078398C154EdFadD9Ef675d30Be60Af93);
+    ERC20 public CRVUSD = ERC20(0x498Bf2B1e120FeD3ad3D42EA2165E9b73f99C1e5);
     // ERC20(0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E);
     // Arbitrum : 0x498bf2b1e120fed3ad3d42ea2165e9b73f99c1e5
-    ERC20 public SCRVUSD = ERC20(0x646A737B9B6024e49f5908762B3fF73e65B5160c);
+    // Base : 0x417Ac0e078398C154EdFadD9Ef675d30Be60Af93
+    ERC20 public SCRVUSD = ERC20(0xEfB6601Df148677A338720156E2eFd3c5Ba8809d);
     // ERC4626(0x0655977FEb2f289A4aB78af67BAB0d17aAb84367);
     // Arbitrum : 0xEfB6601Df148677A338720156E2eFd3c5Ba8809d
+    // Base : 0x646A737B9B6024e49f5908762B3fF73e65B5160c
 
     // app.morpho.org/vault?vault=0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca&network=base
     ERC4626 public VAULT = ERC4626(0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca);
@@ -67,45 +71,43 @@ contract Deploy is Script {
     
     address public IRM = 0x46415998764C29aB2a25CbeA6254146D50D22687;
     // 0x870aC11D48B15DB9a138Cf899d20F13F79Ba00BC // TODO deploy L1
-    
+    // TODO re-deploy on Aribtrum after Morpho is deployed there
     IMorpho public morpho = IMorpho(0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb); // same address on L1 as well as Base
     // IMorphoChainlinkOracleV2Factory public morphoFactory = IMorphoChainlinkOracleV2Factory(0x2DC205F24BCb6B311E5cdf0745B0741648Aebd3d);
     bytes32 public ID = 0xb1c74e62cbe3721a37040c248e481d175cffb45c686b5b423cd446a063261431; // TODO deploy market on Arbitrum
 
-    IUniswapV3Factory public factory = IUniswapV3Factory(0x33128a8fC17869897dcE68Ed026d694621f6FDfD);
-    // Base : 0x33128a8fC17869897dcE68Ed026d694621f6FDfD
+    IUniswapV3Factory public factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
+    // Base : 0x33128a8fC17869897dcE68Ed026d694621f6FDfD // TODO deploy QD<>WETH and QD<>USDC
     // Unichain : 0x1F98431c8aD98523631AE4a59f267346ea31F984
     // Arbitrum : 0x1F98431c8aD98523631AE4a59f267346ea31F984
-    ISwapRouter public router = ISwapRouter(0x2626664c2603336E57B271c5C0b26F421741e481);
+    // BNB : 0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7
+    ISwapRouter public router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     // Base : 0x2626664c2603336E57B271c5C0b26F421741e481
     // Arbitrum : 0xE592427A0AEce92De3Edee1F18E0157C05861564
     // Unichain : 0xd1AAE39293221B77B0C71fBD6dCb7Ea29Bb5B166
     // Sepolia : 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E
     // Taiko : 0xdD489C75be1039ec7d843A6aC2Fd658350B067Cf
-    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1);
+    // BNB : 0xB971eF87ede563556b2ED4b1C0b0019111Dd85d2
+    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
     // Base : 0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1
     // Arbitrum : 0xC36442b4a4522E871399CD717aBDD847Ab11FE88
     // Unichain : 0xB7F724d6dDDFd008eFf5cc2834edDE5F9eF0d075
     // Sepolia : 0x1238536071E1c677A632429e3655c799b22cDA52
     // Taiko : 0x8B3c541c30f9b29560f56B9E44b59718916B69EF
-    IUniswapV3Pool public pool = IUniswapV3Pool(0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59);
+    // BNB : 0x7b8A01B39D58278b5DE7e48c8449c9f4F5170613
+    IUniswapV3Pool public pool = IUniswapV3Pool(0xC6962004f452bE9203591991D15f6b388e09E8D0);
     // Base : 0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59
     // Arbitrum : 0xc6962004f452be9203591991d15f6b388e09e8d0
     // Unichain : 0xBeAD5792bB6C299AB11Eaa425aC3fE11ebA47b3B
     // Sepolia : 0x3289680dD4d6C10bb19b899729cda5eEF58AEfF1
     // Taiko : 0xE47a76e15a6F3976c8Dc070B3a54C7F7083D668B
-    WETH public weth = WETH(payable(0x4200000000000000000000000000000000000006));
+    // BNB : 0x36696169c63e42cd08ce11f5deebbcebae652050
+    WETH public weth = WETH(payable(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1));
     // Arbitrum : 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
-    // Unichain : 0x4200000000000000000000000000000000000006
+    // Unichain (and Base) : 0x4200000000000000000000000000000000000006
     // Sepolia : 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14
     // Taiko : 0xA51894664A773981C6C112C43ce576f315d5b1B6
-
-    // Milestone 2
-    /*
-    function launchMorphoMarket(address collateral, address loan) {
-        
-    }
-    */
+    // BNB : 0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c
 
     function run() public {
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
@@ -127,6 +129,7 @@ contract Deploy is Script {
         // USDC.approve(address(nfpm), type(uint256).max);
         // weth.approve(address(nfpm), type(uint256).max);
 
+        // TODO Arbitrum
         /* ==== Deploy a Morpho Oracle for SUSDE and market where that's collateral ==== 
         uses the oracle factory contract, as well as a create market on the singleton */
         /*
@@ -172,12 +175,12 @@ contract Deploy is Script {
         //     deadline: block.timestamp + 3600
         // }));
        
-        quid = new Quid(address(moulinette), 
-            address(USDC), address(VAULT), ID,
+        quid = new Quid(address(moulinette), // TODO deploy Morpho
+            address(USDC), /* address(VAULT), ID, */ // vault on ARB
             address(USDE), address(SUSDE),
-            /* address(FRAX), address (SFRAX),
+            address(FRAX), /* address (SFRAX),
             address (SDAI), */ address(DAI), 
-            address(USDS), address(SUSDS),
+            // address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)); 
         
         // pool = IUniswapV3Pool(factory.createPool(

@@ -1,5 +1,5 @@
 
-## In My `Offer` 
+## *I*n *M*y `Offer` 
 
 `MO` has `ID` for [selling  
  puts](https://x.com/futurenomics/status/1766173245949014373) in a concentrated  

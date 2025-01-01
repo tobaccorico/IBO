@@ -84,23 +84,23 @@ contract Quid is ERC20, // OFTOwnable2Step,
         _;
     } // en.wiktionary.org/wiki/moulinette
     constructor(address _mo, address _usdc, 
-        address _vault, bytes32 _morpho,
+        // address _vault, bytes32 _morpho,
         address _usde, address _susde,
-        /* address _frax, address _sfrax,
+        address _frax, /* address _sfrax,
          address _sdai, */ address _dai,
-        address _usds, address _susds,
+        // address _usds, address _susds,
         address _crv, address _scrv)
         /* OFTOwnable2Step("QU!D", "QZ", 
         LZ, QUID) { VAULT = _vault; */
         ERC20("QU!D", "QD", 18) { // $
         START = block.timestamp; // now
-        VAULT = _vault; ID = _morpho;
+        // VAULT = _vault; ID = _morpho;
         deployed = START; USDC = _usdc; 
         /* SDAI = _sdai; */ DAI = _dai;
-        SUSDE = _susde; USDS = _usds; 
-        USDE = _usde; SUSDS = _susds;
+        SUSDE = _susde; // USDS = _usds; 
+        USDE = _usde; // SUSDS = _susds;
         CRVUSD = _crv; SCRVUSD = _scrv; 
-        // FRAX = _frax;  SFRAX = _sfrax; 
+        FRAX = _frax; // SFRAX = _sfrax; 
         vaults[DAI] = SDAI;
         vaults[USDC] = VAULT; 
         vaults[USDE] = SUSDE; 
@@ -115,18 +115,18 @@ contract Quid is ERC20, // OFTOwnable2Step,
             ERC20(USDS).approve(SUSDS, type(uint).max);
             ERC20(CRVUSD).approve(SCRVUSD, type(uint).max);
             ERC20(USDE).approve(SUSDE, type(uint).max);
-            // ERC20(DAI).approve(SDAI, type(uint).max);
-            // ERC20(FRAX).approve(SFRAX,  type(uint).max);
+            ERC20(DAI).approve(SDAI, type(uint).max);
+            ERC20(FRAX).approve(SFRAX,  type(uint).max);
             ERC4626(SUSDE).approve(MORPHO, type(uint).max);
             ERC20(DAI).approve(MORPHO, type(uint).max);
         } else { require(address(MO(Moulinette).token1())
             == USDC && address(MO(Moulinette).token0())
             == address(MO(Moulinette).WETH9()), "42"); 
-            ERC20(SUSDE).approve(MORPHO, type(uint).max); // deployed 
-            ERC20(USDC).approve(MORPHO, type(uint).max); // on Base...
-            DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1);
-            CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
-            // 0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // TODO Arbitrum
+            // ERC20(SUSDE).approve(MORPHO, type(uint).max); // deployed 
+            // ERC20(USDC).approve(MORPHO, type(uint).max); // on Base...
+            // DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1);
+            CRV = ISCRVOracle(0x3195A313F409714e1f173ca095Dba7BfBb5767F7);
+            // 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
         }
     } uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3 years
@@ -146,9 +146,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += FullMath.mulDiv(_getPrice(SUSDE),
                      perVault[SUSDE].debit, WAD);
             total += perVault[USDE].debit;
-            total += FullMath.mulDiv(_getPrice(SUSDS),
-                     perVault[SUSDS].debit, WAD);
-            total += perVault[USDS].debit;
+            /* total += FullMath.mulDiv(_getPrice(SUSDS),
+                     perVault[SUSDS].debit, WAD); */
+            // total += perVault[USDS].debit;
             total += perVault[DAI].debit;
             total += FullMath.mulDiv(_getPrice(SCRVUSD),
                      perVault[SCRVUSD].debit, WAD);
@@ -181,7 +181,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         bool l2 = !MO(Moulinette).token1isWETH();
         bool isDollar = false; // $ is ^ on l2
         if (token == SCRVUSD || // token == SFRAX || TODO 
-            token == SUSDS || // token == SDAI || L1...
+            // token == SUSDS || // token == SDAI || L1...
             token == SUSDE) { isDollar = true;
             if (!l2) { amount = FullMath.min(
                 ERC4626(token).balanceOf(from),
@@ -194,15 +194,14 @@ contract Quid is ERC20, // OFTOwnable2Step,
                 FullMath.mulDiv(amount, WAD, price)); usd = 
                 FullMath.mulDiv(amount, price, WAD);
             }   perVault[token].debit += amount;
-        } else if (token == DAI  || token == USDS ||
-                   token == USDC || // token == FRAX || 
-                   // TODO swap with USDS on Arbitrum...
+        } else if (token == DAI  || // token == USDS ||
+                   token == USDC || token == FRAX || 
                    token == USDE || token == CRVUSD) {
                    isDollar = true; usd = FullMath.min(
                    amount, ERC20(token).balanceOf(from));
                    ERC20(token).transferFrom(from,
                                 address(this), usd);
-                   if (!l2 || token == USDC) {
+                   if (!l2 /* || token == USDC */) {
                         address vault = vaults[token];
                         amount = ERC4626(vault).deposit(
                                     usd, address(this));
@@ -212,14 +211,14 @@ contract Quid is ERC20, // OFTOwnable2Step,
     }
 
     // takes $ amount input in units of 1e18...
-    function withdrawUSDC(uint amount) public
+    /* function withdrawUSDC(uint amount) public
         onlyGenerators returns (uint withdrawn) {
         withdrawn = FullMath.min(amount / 1e12, 
             ERC4626(VAULT).maxWithdraw(
                          address(this)));
         withdrawn = ERC4626(VAULT).withdraw(
         withdrawn, Moulinette, address(this)); 
-    }
+    } */ // TODO deploy Morpho vault on Aribtrum
 
     function qd_amt_to_dollar_amt(uint qd_amt) public
         view returns (uint amount) { uint in_days = (
@@ -400,15 +399,15 @@ contract Quid is ERC20, // OFTOwnable2Step,
         view returns (uint price) { // L2 only
         if (token == SUSDE) { // in absence of ERC4626 locally
             (, int answer,, uint ts,) = AggregatorV3Interface(
-            0xdEd37FC1400B8022968441356f771639ad1B23aA).latestRoundData();
-            // TODO Aribtrum 0x605EA726F0259a30db5b7c9ef39Df9fE78665C44
+            0x605EA726F0259a30db5b7c9ef39Df9fE78665C44).latestRoundData();
+            // 0xdEd37FC1400B8022968441356f771639ad1B23aA // Base
             price = uint(answer); require(ts > 0 
                 && ts <= block.timestamp, "link");
         } else if (token == SCRVUSD) { 
             price = CRV.pricePerShare(block.timestamp);
-        } else if (token == SUSDS) {
+        } /* else if (token == SUSDS) {
             price = DSR.getConversionRateBinomialApprox() / 1e9;
-        }   
+        } */  
         require(price >= WAD, "price");
     } // function used only on Base...
     
@@ -469,7 +468,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             // promise sounding like an oath...I wanna 
             // know true feeling, but you can't decide
             // if you're hooked on...only the kick...
-            this.morph(QUID, cut); this.morph(from, cut);
+            // this.morph(QUID, cut); this.morph(from, cut);
             ICollection(F8N).transferFrom( // return
                 address(this), QUID, LAMBO); // NFT...
                 // "I put my key, you put your key in"
