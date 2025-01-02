@@ -266,8 +266,9 @@ export const Mint = () => {
     const ethPrice = await mo.methods.getPrice(42).call()
     const parseEthPrice = parseFloat(ethPrice) / 1e18
 
-    const usdebalance = async () => {
-      if (usde) return Number(formatUnits(await usde.methods.balanceOf(account).call(), 18))
+    const usdebalance = async () => { // TODO
+      // if (usde) return Number(formatUnits(await usde.methods.balanceOf(account).call(), 18))
+        if (usde) return Number(formatUnits(await usde.methods.balanceOf(account).call(), 6))
     }
 
     try {
@@ -282,19 +283,24 @@ export const Mint = () => {
         setNotifications("info", "Processing. Please don't close or refresh page when terminal is working")
         setInputValue("")
 
-        const usdeAmount = await qdAmountTousdeAmt(qdAmount, DELAY)
+        const amt = await qdAmountTousdeAmt(qdAmount, DELAY)
+        const usdeAmount = formatUnits(amt, 6)
         const usdeString = usdeAmount ? usdeAmount.toString() : 0
 
         const allowanceBigNumber = await usde.methods.allowance(account, addressQD).call()
         const allowanceBigNumberBN = allowanceBigNumber ? allowanceBigNumber.toString() : 0
 
-        setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 18)}\nNote amount: ${formatUnits(usdeString, 18)}`)
+        // TODO
+        // setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 18)}\nNote amount: ${formatUnits(usdeString, 18)}`)
+        setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 6)}\nNote amount: ${formatUnits(usdeString, 6)}`)
 
         setNotifications("info", "Please, approve minting in your wallet.")
 
         if (account) await usde.methods.approve(addressQD.toString(), usdeAmount.toString()).send({ from: account })
 
-        setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 18)}\nNote amount: ${formatUnits(usdeString, 18)}`)
+        // TODO
+        // setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 18)}\nNote amount: ${formatUnits(usdeString, 18)}`)
+        setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 6)}\nNote amount: ${formatUnits(usdeString, 6)}`)
 
         setNotifications("success", "Please wait for approving")
 
@@ -304,7 +310,9 @@ export const Mint = () => {
 
         const allowanceBeforeMinting = await usde.methods.allowance(account, addressQD).call()
 
-        setNotifications("info", `Start minting:\nQD amount: ${inputValue}\nCurrent account: ${account}\nAllowance: ${formatUnits(allowanceBeforeMinting, 18)}`)
+        // TODO
+        // setNotifications("info", `Start minting:\nQD amount: ${inputValue}\nCurrent account: ${account}\nAllowance: ${formatUnits(allowanceBeforeMinting, 18)}`)
+        setNotifications("info", `Start minting:\nQD amount: ${inputValue}\nCurrent account: ${account}\nAllowance: ${formatUnits(allowanceBeforeMinting, 6)}`)
 
         if (account) {
           await quid.methods.mint(

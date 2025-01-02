@@ -39,7 +39,8 @@ export function Modal({ open = false, handleAgree, handleClose }) {
             ref={descriptionElementRef}
             tabIndex={-1}>
             I submit my consent to the following terms of QU!D LTD, a company
-            incorporated in the BVI. I confirm that I am at least 18 years of
+            incorporated in the BVI, and owned by Quid Labs, which (in turn) is
+            owned by QuidMint Foundation. I confirm that I am at least 18 years of
             age, or the age of majority in the jurisdiction where I reside, if
             greater than 18 years of age. I confirm that I am not a citizen of
             the United States or lawful permanent resident of the United States.

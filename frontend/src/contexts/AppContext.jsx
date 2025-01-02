@@ -215,6 +215,7 @@ export const AppContextProvider = ({ children }) => {
         const balance = await usde.methods.balanceOf(account).call()
         const formatUsdeBalance = (parseFloat(balance) / 1e6).toFixed(2)
         // const formatUsdeBalance = (parseFloat(balance) / 1e18).toFixed(2)
+        // TODO
 
         setUsdeBalance(formatUsdeBalance)
 

@@ -548,9 +548,10 @@ contract MO is ReentrancyGuard {
         amount / 3); // cap loss
         amount -= absorb; 
         amount = qd_amt_to_dollar_amt(cap, amount); 
-        // amount -= QUID.morph(msg.sender, amount); 
-        // TODO if no USDC left in Uni should QUID.withdrawUSDC()
+        // amount -= QUID.morph(msg.sender, amount); // only L1 and Base (for now)
+        
         if (amount > 0) { (, uint price,) = _fetch(msg.sender);
+        // TODO if no USDC left in Uni should QUID.withdrawUSDC()
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) { // TODO verify order of ticks for getLiquidity
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
