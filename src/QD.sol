@@ -146,13 +146,14 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += FullMath.mulDiv(_getPrice(SUSDE),
                      perVault[SUSDE].debit, WAD);
             total += perVault[USDE].debit;
+            total += perVault[FRAX].debit;
             /* total += FullMath.mulDiv(_getPrice(SUSDS),
                      perVault[SUSDS].debit, WAD); */
             // total += perVault[USDS].debit;
             total += perVault[DAI].debit;
+            total += perVault[CRVUSD].debit;
             total += FullMath.mulDiv(_getPrice(SCRVUSD),
                      perVault[SCRVUSD].debit, WAD);
-                   total += perVault[CRVUSD].debit;
         } /* TODO uncomment for Ethereum L1 mainnet
         else { // includes collateral deployed in ID,
             // as Pod.credit, initially only for SUSDE,

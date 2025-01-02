@@ -1,7 +1,9 @@
 // Sepolia
 export const addressMO = '0x6bCEd029B9c4aA48DdB38335739F91cc077CFB15'
 export const addressQD = '0x5B7f7AB660e89029A37Fa057bb06c0cD4fa86bE0';
-export const addressUSDE = '0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34';
+
+// this is actually USDC, just for testing, just for now
+export const addressUSDE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 export const addressSUSDE = '0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2';
 
 export const MO = [
