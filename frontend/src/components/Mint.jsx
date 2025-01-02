@@ -282,10 +282,11 @@ export const Mint = () => {
         setIsProcessing(true)
         setNotifications("info", "Processing. Please don't close or refresh page when terminal is working")
         setInputValue("")
-
+        
         const amt = await qdAmountTousdeAmt(qdAmount, DELAY)
-        const usdeAmount = formatUnits(amt, 6)
+        const usdeAmount = Number(parseFloat(amt) / 1e12) // TODO
         const usdeString = usdeAmount ? usdeAmount.toString() : 0
+        const formatted = usdeAmount.toString()
 
         const allowanceBigNumber = await usde.methods.allowance(account, addressQD).call()
         const allowanceBigNumberBN = allowanceBigNumber ? allowanceBigNumber.toString() : 0
@@ -296,7 +297,7 @@ export const Mint = () => {
 
         setNotifications("info", "Please, approve minting in your wallet.")
 
-        if (account) await usde.methods.approve(addressQD.toString(), usdeAmount.toString()).send({ from: account })
+        if (account) await usde.methods.approve(addressQD.toString(), formatted).send({ from: account })
 
         // TODO
         // setNotifications("info", `Start minting:\nCurrent allowance: ${formatUnits(allowanceBigNumberBN, 18)}\nNote amount: ${formatUnits(usdeString, 18)}`)

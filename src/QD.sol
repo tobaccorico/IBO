@@ -146,7 +146,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += FullMath.mulDiv(_getPrice(SUSDE),
                      perVault[SUSDE].debit, WAD);
             total += perVault[USDE].debit;
-            total += perVault[FRAX].debit;
+            total += perVault[FRAX].debit; // Aribtrum only
             /* total += FullMath.mulDiv(_getPrice(SUSDS),
                      perVault[SUSDS].debit, WAD); */
             // total += perVault[USDS].debit;
@@ -224,9 +224,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
     function qd_amt_to_dollar_amt(uint qd_amt) public
         view returns (uint amount) { uint in_days = (
             (block.timestamp - START) / 1 days
-        );  amount = (in_days * PENNY
-            + START_PRICE) * qd_amt / WAD;
-    } // the current ^^^^ to mint()
+        );  amount = FullMath.mulDiv((in_days * 
+            PENNY + START_PRICE), qd_amt, WAD);
+    } // get the current ^^^^ to mint() QD...
     function get_total_supply_cap()
         public view returns (uint) {
         uint batch = currentBatch();
@@ -419,7 +419,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             require(msg.sender == Moulinette, "authorisation");
         }   else if (block.timestamp <= START + DAYS && batch < 24) {
                 uint in_days = ((block.timestamp - START) / 1 days);
-                require(amount > WAD * 10 && 
+                require(amount >= WAD * 10 && 
                        (in_days + 1) * MAX_PER_DAY > 
                 Piscine[batch][42].credit + amount, "cap"); 
                 uint price = in_days * PENNY + START_PRICE;
