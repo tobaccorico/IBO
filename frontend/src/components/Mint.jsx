@@ -272,8 +272,7 @@ export const Mint = () => {
 
     try {
       if (button === "MINT") {
-        if (inputValue < 50) return setNotifications("error", "The amount should be more than 50")
-
+    
         if (inputValue > totalSupplyCap) return setNotifications("error", "The amount should be less than the maximum mintable QD")
 
         if (inputValue > (await usdebalance())) return setNotifications("error", "Cost shouldn't be more than your usde balance")

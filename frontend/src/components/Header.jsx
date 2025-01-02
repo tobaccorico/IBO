@@ -10,7 +10,7 @@ import { SepoliaChecker } from "./SepoliaChecker"
 
 export const Header = () => {
   const {
-    connectToMetaMask, getTotalInfo, /* getUsde, */ getWalletBalance, getUserInfo,
+    connectToMetaMask, getTotalInfo, getUsde, getWalletBalance, getUserInfo,
     account, connected, notifications
   } = useAppContext()
 
@@ -47,12 +47,12 @@ export const Header = () => {
 
   const usdeToWallet = useCallback(async () => {
     try {
-      if (connected) await Promise.all([/*getUsde()*/updatedTotalInfo()])//.then(() => updatedTotalInfo())
+      if (connected) await Promise.all([getUsde()]).then(() => updatedTotalInfo())
     } catch (error) {
       console.warn(`Failed to getting usde on wallet:`, error)
     }
-  }, [/* getUsde, */ updatedTotalInfo, connected])
-  // TODO
+  }, [ getUsde, updatedTotalInfo, connected])
+
 
   useEffect(() => {
     if (connected) {
