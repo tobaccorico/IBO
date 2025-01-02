@@ -22,6 +22,7 @@ export const Header = () => {
   const handleConnectClick = useCallback(async () => {
     try {
       await connectToMetaMask()
+      // await usdeToWallet()
     } catch (error) {
       console.error("Failed to connect to MetaMask", error)
     }
@@ -96,11 +97,7 @@ export const Header = () => {
       </div>
     </>
   )
-  /*
-  <button className="header-wallet" onClick={() => usdeToWallet()}>
-      Mint USDe
-  </button>
-  */
+  
   return (
     <header className="header-root">
       <div className="header-logoContainer fade-in">

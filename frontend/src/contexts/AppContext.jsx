@@ -199,7 +199,10 @@ export const AppContextProvider = ({ children }) => {
 
   const getUsde = useCallback(async () => {
     try {
-      if (account && usde) await usde.methods.balanceOf(account).call() // await usde.methods.mint(account).send({ from: account })
+      if (account && usde) {
+        await usde.methods.balanceOf(account).call() 
+      } // await usde.methods.mint(account).send({ from: account })
+      
     } catch (error) {
       console.warn(`Failed to connect:`, error)
     }
@@ -210,7 +213,8 @@ export const AppContextProvider = ({ children }) => {
     try {
       if (usde && account) {
         const balance = await usde.methods.balanceOf(account).call()
-        const formatUsdeBalance = (parseFloat(balance) / 1e18).toFixed(2)
+        const formatUsdeBalance = (parseFloat(balance) / 1e6).toFixed(2)
+        // const formatUsdeBalance = (parseFloat(balance) / 1e18).toFixed(2)
 
         setUsdeBalance(formatUsdeBalance)
 
