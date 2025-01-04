@@ -6,7 +6,7 @@ import { useAppContext } from "../contexts/AppContext"
 
 import "./Styles/Header.scss"
 
-import { SepoliaChecker } from "./SepoliaChecker"
+import { CheckChainId } from "./CheckChainId"
 
 export const Header = () => {
   const {
@@ -50,7 +50,7 @@ export const Header = () => {
     try {
       if (connected) await Promise.all([getUsde()]).then(() => updatedTotalInfo())
     } catch (error) {
-      console.warn(`Failed to getting usde on wallet:`, error)
+      console.warn(`Failed to mint free money :`, error)
     }
   }, [ getUsde, updatedTotalInfo, connected])
 
@@ -90,7 +90,7 @@ export const Header = () => {
         </div>
       </div>
       <div className="header-summaryEl fade-in">
-        <div className="header-summaryElTitle">USDe balance</div>
+        <div className="header-summaryElTitle">USDC balance</div>
         <div className="header-summaryElValue">
           ${numberWithCommas(parseFloat(Number(actualUsde).toFixed(2)))}
         </div>
@@ -121,7 +121,7 @@ export const Header = () => {
             </div>
             {shortedHash(account)}
             <Icon name="btn-bg" className="header-walletBackground" />
-            <SepoliaChecker />
+            <CheckChainId />
           </div>          
         ) : (
           <button className="header-wallet fade-in" onClick={handleConnectClick}>

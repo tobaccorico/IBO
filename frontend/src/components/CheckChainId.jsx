@@ -2,7 +2,7 @@ import { useEffect, useCallback, useRef } from 'react'
 import { useAppContext } from "../contexts/AppContext"
 
 // actually BaseChecker LOL
-export const SepoliaChecker = () => {
+export const CheckChainId = () => {
   const { setStorage } = useAppContext()
   const hasCheckedRef = useRef(false)  
 
@@ -80,4 +80,4 @@ export const SepoliaChecker = () => {
   return null
 }
 
-export default SepoliaChecker
+export default CheckChainId

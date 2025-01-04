@@ -206,32 +206,34 @@ export const Mint = () => {
   }, [setStorage])
 
   const updateTotalSupply = useCallback(async () => {
-    try {
-      await Promise.all([getTotalSupply(), getDepositInfo(addressMO), getWalletBalance()])
-        .then(async (value) => {
-          const carryDebit = await getUserInfo(addressMO).then(userInfo => {return userInfo.actualUsd})
+    if (account) {
+      try {
+        await Promise.all([getTotalSupply(), getDepositInfo(addressMO), getWalletBalance()])
+          .then(async (value) => {
+            const carryDebit = await getUserInfo(addressMO).then(userInfo => {return userInfo.actualUsd})
 
-          const wethEthBalance = value[1].weth_usd_balance
-          const price = value[1].ethPrice
+            const wethEthBalance = value[1].weth_usd_balance
+            const price = value[1].ethPrice
 
-          var insurableValue = 0
-          if (wethEthBalance > 0) {
-            if (chooseButton.current === "DEPOSIT") {
-              insurableValue = (wethEthBalance * price) - carryDebit   
+            var insurableValue = 0
+            if (wethEthBalance > 0) {
+              if (chooseButton.current === "DEPOSIT") {
+                insurableValue = (wethEthBalance * price) - carryDebit   
+              }
             }
-          }
-          else if (chooseButton.current === "DEPOSIT") {
-            insurableValue = carryDebit
-          }
-          setTotalSupplyCap(value[0])
+            else if (chooseButton.current === "DEPOSIT") {
+              insurableValue = carryDebit
+            }
+            setTotalSupplyCap(value[0])
 
-          setInsurable(insurableValue > 0 ? insurableValue : 0)
+            setInsurable(insurableValue > 0 ? insurableValue : 0)
 
-          setWalletEthBalance(value[2].eth)
-          setWalletUSDeBalances(value[2].usde)
-        })
-    } catch (error) {
-      console.error(error)
+            setWalletEthBalance(value[2].eth)
+            setWalletUSDeBalances(value[2].usde) 
+          })
+      } catch (error) {
+        console.error(error)
+      }
     }
   }, [getDepositInfo, getTotalSupply, getWalletBalance, getUserInfo, addressMO, chooseButton])
 
@@ -276,7 +278,7 @@ export const Mint = () => {
     
         if (inputValue > totalSupplyCap) return setNotifications("error", "The amount should be less than the maximum mintable QD")
 
-        if (inputValue > (await usdebalance())) return setNotifications("error", "Cost shouldn't be more than your usde balance")
+        if (inputValue > (await usdebalance())) return setNotifications("error", "Cost shouldn't be more than your USDC balance")
 
         const qdAmount = parseUnits(inputValue, 18)
         setIsProcessing(true)
@@ -327,7 +329,7 @@ export const Mint = () => {
       if (button === "DEPOSIT") {
         const workUsdBalance = await getDepositInfo().then(depositInfo => {return depositInfo.work_usd_balance})
         
-        if (!chooseCurrency && inputValue > workUsdBalance) return setNotifications("error", "Cost shouldn't be more than your owed USDe balance. Use The QD's withdrow for top up your account.")
+        if (!chooseCurrency && inputValue > workUsdBalance) return setNotifications("error", "Cost shouldn't be more than your owed USDC balance. Use The QD's withdrow for top up your account.")
         if (chooseCurrency && balanceStatus) return setNotifications("error", "Cost shouldn't be more than your Etherum balance")
         if (chooseCurrency && insureStatus && inputValue*parseEthPrice > insurable) return setNotifications("error", "The amount shouldn't be more than insurable")
 
@@ -358,7 +360,7 @@ export const Mint = () => {
       }
 
       if (button === "WITHDRAW") {
-        if (!chooseCurrency && inputValue > (await usdebalance())) return setNotifications("error", "Cost shouldn't be more than your usde balance")
+        if (!chooseCurrency && inputValue > (await usdebalance())) return setNotifications("error", "Cost shouldn't be more than your USDC balance")
 
         if (!chooseCurrency && inputValue > depInfo.work_eth_balance + depInfo.weth_usd_balance) return setNotifications("error", "The amount shouldn't be more than deposited")
 

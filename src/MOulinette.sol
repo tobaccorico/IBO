@@ -10,11 +10,11 @@ import {ReentrancyGuard} from "lib/solmate/src/utils/ReentrancyGuard.sol";
 
 import {TickMath} from "./imports/math/TickMath.sol";
 import {FullMath} from "./imports/math/FullMath.sol";
-import {ISwapRouter} from "./imports/ISwapRouter.sol"; // on L1 and Arbitrum
+// import {ISwapRouter} from "./imports/ISwapRouter.sol"; // on L1 and Arbitrum
 import {IUniswapV3Pool} from "./imports/IUniswapV3Pool.sol";
 import {LiquidityAmounts} from "./imports/math/LiquidityAmounts.sol";
 import {INonfungiblePositionManager} from "./imports/INonfungiblePositionManager.sol";
-// import {IV3SwapRouter as ISwapRouter} from "./imports/IV3SwapRouter.sol"; // TODO base
+import {IV3SwapRouter as ISwapRouter} from "./imports/IV3SwapRouter.sol"; // base
 // import "lib/forge-std/src/console.sol"; // TODO 
 
 contract MO is ReentrancyGuard {
@@ -434,7 +434,7 @@ contract MO is ReentrancyGuard {
             (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
                                     current, lower, upper, liquidity);
         } usdc *= 1e12; // must also divide at the end for precision
-        /* address vault = QUID.VAULT();
+        address vault = QUID.VAULT();
         if (scaled > usdc) { scaled -= usdc;
             ERC4626(vault).deposit(
                 scaled / 1e12, 
@@ -443,7 +443,7 @@ contract MO is ReentrancyGuard {
         } else { 
             scaled += ERC4626(vault).convertToAssets(
                 QUID.withdrawUSDC(usdc - scaled)) * 1e12;
-        } */ // TODO deploy Morpho vault on Aribtrum
+        } 
         // x / y = k...
         if (usdc > scaled) {
             uint k = FullMath.mulDiv(eth, WAD, usdc); 
@@ -467,7 +467,7 @@ contract MO is ReentrancyGuard {
             scaled += ROUTER.exactInput(
                 ISwapRouter.ExactInputParams(abi.encodePacked(
                     address(WETH9), POOL_FEE, USDC), address(this),
-                    block.timestamp, selling, 0)) * 1e12; 
+                    /* block.timestamp, */ selling, 0)) * 1e12; 
                   eth -= selling; 
         } return (eth, scaled / 1e12);
     }
@@ -547,11 +547,10 @@ contract MO is ReentrancyGuard {
         absorb = FullMath.min(absorb, 
         amount / 3); // cap loss
         amount -= absorb; 
-        amount = qd_amt_to_dollar_amt(cap, amount); 
-        // amount -= QUID.morph(msg.sender, amount); // only L1 and Base (for now)
+        // amount = qd_amt_to_dollar_amt(cap, amount); 
+        amount -= QUID.morph(msg.sender, amount); // only L1 and Base (for now)
         
         if (amount > 0) { (, uint price,) = _fetch(msg.sender);
-        // TODO if no USDC left in Uni should QUID.withdrawUSDC()
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) { // TODO verify order of ticks for getLiquidity
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
@@ -559,7 +558,7 @@ contract MO is ReentrancyGuard {
                             TickMath.getSqrtPriceAtTick(UPPER_TICK), 
                             amount / 1e12); // scale down precision
                 (amount0, amount1) = _withdrawAndCollect(liquidity);
-                amount = amount0;
+                delta = amount / 1e12 - amount0; amount = amount0;
                 (amount1, amount0) = _swap(amount1, 0, price);
             } else { 
                 liquidity = LiquidityAmounts.getLiquidityForAmount1(
@@ -567,11 +566,12 @@ contract MO is ReentrancyGuard {
                             TickMath.getSqrtPriceAtTick(LAST_TICK),
                             amount / 1e12); // scale down precision
                 (amount0, amount1) = _withdrawAndCollect(liquidity);
-                amount = amount1;
+                delta = amount / 1e12 - amount1 ; amount = amount1;
                 (amount0, amount1) = _swap(amount0, 0, price);
             } 
+            if (delta > 0) { delta = QUID.withdrawUSDC(delta * 1e12); }
+            ERC20(USDC).transfer(msg.sender, amount + delta);
             _repackNFT(amount0, amount1, price);
-            ERC20(USDC).transfer(msg.sender, amount);
         } // "I said see you at the top, and they misunderstood me:
         // I hold no resentment in my heart, that's that maturity;
     } // and we don't keep it on us anymore," ain't no securities
@@ -644,12 +644,12 @@ contract MO is ReentrancyGuard {
             if (!token1isWETH) { // increase amount0 (eth) by amount1 sold
                 amount0 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(address(token1), POOL_FEE, address(token0)),
-                    address(this), block.timestamp, amount1, 0));
+                    address(this), /* block.timestamp, */ amount1, 0));
                     transfer = FullMath.min(transfer, amount0);
             } else { // increase amount1 by selling amount0 (usdc) for eth
                 amount1 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(address(token0), POOL_FEE, address(token1)),
-                    address(this), block.timestamp, amount0, 0)); 
+                    address(this), /* block.timestamp, */ amount0, 0)); 
                     transfer = FullMath.min(transfer, amount1);
             }   WETH9.withdraw(transfer);
             (bool success, ) = msg.sender.call{ 
@@ -657,7 +657,6 @@ contract MO is ReentrancyGuard {
                 require(success, "$");
         }   pledges[msg.sender] = pledge; 
     }
-
 
     // the halo of a street-lamp, I turn my straddle to
     // the cold and damp...know when to hold 'em...know
