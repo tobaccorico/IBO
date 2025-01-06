@@ -210,7 +210,11 @@ export const AppContextProvider = ({ children }) => {
 
 
   const getWalletBalance = useCallback(async () => {
-    try {
+    try { 
+      // for loop
+        // const tokens = []
+        // from constant js
+        // if user has balance 
       if (usde && account) {
         const balance = await usde.methods.balanceOf(account).call()
         const formatUsdeBalance = (parseFloat(balance) / 1e6).toFixed(2)

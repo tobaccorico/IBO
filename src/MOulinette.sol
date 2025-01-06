@@ -42,11 +42,9 @@ contract MO is ReentrancyGuard {
         uint deductible; uint cap; uint minting;
         bool liquidate; uint repay; uint collat;
     } Quid QUID; // tethered to the MO contract
-    event Mint(address indexed who, 
-            uint paid, uint amount); 
-            // paid = 0 for CDP mint
-    event Fold(address indexed who, 
-                        uint amount);
+    // TODO an internal exchange function since
+    // there will be multiple ERC20 linked to 
+    // each MO, all will be themed accordingly
     function get_info(address who) view
         external returns (uint, uint) {
         Offer memory pledge = pledges[who];
@@ -153,7 +151,8 @@ contract MO is ReentrancyGuard {
         token1.approve(_nfpm,
             type(uint256).max);
         token1isWETH = address(token0) == USDC;
-        // needed as order is swapped on L2
+        // needed as order is swapped on Base,
+        // and Arbitrum; but not on USDT<>BNB
     } 
 
     // present value of the expected cash flows
@@ -165,23 +164,22 @@ contract MO is ReentrancyGuard {
         // collateral may be sold or claimed in fold
         uint collateral = FullMath.mulDiv(price,
             pledge.work.credit, WAD // in $ for
-        ); // pledged as collateral to borrow;
-        // collected in deposit and fold...
+        ); // ETH pledged as to borrow QD;
+        // collected in deposit and fold
         uint deductibles = FullMath.mulDiv(
             price, pledge.weth.debit, WAD // $
         ); // weth.debit is ETH owned by contract
         // which also includes LP fees collected;
         // total composition of solvency capital:
         uint assets = collateral + deductibles +
-        pledge.work.debit; // LP fees in usdc
-        uint eth; uint usdc; 
+        pledge.work.debit; uint eth; uint usdc; 
         if (token1isWETH) {
             (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
                 TickMath.getSqrtPriceAtTick(LOWER_TICK),
                 TickMath.getSqrtPriceAtTick(UPPER_TICK),
                 liquidityUnderManagement);
-        } else {
+        } else { // business float: working capital 
             (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
                 TickMath.getSqrtPriceAtTick(LOWER_TICK),
@@ -191,11 +189,14 @@ contract MO is ReentrancyGuard {
         require(FullMath.mulDiv(eth, price, 
             WAD) + usdc * 1e12 >= assets + 
             FullMath.mulDiv(pledge.weth.credit, 
-                 price, WAD)); // insured ETH
+                 price, WAD)); // hedged ETH...
         assets += QUID.get_total_deposits(true);
-        uint total = QUID.totalSupply();
-        if (qd > 0) { total = (burn) ?
-            total - qd : total + qd;
+        // total only includes QD minted for a 
+        // discount in exchange for term deposit
+        uint total = QUID.totalSupply() - // supply outside of QD.mint()
+        pledge[address(this)].carry.credit; // aggregate cost of carry 
+        // ^ paid off pro rata in redeem(), priced into currency float
+        if (qd > 0) { total = (burn) ? total - qd : total + qd;
         }   if (assets >= total) 
             { return (0, 100); }
             else { return ((total - assets),
@@ -233,9 +234,6 @@ contract MO is ReentrancyGuard {
             pledges[from].carry.debit, WAD);
             pledges[to].carry.debit += debit;
             pledges[from].carry.debit -= debit;
-            // pledges[address(this)].carry.debit
-            // remains constant; handled case-by-
-            // case in helper (pledge.carry.credit)
             _creditHelper(to);
         }   _creditHelper(from);
             return amount;
@@ -349,7 +347,7 @@ contract MO is ReentrancyGuard {
             // vary from moment to moment based on the pool ratio) so
             // our approximation is for informational purposes only
              if (token1isWETH) { (amount1, amount0) = _swap(
-                                 amount1, amount0, price);
+                                  amount1, amount0, price);
                 pledges[address(this)].weth.debit += amount1;
                 pledges[address(this)].work.debit += amount0 * 1e12;
             } else { (amount0, amount1) = _swap(
@@ -475,8 +473,9 @@ contract MO is ReentrancyGuard {
     function mint(address to, uint cost, 
         uint minted) public onlyQuid {
         pledges[to].carry.debit += cost; 
-        _creditHelper(to); // contingent
-        // for ROI as well as redemption
+        pledge[address(this)].carry.credit += 
+        minted - cost; _creditHelper(to); 
+        // / affects ROI, thus redemption
         emit Mint(to, cost, minted);
     }
 
@@ -492,7 +491,7 @@ contract MO is ReentrancyGuard {
             WETH9.deposit{ value: msg.value }();
         }   if (long) { pledge.work.debit += amount;
             pledges[address(this)].work.credit += amount;
-        } // ^ tracks total ETH pledged as collateral to borrow 
+        } // ^ tracks total ETH pledged as collateral to borrow... 
         else { in_dollars = FullMath.mulDiv(price, amount, WAD);
             uint deductible = FullMath.mulDiv(in_dollars, FEE, WAD);
             // change deductible to be in units of ETH instead...
@@ -526,7 +525,7 @@ contract MO is ReentrancyGuard {
             QUID.matureBalanceOf(
                        msg.sender), amount);
         require(amount > 0, "let it steep");
-        // same can be said of tea as for a t-bill...
+        // can be said of tea or a t-bill...
         (uint delta, 
         uint cap) = capitalisation(amount, true);
         uint share = FullMath.mulDiv(WAD, amount,
@@ -534,7 +533,10 @@ contract MO is ReentrancyGuard {
    
         uint absorb = FullMath.mulDiv(WAD, 
             pledges[msg.sender].carry.credit, SUM);
-        absorb = FullMath.mulDiv(delta, absorb, WAD); 
+       
+        absorb = FullMath.mulDiv(absorb,
+            pledge[address(this)].carry.credit, WAD); 
+    
         /* carry.credit = contribution to weighted
          SUM of [(QD / total QD) x (ROI / avg ROI)] */
         // see _creditHelper to see how SUM is handled
@@ -544,17 +546,14 @@ contract MO is ReentrancyGuard {
             absorb = FullMath.mulDiv(absorb, share, WAD);
         } QUID.turn(msg.sender, amount); // creditHelper, 
         // in turn, will handle decrementing carry.credit
-        absorb = FullMath.min(absorb, 
-        amount / 3); // cap loss
+        absorb = FullMath.min(absorb, amount / 3); // cap loss
         amount -= absorb; 
-        // amount = qd_amt_to_dollar_amt(cap, amount); 
-        amount -= QUID.morph(msg.sender, amount); // only L1 and Base (for now)
-        
-        if (amount > 0) { (, uint price,) = _fetch(msg.sender);
+        amount -= QUID.morph(msg.sender, amount); // L1 & Base
+        if (amount > 0) { (, uint price,) = _fetch(msg.sender); 
             uint amount0; uint amount1; uint128 liquidity;
-            if (token1isWETH) { // TODO verify order of ticks for getLiquidity
+            if (token1isWETH) { // TODO verify order of ticks 
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
-                            TickMath.getSqrtPriceAtTick(LAST_TICK), 
+                            TickMath.getSqrtPriceAtTick(LAST_TICK),
                             TickMath.getSqrtPriceAtTick(UPPER_TICK), 
                             amount / 1e12); // scale down precision
                 (amount0, amount1) = _withdrawAndCollect(liquidity);
@@ -566,29 +565,30 @@ contract MO is ReentrancyGuard {
                             TickMath.getSqrtPriceAtTick(LAST_TICK),
                             amount / 1e12); // scale down precision
                 (amount0, amount1) = _withdrawAndCollect(liquidity);
-                delta = amount / 1e12 - amount1 ; amount = amount1;
+                delta = amount / 1e12 - amount1; amount = amount1;
                 (amount0, amount1) = _swap(amount0, 0, price);
-            } 
+            }
             if (delta > 0) { delta = QUID.withdrawUSDC(delta * 1e12); }
             ERC20(USDC).transfer(msg.sender, amount + delta);
+            // amount + delta is the liquid USDC in contract
+            pledge[address(this)].carry.credit -= absorb;
             _repackNFT(amount0, amount1, price);
-        } // "I said see you at the top, and they misunderstood me:
-        // I hold no resentment in my heart, that's that maturity;
-    } // and we don't keep it on us anymore," ain't no securities
+        } 
+    }
 
     // bool quid says if amount is QD
     // ETH can only be withdrawn from
     // pledge.work.debit; if ETH was
     // deposited pledge.weth.debit,
     // call fold() before withdraw()
-    function withdraw(uint amount, bool quid)
-        external nonReentrant payable {
-        uint amount0; uint amount1;
+    function withdraw(uint amount,
+        bool quid) external nonReentrant 
+        payable { uint amount0; uint amount1;
+        require(flashLoanProtect[msg.sender] 
+            != block.number, "non-flashable");
         (Offer memory pledge, uint price, 
         uint160 sqrtPrice) = _fetch(msg.sender);
-        require(flashLoanProtect[msg.sender] != block.number,
-            "we won't let you fold & withdraw in same block");
-        if (quid) { // amount parameter is in units of QD...
+        if (quid) { // amount param in units of QD
             if (msg.value > 0) { 
                 WETH9.deposit{ value: msg.value }();
                 pledges[address(this)].work.credit +=
@@ -604,6 +604,7 @@ contract MO is ReentrancyGuard {
                 (, uint cap) = capitalisation(amount, false);
                 amount = dollar_amt_to_qd_amt(cap, amount);
                 QUID.mint(msg.sender, amount, address(QUID));
+                pledge[address(this)].carry.credit += amount;
             } // ^ we only add to total supply in this function
         } else { uint withdrawable; // of ETH collateral (work.debit)
             if (pledge.work.credit > 0) { // see if we owe debt on it
@@ -628,6 +629,7 @@ contract MO is ReentrancyGuard {
                     pledge.work.debit -= withdrawable;
                     pledges[address(this)].weth.debit += withdrawable; 
                     transfer = FullMath.min(amount, pledge.work.debit);
+                    pledges[address(this)].carry.credit -= pledge.work.credit;
                     pledge.work.debit -= transfer; pledge.work.credit = 0;
                 }
             } require(transfer > 0, "nothing to withdraw");
@@ -658,15 +660,15 @@ contract MO is ReentrancyGuard {
         }   pledges[msg.sender] = pledge; 
     }
 
-    // the halo of a street-lamp, I turn my straddle to
-    // the cold and damp...know when to hold 'em...know
-    // when to..."
+    // underneath the halo of a street-lamp, I turn my straddle to
+    // the cold and damp...know when to hold 'em...know when to...
     function fold(address beneficiary, uint amount, bool sell)
         external payable nonReentrant { FoldState memory state;
         (Offer memory pledge, uint price, ) = _fetch(beneficiary); 
-        // call in collateral that's insured, or liquidate;
+        // call in collateral that's hedged, or liquidate;
         // if there is a covered event, QD may be minted,
         // or simply clear the debt of a long position...
+        // "teardrops on the fire of a confession", how
         // "we can serve our [wick nest] or we can serve
         // our purpose, but not both" ~ Mother Cabrini
         // "menace ou prière, l'un parle bien, l'autre 
@@ -676,10 +678,6 @@ contract MO is ReentrancyGuard {
         amount = FullMath.min(amount, 
               pledge.weth.debit);
         (, state.cap) = capitalisation(0, false); 
-        // the necessity of this feature is from the 
-        // invariant that eventually all work.credit 
-        // must reduce to 0, no matter how good CR
-        // even if a depositor never comes back to 
         // gzip у джинсы, зупинившись
         if (pledge.work.credit > 0) {
             state.collat = FullMath.mulDiv(
@@ -689,7 +687,12 @@ contract MO is ReentrancyGuard {
                 state.repay = pledge.work.credit - state.collat;
                 state.repay += state.collat / 10; // you'll get
                 state.liquidate = true; // dropped (reversible)
-            } else { // repay is $ needed to reach healthy CR...
+            } else { // repay is $ needed to reach healthy CR
+                // the necessity of this feature is from the 
+                // invariant that eventually all work.credit 
+                // must reduce to 0, no matter how good CR
+                // even if a depositor never comes back to 
+                pledge.work.credit += 
                 state.delta = state.collat - pledge.work.credit;
                 if (state.collat / 10 > state.delta) { // must get
                 // back to minimum CR of 1.1 (safety invariant)...
@@ -741,15 +744,12 @@ contract MO is ReentrancyGuard {
                 // if not, can't mint delta if under-capitalised...
                     state.minting = dollar_amt_to_qd_amt(
                                 state.cap, state.minting);
-                    QUID.mint(beneficiary, 
-                    state.minting, address(QUID));
-                    emit Fold(
-                        beneficiary, state.minting
-                    );
+                    QUID.mint(beneficiary, state.minting, address(QUID));
+                    pledge[address(this)].carry.credit += state.minting;
                 }   else { state.deductible = 0; } 
             }   
             pledges[address(this)].weth.credit -= amount;
-            // amount is no longer insured by the protocol
+            // amount is no longer hedged by the protocol
             pledge.weth.debit -= amount; // deduct amount
             pledge.weth.credit -= FullMath.min(
                 pledge.weth.credit, state.collat);
@@ -794,18 +794,20 @@ contract MO is ReentrancyGuard {
                     // "It's like inch by inch, and step by
                     // step, I'm closin' in on your position"
                     pledge.last.debit = amount; // in $...
-                    pledge.work.credit -= amount;
-                    pledge.last.credit = block.timestamp;
+                    pledge.work.credit -= amount; // reduction of debt
+                    pledge.last.credit = block.timestamp; // snapshot sale
                 } else { // truncate to prevent infinite reduction cycles
                     pledges[address(this)].work.credit -= pledge.work.debit;
                     pledges[address(this)].weth.debit += pledge.work.debit;
                     pledge.work.credit = 0; pledge.work.debit = 0; // reset
                     pledge.last.credit = 0; pledge.last.debit = 0; // storage
                 } // "thinkin' about them licks I hit, I had to..." ~ future
-            }
+            } // app-specific sequence hitter
         } else if (pledge.last.credit != 0) {
+
             // whenever there's a gap between 
             // liquidations, we reset metrics 
+            // pro rata to the gap duration
             pledge.last.credit = 0;
             pledge.last.debit = 0;
         }   pledges[beneficiary] = pledge;

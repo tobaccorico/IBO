@@ -54,7 +54,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     // index 0 is the largest possible vote = 9%
     // index 89 represents the smallest one = 1%
     uint public deployed; uint internal K = 17;
-    uint public SUM; uint[90] public WEIGHTS;
+    uint public SUM; uint[33] public WEIGHTS;
     mapping (address => uint) public feeVotes;
     address[][24] public voters; // by batch
     mapping (address => bool) public winners;
@@ -86,7 +86,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     // the answer, my fren, is blowin' in the
     constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
-        address _usde, address _susde,
+        address _usde, address _susde, 
         /* address _frax, address _sfrax,
         address _sdai, */ address _dai,
         address _usds, address _susds,
@@ -108,8 +108,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         vaults[USDS] = SUSDS; 
         vaults[CRVUSD] = SCRVUSD;
         Moulinette = payable(_mo);
-        ERC20(USDC).approve(VAULT, type(uint).max); 
-        // TODO uncomment when vault is deployed on ARB
+        ERC20(USDC).approve(VAULT, type(uint).max);
         if (address(MO(Moulinette).token0()) == USDC) {
             require(address(MO(Moulinette).token1())
             == address(MO(Moulinette).WETH9()), "42");
@@ -129,7 +128,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1);
             CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
             // 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
-            // 0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
+            // 0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arb
         }
     } uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3 years
@@ -146,17 +145,18 @@ contract Quid is ERC20, // OFTOwnable2Step,
         total += usdc ? ERC4626(VAULT).maxWithdraw(
                           address(this)) * 1e12 : 0;
         if (!MO(Moulinette).token1isWETH()) { // L2
-            total += FullMath.mulDiv(_getPrice(SUSDE),
-                     perVault[SUSDE].debit, WAD);
+            // total += perVault[FRAX].debit; // ARB only
             total += perVault[USDE].debit;
-            // total += perVault[FRAX].debit; // Aribtrum only
+            total += FullMath.mulDiv(_getPrice(SUSDE),
+                        perVault[SUSDE].debit, WAD);
+            
             total += FullMath.mulDiv(_getPrice(SUSDS),
-                     perVault[SUSDS].debit, WAD);
+                        perVault[SUSDS].debit, WAD);
             total += perVault[USDS].debit;
             total += perVault[DAI].debit;
             total += perVault[CRVUSD].debit;
             total += FullMath.mulDiv(_getPrice(SCRVUSD),
-                     perVault[SCRVUSD].debit, WAD);
+                        perVault[SCRVUSD].debit, WAD);
         } /* TODO uncomment for Ethereum L1 mainnet
         else { // includes collateral deployed in ID,
             // as Pod.credit, initially only for SUSDE,
@@ -179,7 +179,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         } // commented out for compilation purposes (less bytecode)
     */
     }
-    function _minAmount(address from,
+    function _deposit(address from,
         address token, uint amount)
         internal returns (uint usd) {
         bool l2 = !MO(Moulinette).token1isWETH();
@@ -249,15 +249,15 @@ contract Quid is ERC20, // OFTOwnable2Step,
             uint keep = GRIEVANCES;
             this.morph(QUID, keep);
             _batchUp(currentBatch(), 
-                QUID, BACKEND / 4);
-        } // 4M QD over 24 bacthes
+                QUID, BACKEND);
+        } // 16M QD over 24 
     } 
     function _batchUp(uint batch, 
         address to, uint cut) internal {
         batch = FullMath.min(1, batch);
-        require(batch < 25, "!"); 
-        _mint(to, cut); 
-        START = block.timestamp;
+        require(batch < 25, "!"); // 25 to
+        _mint(to, cut);  // lifetime value
+        START = block.timestamp; // less on L1
         consideration[to][batch] += cut;
         Pod memory day = Piscine[batch - 1][42];
         // ROI aggregates all batches' days...
@@ -269,11 +269,13 @@ contract Quid is ERC20, // OFTOwnable2Step,
     } function currentBatch() public view returns 
         (uint batch) { batch = (block.timestamp - 
                         deployed) / DAYS;
-    }
-    function matureBatches()
-        public view returns (uint) {
-        uint batch = currentBatch();
-        if (batch < 8) { return 0; }
+    } // uint less discount sooner maturing
+    function matureBatches() // 0 is 1yr...
+        public view returns (uint) { // in 3
+        uint batch = currentBatch(); // 1-33
+        if (batch < 8) { return 0; } // TODO
+        // 50 cents sets the scene 
+        // о суете это сын or sin
         else if (batch < 33) {
             return batch - 8;
         } else { return 24; }
@@ -358,8 +360,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
 
     function vote(uint new_vote) external {
         uint batch = currentBatch(); // 0-24
-        if (batch < 24
-        && !hasVoted[msg.sender][batch]) {
+        if (batch < 24 && !hasVoted[msg.sender][batch]) {
             (uint carry,) = MO(Moulinette).get_info(msg.sender);
             if (carry > GRIEVANCES / 10) { 
                 hasVoted[msg.sender][batch] = true;
@@ -420,22 +421,23 @@ contract Quid is ERC20, // OFTOwnable2Step,
         require(price >= WAD, "price");
     } // function used only on Base...
     
-    function mint(address pledge, uint amount, address token)
-        public nonReentrant { uint batch = currentBatch(); // 0 - 24
-        if (token == address(this)) { _mint(pledge, amount); // QD
+    function mint(address pledge, uint amount, 
+        address token, uint when) public 
+        nonReentrant { uint batch;
+        if (token == address(this)) { 
+            batch = currentBatch(0); _mint(pledge, amount); // QD
             consideration[pledge][batch] += amount; // redeem...^
             require(msg.sender == Moulinette, "authorisation");
-        }   else if (block.timestamp <= START + DAYS && batch < 24) {
+        }   else if (block.timestamp <= START + DAYS 
+            && batch < 24) { batch = currentBatch(when); // 0 - 24
                 uint in_days = ((block.timestamp - START) / 1 days);
-                require(amount >= WAD * 10 && 
-                       (in_days + 1) * MAX_PER_DAY >= 
-                Piscine[batch][42].credit + amount, "cap"); 
-                uint price = in_days * PENNY + START_PRICE;
-                uint cost = _minAmount(pledge, token,
-                    FullMath.mulDiv(price, amount, WAD));
-                // _minAmount may return less being paid,
-                // so we calculate amount a second time:
-                amount = FullMath.mulDiv(WAD, cost, price);
+                require(amount >= WAD * 10 && (in_days + 1) 
+                    * MAX_PER_DAY >= Piscine[batch][42].credit 
+                    + amount, "cap"); uint price = in_days * 
+                                        PENNY + START_PRICE;
+                uint cost = FullMath.mulDiv( // to mint QD
+                        price, amount, WAD); _deposit(
+                                pledge, token, cost);
                 consideration[pledge][batch] += amount;
                 _mint(pledge, amount); // totalSupply++
                 MO(Moulinette).mint(pledge, cost, amount);
