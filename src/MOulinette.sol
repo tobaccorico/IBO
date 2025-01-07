@@ -95,8 +95,12 @@ contract MO is ReentrancyGuard {
     }
     receive() external payable {}
     function setFee(uint index)
-        public onlyQuid { FEE =
-        WAD / (index + 11); }
+        public onlyQuid { 
+        require(index > 3 
+             && index < 33, 
+             "out of bounds");
+        FEE = WAD * (36 - index) / 400;
+    }
         
     function setMetrics(uint avg_roi) 
         public onlyQuid { AVG_ROI = avg_roi;
@@ -602,7 +606,7 @@ contract MO is ReentrancyGuard {
                 (, uint cap) = capitalisation(amount, false);
                 amount = dollar_amt_to_qd_amt(cap, amount);
                 QUID.mint(msg.sender, amount, address(QUID));
-                pledge[address(this)].carry.credit += amount;
+                pledges[address(this)].carry.credit += amount;
             } // ^ we only add to total supply in this function
         } else { uint withdrawable; // of ETH collateral (work.debit)
             if (pledge.work.credit > 0) { // see if we owe debt on it
@@ -743,7 +747,7 @@ contract MO is ReentrancyGuard {
                     state.minting = dollar_amt_to_qd_amt(
                                 state.cap, state.minting);
                     QUID.mint(beneficiary, state.minting, address(QUID));
-                    pledge[address(this)].carry.credit += state.minting;
+                    pledges[address(this)].carry.credit += state.minting;
                 }   else { state.deductible = 0; } 
             }   
             pledges[address(this)].weth.credit -= amount;

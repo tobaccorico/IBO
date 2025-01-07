@@ -53,7 +53,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     // for voted % (weights are the balances)...
     // index 0 is the largest possible vote = 9%
     // index 89 represents the smallest one = 1%
-    uint public deployed; uint internal K = 17;
+    uint public deployed; uint internal K = 28;
     uint public SUM; uint[33] public WEIGHTS;
     mapping (address => uint) public feeVotes;
     address[][24] public voters; // by batch
@@ -367,10 +367,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
                 voters[batch].push(msg.sender); 
             }
         } uint old_vote = feeVotes[msg.sender];
-        old_vote = old_vote == 0 ? 17 : old_vote;
+        old_vote = old_vote == 0 ? 28 : old_vote;
         require(new_vote != old_vote &&
-                new_vote <= 89, "bad vote");
-        // +11 max vote = 9.0% deductible...
+                new_vote < 33, "bad vote");
         uint stake = this.balanceOf(msg.sender);
         feeVotes[msg.sender] = new_vote;
         _calculateMedian(stake, old_vote,
@@ -386,7 +385,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     function _calculateMedian( // for fee
         uint old_stake, uint old_vote,
         uint new_stake, uint new_vote) internal {
-        if (old_vote != 17 && old_stake != 0) {
+        if (old_vote != 28 && old_stake != 0) {
             WEIGHTS[old_vote] -= FullMath.min(
                 WEIGHTS[old_vote], old_stake);
             if (old_vote <= K) { SUM -= FullMath.min(
@@ -422,14 +421,14 @@ contract Quid is ERC20, // OFTOwnable2Step,
     } // function used only on Base...
     
     function mint(address pledge, uint amount, 
-        address token, uint when) public 
+        address token /*, uint when */) public 
         nonReentrant { uint batch;
-        if (token == address(this)) { 
-            batch = currentBatch(0); _mint(pledge, amount); // QD
+        if (token == address(this)) {
+            batch = currentBatch(); _mint(pledge, amount); // QD
             consideration[pledge][batch] += amount; // redeem...^
             require(msg.sender == Moulinette, "authorisation");
         }   else if (block.timestamp <= START + DAYS 
-            && batch < 24) { batch = currentBatch(when); // 0 - 24
+            && batch < 24) { batch = currentBatch(/*when*/); // 0 - 24
                 uint in_days = ((block.timestamp - START) / 1 days);
                 require(amount >= WAD * 10 && (in_days + 1) 
                     * MAX_PER_DAY >= Piscine[batch][42].credit 
@@ -600,8 +599,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
             }
         } else { 
             if (amounts[0] > 0) { sent = FullMath.min(amounts[0],
-                ERC20(tokens[0]).balanceOf(address(this)));
-                ERC20(tokens[0]).transfer(to, amounts[0]);
+                    ERC20(tokens[0]).balanceOf(address(this)));
+                    ERC20(tokens[0]).transfer(to, amounts[0]);
             } 
             for (i = 1; i < 4; i++) {
                 inDollars = FullMath.min(amounts[i],
