@@ -250,7 +250,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             this.morph(QUID, keep);
             _batchUp(currentBatch(), 
                 QUID, BACKEND);
-        } // 16M QD over 24 
+        } // 16M QD over 24... 
     } 
     function _batchUp(uint batch, 
         address to, uint cut) internal {
@@ -547,6 +547,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         // TODO bug will repay itself after first borrow,
         // then enter a borrow again, and repay itself again
         // solve this infinite loop
+        // if delta mius what is on credit is zero or if we are approaching a unsafe CR
         if (delta == 0 && borrowed > 0) { // no shortfall,
             // but we owe debt from a previous...^^^^^^^
             // first withdraw borrowed assets from vault

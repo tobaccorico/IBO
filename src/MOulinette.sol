@@ -42,9 +42,7 @@ contract MO is ReentrancyGuard {
         uint deductible; uint cap; uint minting;
         bool liquidate; uint repay; uint collat;
     } Quid QUID; // tethered to the MO contract
-    // TODO an internal exchange function since
-    // there will be multiple ERC20 linked to 
-    // each MO, all will be themed accordingly
+
     function get_info(address who) view
         external returns (uint, uint) {
         Offer memory pledge = pledges[who];
@@ -165,7 +163,7 @@ contract MO is ReentrancyGuard {
         uint collateral = FullMath.mulDiv(price,
             pledge.work.credit, WAD // in $ for
         ); // ETH pledged as to borrow QD;
-        // collected in deposit and fold
+        // collected in deposit and fold...
         uint deductibles = FullMath.mulDiv(
             price, pledge.weth.debit, WAD // $
         ); // weth.debit is ETH owned by contract
@@ -173,13 +171,14 @@ contract MO is ReentrancyGuard {
         // total composition of solvency capital:
         uint assets = collateral + deductibles +
         pledge.work.debit; uint eth; uint usdc; 
+        // business float: working capital (LP)
         if (token1isWETH) {
             (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
                 TickMath.getSqrtPriceAtTick(LOWER_TICK),
                 TickMath.getSqrtPriceAtTick(UPPER_TICK),
                 liquidityUnderManagement);
-        } else { // business float: working capital 
+        } else {
             (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
                 TickMath.getSqrtPriceAtTick(LOWER_TICK),
@@ -194,7 +193,7 @@ contract MO is ReentrancyGuard {
         // total only includes QD minted for a 
         // discount in exchange for term deposit
         uint total = QUID.totalSupply() - // supply outside of QD.mint()
-        pledge[address(this)].carry.credit; // aggregate cost of carry 
+        pledges[address(this)].carry.credit; // aggregate cost of carry 
         // ^ paid off pro rata in redeem(), priced into currency float
         if (qd > 0) { total = (burn) ? total - qd : total + qd;
         }   if (assets >= total) 
@@ -473,10 +472,9 @@ contract MO is ReentrancyGuard {
     function mint(address to, uint cost, 
         uint minted) public onlyQuid {
         pledges[to].carry.debit += cost; 
-        pledge[address(this)].carry.credit += 
+        pledges[address(this)].carry.credit += 
         minted - cost; _creditHelper(to); 
         // / affects ROI, thus redemption
-        emit Mint(to, cost, minted);
     }
 
     // this function will take deposits of ETH only...
@@ -535,7 +533,7 @@ contract MO is ReentrancyGuard {
             pledges[msg.sender].carry.credit, SUM);
        
         absorb = FullMath.mulDiv(absorb,
-            pledge[address(this)].carry.credit, WAD); 
+            pledges[address(this)].carry.credit, WAD); 
     
         /* carry.credit = contribution to weighted
          SUM of [(QD / total QD) x (ROI / avg ROI)] */
@@ -547,7 +545,7 @@ contract MO is ReentrancyGuard {
         } QUID.turn(msg.sender, amount); // creditHelper, 
         // in turn, will handle decrementing carry.credit
         absorb = FullMath.min(absorb, amount / 3); // cap loss
-        amount -= absorb; 
+        amount -= absorb; // this is how liabilities get absorbed
         amount -= QUID.morph(msg.sender, amount); // L1 & Base
         if (amount > 0) { (, uint price,) = _fetch(msg.sender); 
             uint amount0; uint amount1; uint128 liquidity;
@@ -571,7 +569,7 @@ contract MO is ReentrancyGuard {
             if (delta > 0) { delta = QUID.withdrawUSDC(delta * 1e12); }
             ERC20(USDC).transfer(msg.sender, amount + delta);
             // amount + delta is the liquid USDC in contract
-            pledge[address(this)].carry.credit -= absorb;
+            pledges[address(this)].carry.credit -= absorb;
             _repackNFT(amount0, amount1, price);
         } 
     }
