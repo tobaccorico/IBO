@@ -525,13 +525,15 @@ contract Quid is ERC20, // OFTOwnable2Step,
                         IMorpho(MORPHO), params, address(this));  
                         tokens = [DAI, USDS, USDE, CRVUSD, FRAX]; 
         uint collat; // hardcoded to one, but ^^^ can be changed to any
-        if (!l2) { for (i = 0; i < 5; i++) { vault = vaults[tokens[i]];
+        if (!l2) { /* for (i = 0; i < 5; i++) { vault = vaults[tokens[i]];
             amounts[i] = FullMath.min(ERC4626(vault).maxWithdraw(
                       address(this)), ERC4626(vault).convertToAssets(
                                             perVault[vault].debit - 
                                             perVault[vault].credit));
-            } collat = FullMath.min(delta + delta / 9, amounts[2]);
-        } else { amounts[0] = perVault[DAI].debit;
+            } inDollars = FullMath.min(delta + delta / 9, amounts[2]);
+             collat = ERC4626(SUSDE).convertToShares(inDollars); */
+        } // TODO uncomment for L1, commented here to save bytecode
+        else { amounts[0] = perVault[DAI].debit;
             // amounts[5] = perVault[FRAX].debit; // TODO Arbitrum
             for (i = 1; i < 4; i++) { vault = vaults[tokens[i]];
                 amounts[i] = perVault[tokens[i]].debit +
@@ -540,36 +542,50 @@ contract Quid is ERC20, // OFTOwnable2Step,
             }   inDollars = FullMath.mulDiv(_getPrice(SUSDE), 
                                  perVault[SUSDE].debit, WAD);
             collat = FullMath.min(delta + delta / 9, inDollars);
+            collat = FullMath.mulDiv(WAD, collat, _getPrice(SUSDE));
         }   
-        if (collat > 0 && delta > 0 && collat > delta) {
+        if (collat > 0 && delta > 0 && inDollars > delta) {
             IMorpho(MORPHO).supplyCollateral(
             params, collat, address(this), "");
-            delta = FullMath.min(delta, 
-            inDollars - inDollars / 9);
             perVault[SUSDE].credit += collat; 
             perVault[SUSDE].debit -= collat;
-            (borrowed,) = IMorpho(MORPHO).borrow(params, delta, 0,
+            (borrowed,) = IMorpho(MORPHO).borrow(params, collat, 0,
                                     address(this), address(this));
-            perVault[repay].credit += borrowed; 
-            // deposit DAI into SDAI which is 
-            // not perVault[SDAI].debit (that
-            // comes from QUID.mint() only)...
-            ERC4626(repay).deposit( // curated
-            // vault on Base, sDAI on Ethereum
-                borrowed, address(this));
+            perVault[repay].credit += ERC4626(repay).deposit( 
+                                    borrowed, address(this));
         } 
         else if (borrowed > 0 && cap == 100) { 
             delta = delta > perVault[repay].credit ? 
                             perVault[repay].credit : delta;
-            (in_dollars,) = IMorpho(MORPHO).repay(params, 0
+            delta = FullMath.min(borrowed, delta);
+            (sharesWithdrawn,) = IMorpho(MORPHO).repay(params, 
                 ERC4626(repay).withdraw(delta, address(this), 
-                address(this)), address(this), ""); 
-            perVault[repay].credit -= in_dollars;
+                address(this)), 0, address(this), "");
+            perVault[repay].credit -= sharesWithdrawn;
+            inDollars = ERC4626(repay).convertToAssets(
+                                        sharesWithdrawn);
+            if (!l2) { /*
+                // TODO uncomment for L1...
+                collat = FullMath.min(collat, 
+                    FullMath.mulDiv(WAD, inDollars, 
+                    _getPrice(SUSDE)) 
+                ); */
+            }
+            else {
+                collat = FullMath.min(collat, 
+                ERC4626(SUSDE).convertToShares(inDollars));
+            }
             IMorpho(MORPHO).withdrawCollateral(params, 
                 collat, address(this), address(this));
-                perVault[SUSDE].credit -= collateral;
-                perVault[SUSDE].debit += collateral;
+                perVault[SUSDE].credit -= collat;
+                perVault[SUSDE].debit += collat;
         }
+        else if (borrowed == 0 && perVault[SUSDE].credit > 0) {
+            IMorpho(MORPHO).withdrawCollateral(params, 
+            perVault[SUSDE].credit, address(this), address(this));
+            perVault[SUSDE].debit += perVault[SUSDE].credit;
+            perVault[SUSDE].credit = 0;
+        } /*
         if (!l2) { // no USDC here
             for (i = 0; i < 5; i++) { 
                 amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
@@ -585,7 +601,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
                         sharesWithdrawn); sent += amounts[i];
                 } 
             }
-        } else { 
+        } */ // TODO uncomment for L1, commented here to save bytecode
+        else { 
             if (amounts[0] > 0) { sent = FullMath.min(amounts[0],
                     ERC20(tokens[0]).balanceOf(address(this)));
                     ERC20(tokens[0]).transfer(to, amounts[0]);

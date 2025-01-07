@@ -1,6 +1,6 @@
 // Sepolia
-export const addressMO = '0x232be92EDF16e2E6f9cc15F0934F4E96526232cE'
-export const addressQD = '0x264c39681F3B78a6231B3739fD91Cb3A5285286A';
+export const addressMO = '0x14703a0348B976a56AB08fA4C4169A568Eae45FF'
+export const addressQD = '0x842Cbb62425b5f66ef18d2301B7BC35B07e66Ed8';
 
 //
 
