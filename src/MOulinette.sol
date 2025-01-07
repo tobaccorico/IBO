@@ -192,16 +192,16 @@ contract MO is ReentrancyGuard {
         require(FullMath.mulDiv(eth, price, 
             WAD) + usdc * 1e12 >= assets + 
             FullMath.mulDiv(pledge.weth.credit, 
-                 price, WAD)); // hedged ETH...
+                 price, WAD)); // ^ hedged ETH
         assets += QUID.get_total_deposits(true);
         // total only includes QD minted for a 
         // discount in exchange for term deposit
-        uint total = QUID.totalSupply() - // supply outside of QD.mint()
-        pledges[address(this)].carry.credit; // aggregate cost of carry 
-        // ^ paid off pro rata in redeem(), priced into currency float
-        if (qd > 0) { total = (burn) ? total - qd : total + qd;
+        uint total = QUID.totalSupply(); 
+        if (qd > 0) { 
+            total = (burn) ? 
+            total - qd : total + qd;
         }   if (assets >= total) 
-            { return (0, 100); }
+            { return (assets - total, 100); }
             else { return ((total - assets),
             FullMath.mulDiv(100, assets, total));
         } // returns delta from being 100% backed

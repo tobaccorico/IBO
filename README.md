@@ -34,7 +34,7 @@ This is also the reason that
 spreading liquidations over  
 time is possible as such...   
 		
-🇺🇦 [70/30](https://x.com/QuidMint/status/1863365053996552412) is the initial [backing](https://github.com/QuidLabs/IMO/blob/main/src/MOulinette.sol#L154):  
+🇺🇦 [70/30](https://x.com/QuidMint/status/1863365053996552412) is the initial [backing](https://github.com/QuidLabs/IMO/blob/main/src/MOulinette.sol#L161):  
 30% APY *might* be generated  
 in aggregate to reach... 💯%  
 [split](https://x.com/QuidMint/status/1863257152481108154) between swap fees and   

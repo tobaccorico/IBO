@@ -517,9 +517,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint inDollars; address vault; uint i; // for loop
         uint[5] memory amounts; address[5] memory tokens; 
         uint sharesWithdrawn; address repay = l2 ? VAULT : SDAI; 
-        // TODO comment out the Morpho bit for Arbitrum deployment (tmp)
+        
         MarketParams memory params = IMorpho(MORPHO).idToMarketParams(ID);
-        (uint delta,) = MO(Moulinette).capitalisation(0, false);
+        (uint delta, uint cap) = MO(Moulinette).capitalisation(0, false);
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
                         // on L2 this is USDC, on L1 it's DAI...
                         IMorpho(MORPHO), params, address(this));  
@@ -530,8 +530,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
                       address(this)), ERC4626(vault).convertToAssets(
                                             perVault[vault].debit - 
                                             perVault[vault].credit));
-            } inDollars = FullMath.min(delta + delta / 9, amounts[2]);
-              collat = ERC4626(SUSDE).convertToShares(inDollars);
+            } collat = FullMath.min(delta + delta / 9, amounts[2]);
         } else { amounts[0] = perVault[DAI].debit;
             // amounts[5] = perVault[FRAX].debit; // TODO Arbitrum
             for (i = 1; i < 4; i++) { vault = vaults[tokens[i]];
@@ -541,51 +540,40 @@ contract Quid is ERC20, // OFTOwnable2Step,
             }   inDollars = FullMath.mulDiv(_getPrice(SUSDE), 
                                  perVault[SUSDE].debit, WAD);
             collat = FullMath.min(delta + delta / 9, inDollars);
-            collat = FullMath.mulDiv(WAD, collat, _getPrice(SUSDE));
-        }
-        // TODO bug will repay itself after first borrow,
-        // then enter a borrow again, and repay itself again
-        // solve this infinite loop
-        // if delta mius what is on credit is zero or if we are approaching a unsafe CR
-        if (delta == 0 && borrowed > 0) { // no shortfall,
-            // but we owe debt from a previous...^^^^^^^
-            // first withdraw borrowed assets from vault
-            sharesWithdrawn = ERC4626(repay).withdraw(
-                borrowed, address(this), address(this));
-            // DAI or USDC shares in vault were borrowed    
-            perVault[repay].credit -= sharesWithdrawn;
-            IMorpho(MORPHO).repay(params,
-                sharesWithdrawn, 0, // TODO units
-                address(this), ""
-            );
-            // SUSDE shares that were pledged to borrow
-            uint collateral = perVault[SUSDE].credit;
-            IMorpho(MORPHO).withdrawCollateral(params, 
-                collateral, address(this), address(this));
-                perVault[SUSDE].credit -= collateral;
-                perVault[SUSDE].debit += collateral;
-        }
-        else if (collat > 0 && // 
-            delta > 0 && inDollars > delta) {
+        }   
+        if (collat > 0 && delta > 0 && collat > delta) {
             IMorpho(MORPHO).supplyCollateral(
             params, collat, address(this), "");
             delta = FullMath.min(delta, 
             inDollars - inDollars / 9);
             perVault[SUSDE].credit += collat; 
             perVault[SUSDE].debit -= collat;
-            (borrowed, ) = IMorpho(MORPHO).borrow(params, delta, 0,
+            (borrowed,) = IMorpho(MORPHO).borrow(params, delta, 0,
                                     address(this), address(this));
-            perVault[repay].credit += borrowed;
+            perVault[repay].credit += borrowed; 
             // deposit DAI into SDAI which is 
             // not perVault[SDAI].debit (that
-            // comes from mint only)
+            // comes from QUID.mint() only)...
             ERC4626(repay).deposit( // curated
             // vault on Base, sDAI on Ethereum
                 borrowed, address(this));
-        } if (!l2) { // no USDC here
+        } 
+        else if (borrowed > 0 && cap == 100) { 
+            delta = delta > perVault[repay].credit ? 
+                            perVault[repay].credit : delta;
+            (in_dollars,) = IMorpho(MORPHO).repay(params, 0
+                ERC4626(repay).withdraw(delta, address(this), 
+                address(this)), address(this), ""); 
+            perVault[repay].credit -= in_dollars;
+            IMorpho(MORPHO).withdrawCollateral(params, 
+                collat, address(this), address(this));
+                perVault[SUSDE].credit -= collateral;
+                perVault[SUSDE].debit += collateral;
+        }
+        if (!l2) { // no USDC here
             for (i = 0; i < 5; i++) { 
                 amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                          WAD, amounts[i], total), WAD);
+                                        WAD, amounts[i], total), WAD);
                 if (amounts[i] > 0) { 
                     vault = vaults[tokens[i]]; // functionally equivalent to maxWithdraw()
                     sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),
