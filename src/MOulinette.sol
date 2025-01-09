@@ -10,12 +10,12 @@ import {ReentrancyGuard} from "lib/solmate/src/utils/ReentrancyGuard.sol";
 
 import {TickMath} from "./imports/math/TickMath.sol";
 import {FullMath} from "./imports/math/FullMath.sol";
-// import {ISwapRouter} from "./imports/ISwapRouter.sol"; // on L1 and Arbitrum
+import {ISwapRouter} from "./imports/ISwapRouter.sol"; // on L1 and Arbitrum
 import {IUniswapV3Pool} from "./imports/IUniswapV3Pool.sol";
 import {LiquidityAmounts} from "./imports/math/LiquidityAmounts.sol";
 import {INonfungiblePositionManager} from "./imports/INonfungiblePositionManager.sol";
-import {IV3SwapRouter as ISwapRouter} from "./imports/IV3SwapRouter.sol"; // base
-// import "lib/forge-std/src/console.sol"; // TODO 
+// import {IV3SwapRouter as ISwapRouter} from "./imports/IV3SwapRouter.sol"; // base
+import "lib/forge-std/src/console.sol"; // TODO 
 
 contract MO is ReentrancyGuard {
     using SafeTransferLib for ERC20;
@@ -67,6 +67,7 @@ contract MO is ReentrancyGuard {
      SUM of [(QD / total QD) x (ROI / avg ROI)] */
     uint public SUM = 1; uint public AVG_ROI = 1;
     struct Offer { Pod weth; Pod carry; Pod work;
+    // work is force times distance (leverage) ^
     Pod last; } // timestamp of last liquidation,
     // for address(this) it's time since NFPM.burn
     // work is like a checking account (credit can
@@ -95,10 +96,8 @@ contract MO is ReentrancyGuard {
     }
     receive() external payable {}
     function setFee(uint index)
-        public onlyQuid { 
-        require(index > 3 
-             && index < 33, 
-             "out of bounds");
+        public onlyQuid { require(
+            index < 33, "out of bounds");
         FEE = WAD * (36 - index) / 400;
     }
         
@@ -468,7 +467,7 @@ contract MO is ReentrancyGuard {
             scaled += ROUTER.exactInput(
                 ISwapRouter.ExactInputParams(abi.encodePacked(
                     address(WETH9), POOL_FEE, USDC), address(this),
-                    /* block.timestamp, */ selling, 0)) * 1e12; 
+                    block.timestamp, selling, 0)) * 1e12; 
                   eth -= selling; 
         } return (eth, scaled / 1e12);
     }
@@ -478,7 +477,7 @@ contract MO is ReentrancyGuard {
         pledges[to].carry.debit += cost; 
         pledges[address(this)].carry.credit += 
         minted - cost; _creditHelper(to); 
-        // / affects ROI, thus redemption
+        // affects ROI, thus redemption
     }
 
     // this function will take deposits of ETH only...
@@ -505,7 +504,10 @@ contract MO is ReentrancyGuard {
             pledge.weth.credit += in_dollars - deductible;
             // ^ the average dollar value of hedged ETH...
             pledges[address(this)].weth.credit += hedged;
-            require(QUID.get_total_deposits(true) > FullMath.mulDiv(
+            console.log("..>!>!>!!>!>>! total deposits !<!<!<!<!<", QUID.get_total_deposits(true));
+            console.log("..>!>!>!!>!>>! total credit !<!<!<!<!<",  FullMath.mulDiv(
+                pledges[address(this)].weth.credit, price, WAD));
+            require(QUID.get_total_deposits(false) > FullMath.mulDiv(
                 pledges[address(this)].weth.credit, price, WAD), 
                 "over-encumbered"); // ^ ETH hedged 
         }       pledges[beneficiary] = pledge;
@@ -648,12 +650,12 @@ contract MO is ReentrancyGuard {
             if (!token1isWETH) { // increase amount0 (eth) by amount1 sold
                 amount0 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(address(token1), POOL_FEE, address(token0)),
-                    address(this), /* block.timestamp, */ amount1, 0));
+                    address(this), block.timestamp, amount1, 0));
                     transfer = FullMath.min(transfer, amount0);
             } else { // increase amount1 by selling amount0 (usdc) for eth
                 amount1 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(address(token0), POOL_FEE, address(token1)),
-                    address(this), /* block.timestamp, */ amount0, 0)); 
+                    address(this), block.timestamp, amount0, 0)); 
                     transfer = FullMath.min(transfer, amount1);
             }   WETH9.withdraw(transfer);
             (bool success, ) = msg.sender.call{ 
@@ -694,7 +696,7 @@ contract MO is ReentrancyGuard {
                 // invariant that eventually all work.credit 
                 // must reduce to 0, no matter how good CR
                 // even if a depositor never comes back to 
-                pledge.work.credit += 
+                // pledge.work.credit += 
                 state.delta = state.collat - pledge.work.credit;
                 if (state.collat / 10 > state.delta) { // must get
                 // back to minimum CR of 1.1 (safety invariant)...
@@ -764,7 +766,7 @@ contract MO is ReentrancyGuard {
 
             state.collat = FullMath.mulDiv(pledge.work.debit, price, WAD); 
             if (state.collat > pledge.work.credit) { state.liquidate = false; }
-        }   // "things have gotten closer to the sun, and I've done things
+        }   // things have gotten closer to the sun, and I've done things
         // in small doses, so don't think that I'm pushing you away, when
         if (state.liquidate) { // ⚡️ strikes and the 🏀 court lights get
             (, state.cap) = capitalisation(state.repay, true); // dim
@@ -806,7 +808,6 @@ contract MO is ReentrancyGuard {
                 } // "thinkin' about them licks I hit, I had to..." ~ future
             } // app-specific sequence hitter
         } else if (pledge.last.credit != 0) {
-
             // whenever there's a gap between 
             // liquidations, we reset metrics 
             // pro rata to the gap duration

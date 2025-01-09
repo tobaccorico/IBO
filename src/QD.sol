@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.25; // EVM: london
-// import "lib/forge-std/src/console.sol"; // TODO delete logging before mainnet
+import "lib/forge-std/src/console.sol"; // TODO delete logging before mainnet
 import {MorphoBalancesLib} from "./imports/morpho/libraries/MorphoBalancesLib.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
@@ -112,12 +112,12 @@ contract Quid is ERC20, // OFTOwnable2Step,
         if (address(MO(Moulinette).token0()) == USDC) {
             require(address(MO(Moulinette).token1())
             == address(MO(Moulinette).WETH9()), "42");
-            vaults[FRAX] = SFRAX; // TODO fip-420...
+            // vaults[FRAX] = SFRAX; // TODO fip-420...
             ERC20(USDS).approve(SUSDS, type(uint).max);
             ERC20(CRVUSD).approve(SCRVUSD, type(uint).max);
             ERC20(USDE).approve(SUSDE, type(uint).max);
             ERC20(DAI).approve(SDAI, type(uint).max);
-            ERC20(FRAX).approve(SFRAX,  type(uint).max);
+            // ERC20(FRAX).approve(SFRAX,  type(uint).max);
             ERC4626(SUSDE).approve(MORPHO, type(uint).max);
             ERC20(DAI).approve(MORPHO, type(uint).max);
         } else { require(address(MO(Moulinette).token1())
@@ -149,7 +149,6 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += perVault[USDE].debit;
             total += FullMath.mulDiv(_getPrice(SUSDE),
                         perVault[SUSDE].debit, WAD);
-            
             total += FullMath.mulDiv(_getPrice(SUSDS),
                         perVault[SUSDS].debit, WAD);
             total += perVault[USDS].debit;
@@ -157,7 +156,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += perVault[CRVUSD].debit;
             total += FullMath.mulDiv(_getPrice(SCRVUSD),
                         perVault[SCRVUSD].debit, WAD);
-        } /* TODO uncomment for Ethereum L1 mainnet
+        } /* TODO uncomment for Ethereum L1 mainnet */
         else { // includes collateral deployed in ID,
             // as Pod.credit, initially only for SUSDE,
             // maxWithdraw represents the minimum value
@@ -170,14 +169,13 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += FullMath.max(ERC4626(SDAI).convertToAssets(
                 perVault[SDAI].debit + perVault[SDAI].credit), 
                      ERC4626(SDAI).maxWithdraw(address(this)));
-            total += FullMath.max(ERC4626(SFRAX).convertToAssets(
-                perVault[SFRAX].debit + perVault[SFRAX].credit), 
-                     ERC4626(SFRAX).maxWithdraw(address(this)));
+            // total += FullMath.max(ERC4626(SFRAX).convertToAssets(
+            //     perVault[SFRAX].debit + perVault[SFRAX].credit), 
+            //          ERC4626(SFRAX).maxWithdraw(address(this)));
             total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
                 perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
                      ERC4626(SCRVUSD).maxWithdraw(address(this)));
         } // commented out for compilation purposes (less bytecode)
-    */
     }
     function _deposit(address from,
         address token, uint amount)
@@ -420,12 +418,16 @@ contract Quid is ERC20, // OFTOwnable2Step,
         require(price >= WAD, "price");
     } // function used only on Base...
     
+    // systematic uncertainty + unsystematic = total
+    // demand uncertainty. typically systematic will
+    // dominate unsystematic. in my experiecne, the 
+    // 2 tend to break according to pareto principle
     function mint(address pledge, uint amount, 
         address token /*, uint when */) public 
         nonReentrant { uint batch;
         if (token == address(this)) {
             batch = currentBatch(); _mint(pledge, amount); // QD
-            consideration[pledge][batch] += amount; // redeem...^
+            consideration[pledge][batch] += amount; // redeem ^
             require(msg.sender == Moulinette, "authorisation");
         }   else if (block.timestamp <= START + DAYS 
             && batch < 24) { batch = currentBatch(/*when*/); // 0 - 24
@@ -525,13 +527,13 @@ contract Quid is ERC20, // OFTOwnable2Step,
                         IMorpho(MORPHO), params, address(this));  
                         tokens = [DAI, USDS, USDE, CRVUSD, FRAX]; 
         uint collat; // hardcoded to one, but ^^^ can be changed to any
-        if (!l2) { /* for (i = 0; i < 5; i++) { vault = vaults[tokens[i]];
+        if (!l2) { for (i = 0; i < 5; i++) { vault = vaults[tokens[i]];
             amounts[i] = FullMath.min(ERC4626(vault).maxWithdraw(
                       address(this)), ERC4626(vault).convertToAssets(
                                             perVault[vault].debit - 
                                             perVault[vault].credit));
             } inDollars = FullMath.min(delta + delta / 9, amounts[2]);
-             collat = ERC4626(SUSDE).convertToShares(inDollars); */
+             collat = ERC4626(SUSDE).convertToShares(inDollars); 
         } // TODO uncomment for L1, commented here to save bytecode
         else { amounts[0] = perVault[DAI].debit;
             // amounts[5] = perVault[FRAX].debit; // TODO Arbitrum
@@ -564,12 +566,12 @@ contract Quid is ERC20, // OFTOwnable2Step,
             perVault[repay].credit -= sharesWithdrawn;
             inDollars = ERC4626(repay).convertToAssets(
                                         sharesWithdrawn);
-            if (!l2) { /*
+            if (!l2) { 
                 // TODO uncomment for L1...
                 collat = FullMath.min(collat, 
                     FullMath.mulDiv(WAD, inDollars, 
                     _getPrice(SUSDE)) 
-                ); */
+                );
             }
             else {
                 collat = FullMath.min(collat, 
@@ -585,7 +587,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             perVault[SUSDE].credit, address(this), address(this));
             perVault[SUSDE].debit += perVault[SUSDE].credit;
             perVault[SUSDE].credit = 0;
-        } /*
+        }
         if (!l2) { // no USDC here
             for (i = 0; i < 5; i++) { 
                 amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
@@ -601,7 +603,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
                         sharesWithdrawn); sent += amounts[i];
                 } 
             }
-        } */ // TODO uncomment for L1, commented here to save bytecode
+        } // TODO uncomment for L1, commented here to save bytecode
         else { 
             if (amounts[0] > 0) { sent = FullMath.min(amounts[0],
                     ERC20(tokens[0]).balanceOf(address(this)));
