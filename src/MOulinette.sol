@@ -1,6 +1,6 @@
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.25; // EVM: london
+pragma solidity >=0.8.4 <0.9.0;
 import {Quid} from "./QD.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
@@ -84,10 +84,12 @@ contract MO is ReentrancyGuard {
         LAST_TICK = tick; uint price = getPrice(sqrtPrice);
         return (pledge, price, sqrtPrice);
     } 
-    function setQuid(address _quid) 
-        external { QUID = Quid(_quid);
-            require(QUID.Moulinette()
-             == address(this), "42");
+    function setQuid(address _quid) external { 
+        require(address(QUID) == 
+        address(0), "already set");
+        QUID = Quid(_quid);
+        require(QUID.Moulinette()
+            == address(this), "42");
     }
     modifier onlyQuid {
         require(msg.sender
@@ -504,10 +506,7 @@ contract MO is ReentrancyGuard {
             pledge.weth.credit += in_dollars - deductible;
             // ^ the average dollar value of hedged ETH...
             pledges[address(this)].weth.credit += hedged;
-            console.log("..>!>!>!!>!>>! total deposits !<!<!<!<!<", QUID.get_total_deposits(true));
-            console.log("..>!>!>!!>!>>! total credit !<!<!<!<!<",  FullMath.mulDiv(
-                pledges[address(this)].weth.credit, price, WAD));
-            require(QUID.get_total_deposits(false) > FullMath.mulDiv(
+            require(QUID.get_total_deposits(true) > FullMath.mulDiv(
                 pledges[address(this)].weth.credit, price, WAD), 
                 "over-encumbered"); // ^ ETH hedged 
         }       pledges[beneficiary] = pledge;

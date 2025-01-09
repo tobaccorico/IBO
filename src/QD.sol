@@ -391,7 +391,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         }   if (new_stake != 0) { if (new_vote <= K) {
                                      SUM += new_stake; }
                       WEIGHTS[new_vote] += new_stake; }
-        uint mid = this.totalSupply() / 2; if (mid != 0) {
+        uint mid = SUM / 2; if (mid != 0) {
             if (K > new_vote) {
                 while (K >= 1 && (
                     (SUM - WEIGHTS[K]) >= mid
@@ -399,7 +399,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             } else { while (SUM < mid) { K += 1;
                             SUM += WEIGHTS[K]; }
             } MO(Moulinette).setFee(K);
-        } else { SUM = 0; }
+        } else { SUM = 0; } // TODO fix
     }
     function _getPrice(address token) internal 
         view returns (uint price) { // L2 only

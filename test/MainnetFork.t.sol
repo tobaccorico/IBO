@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-pragma solidity 0.8.25; // evm: london
+pragma solidity >=0.8.4 <0.9.0;
 import {Quid} from "../src/QD.sol";
 import {MO} from "../src/MOulinette.sol";
 
