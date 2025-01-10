@@ -810,6 +810,7 @@ contract MO is ReentrancyGuard {
             // whenever there's a gap between 
             // liquidations, we reset metrics 
             // pro rata to the gap duration
+            pledges[address(this)].carry.credit += pledge.last.credit;
             pledge.last.credit = 0;
             pledge.last.debit = 0;
         }   pledges[beneficiary] = pledge;
