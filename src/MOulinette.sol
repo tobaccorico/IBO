@@ -426,33 +426,40 @@ contract MO is ReentrancyGuard {
         uint160 upper = TickMath.getSqrtPriceAtTick(UPPER_TICK);
         uint160 current = TickMath.getSqrtPriceAtTick(LAST_TICK);
         uint128 liquidity; uint scaled = usdc * 1e12; // precision
+        uint targetETH; uint targetUSDC;
         if (token1isWETH) { // TODO check ticks order for getLiquidity
             liquidity = LiquidityAmounts.getLiquidityForAmount1(
                                             lower, current, eth);
-            (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
-                                    current, lower, upper, liquidity);
+            (targetUSDC, targetETH) = LiquidityAmounts.getAmountsForLiquidity(
+                                             current, lower, upper, liquidity);
+            
         } else { liquidity = LiquidityAmounts.getLiquidityForAmount0(
                                                 current, upper, eth);
-            (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
-                                    current, lower, upper, liquidity);
-        } usdc *= 1e12; // must also divide at the end for precision
+            (targetETH, targetUSDC) = LiquidityAmounts.getAmountsForLiquidity(
+                                             current, lower, upper, liquidity);
+        } targetUSDC *= 1e12; // must also divide at the end for precision...
         address vault = QUID.VAULT();
-        if (scaled > usdc) { scaled -= usdc;
+        if (scaled > targetUSDC) {
+            scaled -= targetUSDC;
             ERC4626(vault).deposit(
                 scaled / 1e12, 
                 address(QUID));
-                scaled = usdc;
+                scaled = targetUSDC;
         } else { 
             scaled += ERC4626(vault).convertToAssets(
-                QUID.withdrawUSDC(usdc - scaled)) * 1e12;
+                QUID.withdrawUSDC(targetUSDC - scaled)) * 1e12;
         } 
         // x / y = k...
-        if (usdc > scaled) {
-            uint k = FullMath.mulDiv(eth, WAD, usdc); 
+        if (targetUSDC > scaled) {
+            uint k = FullMath.mulDiv(
+            targetETH, WAD, targetUSDC);
+            console.log("!>!>!>>!>!>!>!>>!>!> K  !>!>!>>!>!>!>!>>!>!>", k);
             uint denom = WAD + FullMath.mulDiv(
                                 k, price, WAD);
-            uint ky = FullMath.mulDiv(
-                        k, scaled, WAD);
+            console.log("!>!>!>>!>!>!>!>>!>!> denom !>!>!>>!>!>!>!>>!>!>", denom);
+            console.log("!>!>!>>!>!>!>!>>!>!> scaled !>!>!>>!>!>!>!>>!>!>", scaled + 1);
+            uint ky =  k * (scaled + 1);
+            console.log("!>!>!>>!>!>!>!>>!>!> KY  !>!>!>>!>!>!>!>>!>!>", ky);
             // assume eth is X and usdc is Y...
             // our formula is (x - ky)/(1 + kp);
             // we are selling X to buy Y, where
@@ -463,15 +470,20 @@ contract MO is ReentrancyGuard {
             // x - n = ky + knp
             // x - ky = n + knp
             // x - ky = n(1 + kp)
+             console.log("!>!>!>>!>!>!>!>>!>!> eth !>!>!>>!>!>!>!>>!>!>", eth);
             uint selling = (eth - ky) / denom;
+            console.log("!>!>!>>!>!>!>!>>!>!> selling  !>!>!>>!>!>!>!>>!>!>", selling);
             // console.log("selling...", selling);
             // TODO maybe divide by WAD again
+            eth -= selling; 
             scaled += ROUTER.exactInput(
                 ISwapRouter.ExactInputParams(abi.encodePacked(
                     address(WETH9), POOL_FEE, USDC), address(this),
-                    block.timestamp, selling, 0)) * 1e12; 
-                  eth -= selling; 
-        } return (eth, scaled / 1e12);
+                    block.timestamp, selling, 0)) * 1e12;
+        } 
+        console.log(" !>!>!>>!>!>!>!>>!>!> AFTER eth  !>!>!>>!>!>!>!>>!>!>", eth);
+        console.log(" !>!>!>>!>!>!>!>>!>!> AFTER usdc !>!>!>>!>!>!>!>>!>!>", scaled / 1e12);
+        return (eth, scaled / 1e12);
     }
 
     function mint(address to, uint cost, 

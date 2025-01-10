@@ -163,20 +163,20 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += FullMath.max(ERC4626(SUSDE).convertToAssets(
                 perVault[SUSDE].debit + perVault[SUSDE].credit), 
                      ERC4626(SUSDE).maxWithdraw(address(this)));
-            total += FullMath.max(ERC4626(SUSDS).convertToAssets(
-                perVault[SUSDS].debit + perVault[SUSDS].credit), 
-                     ERC4626(SUSDS).maxWithdraw(address(this)));
-            total += FullMath.max(ERC4626(SDAI).convertToAssets(
-                perVault[SDAI].debit + perVault[SDAI].credit), 
-                     ERC4626(SDAI).maxWithdraw(address(this)));
+            // total += FullMath.max(ERC4626(SUSDS).convertToAssets(
+            //     perVault[SUSDS].debit + perVault[SUSDS].credit), 
+            //          ERC4626(SUSDS).maxWithdraw(address(this)));
+            // total += FullMath.max(ERC4626(SDAI).convertToAssets(
+            //     perVault[SDAI].debit + perVault[SDAI].credit), 
+            //          ERC4626(SDAI).maxWithdraw(address(this)));
             // total += FullMath.max(ERC4626(SFRAX).convertToAssets(
             //     perVault[SFRAX].debit + perVault[SFRAX].credit), 
             //          ERC4626(SFRAX).maxWithdraw(address(this)));
-            total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
-                perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
-                     ERC4626(SCRVUSD).maxWithdraw(address(this)));
+            // total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
+            //     perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
+            //          ERC4626(SCRVUSD).maxWithdraw(address(this)));
         } // commented out for compilation purposes (less bytecode)
-    }
+    } // TODO figure out which one of these causing issues
     function _deposit(address from,
         address token, uint amount)
         internal returns (uint usd) {
@@ -399,7 +399,9 @@ contract Quid is ERC20, // OFTOwnable2Step,
             } else { while (SUM < mid) { K += 1;
                             SUM += WEIGHTS[K]; }
             } MO(Moulinette).setFee(K);
-        } else { SUM = 0; } // TODO fix
+        } else { 
+            SUM = 0; 
+        } // TODO fix
     }
     function _getPrice(address token) internal 
         view returns (uint price) { // L2 only
