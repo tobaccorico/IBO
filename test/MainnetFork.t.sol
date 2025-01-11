@@ -96,12 +96,12 @@ contract MainnetFork is Test {
             address(usdc), 0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458, // Guantlet Morpho Vault
             0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
             address(USDE), address(SUSDE), 
-            /* address(FRAX), address (SFRAX),
-            address (SDAI), */ address(DAI),
+            address(FRAX), address (SFRAX),
+            address (SDAI), address(DAI),
             address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)
         );  moulinette.setQuid(address(quid));
-        // moulinette.set_price_eth(false, true);
+        moulinette.set_price_eth(false, true);
         // TODO uncomment
     }
     

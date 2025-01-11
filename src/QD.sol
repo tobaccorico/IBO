@@ -87,8 +87,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
     constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
         address _usde, address _susde, 
-        /* address _frax, address _sfrax,
-        address _sdai, */ address _dai,
+        address _frax, address _sfrax,
+        address _sdai, address _dai,
         address _usds, address _susds,
         address _crv, address _scrv)
         /* OFTOwnable2Step("QU!D", "QZ", 
@@ -97,11 +97,11 @@ contract Quid is ERC20, // OFTOwnable2Step,
         START = block.timestamp; // now
         VAULT = _vault; ID = _morpho;
         deployed = START; USDC = _usdc; 
-        /* SDAI = _sdai; */ DAI = _dai;
+        SDAI = _sdai; DAI = _dai;
         SUSDE = _susde; USDS = _usds; 
         USDE = _usde; SUSDS = _susds;
         CRVUSD = _crv; SCRVUSD = _scrv; 
-        // FRAX = _frax; SFRAX = _sfrax; 
+        FRAX = _frax; SFRAX = _sfrax; 
         vaults[DAI] = SDAI;
         vaults[USDC] = VAULT; 
         vaults[USDE] = SUSDE; 
@@ -112,12 +112,12 @@ contract Quid is ERC20, // OFTOwnable2Step,
         if (address(MO(Moulinette).token0()) == USDC) {
             require(address(MO(Moulinette).token1())
             == address(MO(Moulinette).WETH9()), "42");
-            // vaults[FRAX] = SFRAX; // TODO fip-420...
+            vaults[FRAX] = SFRAX; // TODO fip-420...
             ERC20(USDS).approve(SUSDS, type(uint).max);
             ERC20(CRVUSD).approve(SCRVUSD, type(uint).max);
             ERC20(USDE).approve(SUSDE, type(uint).max);
             ERC20(DAI).approve(SDAI, type(uint).max);
-            // ERC20(FRAX).approve(SFRAX,  type(uint).max);
+            ERC20(FRAX).approve(SFRAX,  type(uint).max);
             ERC4626(SUSDE).approve(MORPHO, type(uint).max);
             ERC20(DAI).approve(MORPHO, type(uint).max);
         } else { require(address(MO(Moulinette).token1())
@@ -142,8 +142,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
         // this is only *part* of the captalisation()
         returns (uint total) { // handle USDC first
         // TODO on Arbitrum there is no vault yet...
-        // total += usdc ? ERC4626(VAULT).maxWithdraw(
-        //                   address(this)) * 1e12 : 0;
+        total += usdc ? ERC4626(VAULT).maxWithdraw(
+                          address(this)) * 1e12 : 0;
         if (!MO(Moulinette).token1isWETH()) { // L2
             // total += perVault[FRAX].debit; // ARB only
             total += perVault[USDE].debit;
@@ -163,18 +163,18 @@ contract Quid is ERC20, // OFTOwnable2Step,
             total += FullMath.max(ERC4626(SUSDE).convertToAssets(
                 perVault[SUSDE].debit + perVault[SUSDE].credit), 
                      ERC4626(SUSDE).maxWithdraw(address(this)));
-            // total += FullMath.max(ERC4626(SUSDS).convertToAssets(
-            //     perVault[SUSDS].debit + perVault[SUSDS].credit), 
-            //          ERC4626(SUSDS).maxWithdraw(address(this)));
-            // total += FullMath.max(ERC4626(SDAI).convertToAssets(
-            //     perVault[SDAI].debit + perVault[SDAI].credit), 
-            //          ERC4626(SDAI).maxWithdraw(address(this)));
-            // total += FullMath.max(ERC4626(SFRAX).convertToAssets(
-            //     perVault[SFRAX].debit + perVault[SFRAX].credit), 
-            //          ERC4626(SFRAX).maxWithdraw(address(this)));
-            // total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
-            //     perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
-            //          ERC4626(SCRVUSD).maxWithdraw(address(this)));
+            total += FullMath.max(ERC4626(SUSDS).convertToAssets(
+                perVault[SUSDS].debit + perVault[SUSDS].credit), 
+                     ERC4626(SUSDS).maxWithdraw(address(this)));
+            total += FullMath.max(ERC4626(SDAI).convertToAssets(
+                perVault[SDAI].debit + perVault[SDAI].credit), 
+                     ERC4626(SDAI).maxWithdraw(address(this)));
+            total += FullMath.max(ERC4626(SFRAX).convertToAssets(
+                perVault[SFRAX].debit + perVault[SFRAX].credit), 
+                     ERC4626(SFRAX).maxWithdraw(address(this)));
+            total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
+                perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
+                     ERC4626(SCRVUSD).maxWithdraw(address(this)));
         } // commented out for compilation purposes (less bytecode)
     } // TODO figure out which one of these causing issues
     function _deposit(address from,

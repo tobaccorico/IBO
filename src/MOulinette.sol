@@ -30,7 +30,7 @@ contract MO is ReentrancyGuard {
     int24 internal UPPER_TICK;
     int24 internal LOWER_TICK;
     int24 internal LAST_TICK;
-    // uint internal _ETH_PRICE; // TODO 
+    uint internal _ETH_PRICE; // TODO 
     uint constant WAD = 1e18;
     uint24 constant POOL_FEE = 500;
     int24 constant MAX_TICK = 887220;
@@ -125,7 +125,7 @@ contract MO is ReentrancyGuard {
         return FullMath.mulDiv(amt, cap, 100);
     }
 
-    /*
+
     function set_price_eth(bool up,
         bool refresh) external {
         (uint160 sqrtPriceX96
@@ -136,7 +136,7 @@ contract MO is ReentrancyGuard {
             _ETH_PRICE = up ? _ETH_PRICE + delta
                             : _ETH_PRICE - delta;
         } // TODO remove this testing function...
-    } */
+    }
 
     constructor(address _weth, address _usdc,
         address _nfpm, address _pool, 
@@ -324,9 +324,9 @@ contract MO is ReentrancyGuard {
     // from v3-periphery/OracleLibrary...
     function getPrice(uint160 sqrtRatioX96)
         public view returns (uint price) {
-        /* if (_ETH_PRICE > 0) { // TODO
+        if (_ETH_PRICE > 0) { // TODO
             return _ETH_PRICE; // remove
-        } */
+        } 
         uint casted = uint(sqrtRatioX96);
         uint ratioX128 = FullMath.mulDiv(
                  casted, casted, 1 << 64);
@@ -484,7 +484,10 @@ contract MO is ReentrancyGuard {
             
             ky = FullMath.mulDiv(
             eth, WAD, scaled);
-            require(k == ky, "fail");
+            console.log("!?!?!?!?!?! K !?!?!?!?!?!", k);
+            console.log("!?!?!?!?!?! KY !?!?!?!?!?!", ky);
+            // require(k == ky, "fail"); // TODO
+            require(false, "fail");
         } 
         return (eth, scaled / 1e12);
     }

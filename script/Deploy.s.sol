@@ -21,7 +21,7 @@ import {IMorphoChainlinkOracleV2Factory} from "../src/imports/morpho/IMorphoChai
 contract Deploy is Script {
     Quid public quid; 
     MO public moulinette;
-    // ERC20 public M = ERC20();
+    
     ERC20 public USDC = ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); 
     // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48) TODO Ethereum L1
     // Base : 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -60,8 +60,8 @@ contract Deploy is Script {
    
     ERC20 public FRAX = ERC20(0x17FC002b466eEc40DaE837Fc4bE5c67993ddBd6F); // Arbitrum
     // = ERC20(0x853d955aCEf822Db058eb8505911ED77F175b99e);
-    // ERC4626 public SFRAX; // = ERC4626(0xA663B02CF0a4b149d2aD41910CB81e23e1c41c32);
-    // ERC4626 public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
+    ERC4626 public SFRAX; // = ERC4626(0xA663B02CF0a4b149d2aD41910CB81e23e1c41c32);
+    ERC4626 public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
 
     // LZ
     // Unichain : 0xb8815f3f882614048CbE201a67eF9c6F10fe5035
@@ -178,17 +178,14 @@ contract Deploy is Script {
         quid = new Quid(address(moulinette), // TODO deploy Morpho
             address(USDC), address(VAULT), ID, // vault on ARB
             address(USDE), address(SUSDE),
-            /* address(FRAX), address (SFRAX),
-            address (SDAI), */ address(DAI), 
+            address(FRAX), address (SFRAX),
+            address (SDAI), address(DAI), 
             address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)); 
         
         // pool = IUniswapV3Pool(factory.createPool(
-        //     address(quid), address(M), 500));
-        // create pool QD<>M // TODO M^0
-        // "Bond," M says, "this may be 
-        // too much for a blunt instrument
-        // to understand, but 
+        //     address(quid), address(), 500));
+        
         moulinette.setQuid( 
             address(quid)); 
             // go hand in hand"
