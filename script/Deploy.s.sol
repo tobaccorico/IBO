@@ -1,7 +1,7 @@
 
 pragma solidity 0.8.25;
-import {Quid} from "../src/QD.sol";
-import {MO} from "../src/MOulinette.sol";
+import {GHODollar} from "../src/GD.sol";
+import {MO} from "../src/mindwill.sol";
 import "lib/forge-std/src/console.sol";
 import {Script} from "lib/forge-std/src/Script.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
@@ -19,8 +19,8 @@ import {MorphoChainlinkOracleV2} from "../src/imports/morpho/MorphoChainlinkOrac
 import {INonfungiblePositionManager} from "../src/imports/INonfungiblePositionManager.sol";
 import {IMorphoChainlinkOracleV2Factory} from "../src/imports/morpho/IMorphoChainlinkOracleV2Factory.sol";
 contract Deploy is Script {
-    Quid public quid; 
-    MO public moulinette;
+    GHODollar public quid; 
+    MO public mindwill;
     
     ERC20 public USDC = ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); 
     // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48) TODO Ethereum L1
@@ -161,7 +161,7 @@ contract Deploy is Script {
         morpho.createMarket(params);
         */
 
-        moulinette = new MO(// Moulinette 
+        mindwill = new MO(// mindwill 
             address(weth), address(USDC),
             address(nfpm), address(pool), 
             address(router) // newer interface on L1 and Arbitrum
@@ -175,7 +175,7 @@ contract Deploy is Script {
         //     deadline: block.timestamp + 3600
         // }));
        
-        quid = new Quid(address(moulinette), // TODO deploy Morpho
+        quid = new GHODollar(address(mindwill), // TODO deploy Morpho
             address(USDC), address(VAULT), ID, // vault on ARB
             address(USDE), address(SUSDE),
             address(FRAX), address (SFRAX),
@@ -186,17 +186,17 @@ contract Deploy is Script {
         // pool = IUniswapV3Pool(factory.createPool(
         //     address(quid), address(), 500));
         
-        moulinette.setQuid( 
+        mindwill.setQuid( 
             address(quid)); 
             // go hand in hand"
             
-        // moulinette.set_price_eth(false, true); 
+        // mindwill.set_price_eth(false, true); 
         // TODO remove this, only for testing!
 
         console.log("Quid address...", address(quid));
         // console.log("USDe address...", address(DAI));
         // console.log("sUSDe address...", address(SDAI));
-        console.log("Moulinette address...", address(moulinette));
+        console.log("mindwill address...", address(mindwill));
     
         vm.stopBroadcast();
     }

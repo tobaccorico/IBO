@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity >=0.8.4 <0.9.0;
-import {Quid} from "../src/QD.sol";
-import {MO} from "../src/MOulinette.sol";
+import {GHODollar} from "../src/GD.sol";
+import {MO} from "../src/mindwill.sol";
 
 import {mockVault} from "../src/mockVault.sol";
 import {mockToken} from "../src/mockToken.sol";
@@ -23,8 +23,8 @@ interface ICollection is IERC721 {
     external view returns (uint);
 } 
 contract MainnetFork is Test {
-    Quid public quid;
-    MO public moulinette;
+    GHODollar public quid;
+    MO public mindwill;
     mockToken public DAI; // = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     mockVault public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
     mockToken public USDS; // = ERC20(0xdC035D45d973E3EC169d2276DDab16f1e407384F);
@@ -69,7 +69,7 @@ contract MainnetFork is Test {
     uint public dub_dub_in_eth = 10000000000000000; // ~$40
     
     function setUp() public {
-        uint256 mainnetFork = vm.createFork("https://rpc.ankr.com/eth", 21450545);
+        uint256 mainnetFork = vm.createFork("https://rpc.ankr.com/eth", 21601803);
         vm.selectFork(mainnetFork);
 
         vm.deal(User01, 1_000_000_000_000_000 ether);
@@ -86,12 +86,12 @@ contract MainnetFork is Test {
         SUSDS = new mockVault(USDS);
         CRVUSD = new mockToken(18);
         SCRVUSD = new mockVault(CRVUSD);
-        moulinette = new MO(// Moulinette 
+        mindwill = new MO(// mindwill 
             address(weth), address(usdc), 
             address(nfpm), address(pool), 
             address(router)
         );
-        quid = new Quid(address(moulinette), 
+        quid = new GHODollar(address(mindwill), 
         // app.morpho.org/vault?vault=0xd63070114470f685b75B74D60EEc7c1113d33a3D&network=mainnet
             address(usdc), 0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458, // Guantlet Morpho Vault
             0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
@@ -100,8 +100,8 @@ contract MainnetFork is Test {
             address (SDAI), address(DAI),
             address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)
-        );  moulinette.setQuid(address(quid));
-        moulinette.set_price_eth(false, true);
+        );  mindwill.setQuid(address(quid));
+        mindwill.set_price_eth(false, true);
         // TODO uncomment
     }
     
@@ -125,12 +125,12 @@ contract MainnetFork is Test {
         assertEq(minted, rack);
 
         (quid_credit, 
-         quid_debit) = moulinette.get_info(User01);
+         quid_debit) = mindwill.get_info(User01);
         console.log("User1...before transfer", quid_credit, quid_debit);
 
         uint a; uint b; uint c; uint d;
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = moulinette.get_more_info(User01);
+         weth_debit, weth_credit) = mindwill.get_more_info(User01);
         quid.transfer(User02, grant);
         vm.stopPrank(); // exit User1 context
 
@@ -139,7 +139,7 @@ contract MainnetFork is Test {
         quid.transfer(User01, grant);
         vm.stopPrank();
        
-        (a,b,c,d) = moulinette.get_more_info(User01);
+        (a,b,c,d) = mindwill.get_more_info(User01);
         // and verify that carry.debit
         // before and after are the same
         assertEq(a, work_debit);
@@ -155,36 +155,36 @@ contract MainnetFork is Test {
         USDE.mint();
         weth.deposit{value: 1_000_000 ether}();
 
-        weth.approve(address(moulinette), type(uint256).max);
+        weth.approve(address(mindwill), type(uint256).max);
         USDE.approve(address(quid), type(uint256).max);
         quid.mint(User02, bill, address(USDE));
 
         minted = quid.balanceOf(User02);
 
         (quid_credit, 
-         quid_debit) = moulinette.get_info(User02); 
+         quid_debit) = mindwill.get_info(User02); 
         console.log("User2...", quid_credit, quid_debit); 
 
         vm.stopPrank(); // exit User2 context
 
-        (quid_credit, quid_debit) = moulinette.get_info(User01);
+        (quid_credit, quid_debit) = mindwill.get_info(User01);
         console.log("User1...after transfer", quid_credit, quid_debit);
         
         vm.startPrank(User01);
         
-        weth.approve(address(moulinette), dub_dub_in_eth);
-        moulinette.deposit(User01, dub_dub_in_eth, false);
+        weth.approve(address(mindwill), dub_dub_in_eth);
+        mindwill.deposit(User01, dub_dub_in_eth, false);
         
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = moulinette.get_more_info(User01);
+         weth_debit, weth_credit) = mindwill.get_more_info(User01);
 
         console.log("User1...more_info beforeFOLD", 
             work_debit, work_credit, weth_debit
         );
-        moulinette.fold(User01, dub_dub_in_eth, false);
+        mindwill.fold(User01, dub_dub_in_eth, false);
 
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = moulinette.get_more_info(User01);
+         weth_debit, weth_credit) = mindwill.get_more_info(User01);
 
         console.log("User1...more_info AFTERfold", 
             work_debit, work_credit, weth_debit
@@ -192,7 +192,7 @@ contract MainnetFork is Test {
         
         uint256 balanceBefore = User01.balance;
         console.log("user1BalanceBefore withdraw ETH...", balanceBefore);
-        moulinette.withdraw(dub_dub_in_eth, false);
+        mindwill.withdraw(dub_dub_in_eth, false);
 
         uint256 balanceAfter = User01.balance;
         console.log("user1BalanceAFTER withdraw ETH...", balanceAfter);
@@ -201,10 +201,10 @@ contract MainnetFork is Test {
         vm.startPrank(User03);
 
         uint thirtyThree = 33000000000000000000;
-        moulinette.withdraw{value: dub_dub_in_eth}(thirtyThree, true);
+        mindwill.withdraw{value: dub_dub_in_eth}(thirtyThree, true);
 
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = moulinette.get_more_info(User03);
+         weth_debit, weth_credit) = mindwill.get_more_info(User03);
 
         console.log("User3...more_info AFTER borrow", 
             work_debit, work_credit, weth_debit
@@ -212,14 +212,14 @@ contract MainnetFork is Test {
         console.log("QD that was minted for User3...", quid.balanceOf(User03));
 
         vm.stopPrank();
-        console.log("price before drop", moulinette.getPrice(42));
-        // moulinette.set_price_eth(false, false); // TODO uncomment
-        // moulinette.set_price_eth(false, false);
-        console.log("price AFTER drop", moulinette.getPrice(42));
-        moulinette.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
+        console.log("price before drop", mindwill.getPrice(42));
+        // mindwill.set_price_eth(false, false); // TODO uncomment
+        // mindwill.set_price_eth(false, false);
+        console.log("price AFTER drop", mindwill.getPrice(42));
+        mindwill.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
 
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = moulinette.get_more_info(User03);
+         weth_debit, weth_credit) = mindwill.get_more_info(User03);
 
         console.log("User3...more_info AFTER liquidation (1st)", 
             work_debit, work_credit, weth_debit
@@ -227,9 +227,9 @@ contract MainnetFork is Test {
 
         vm.warp(block.timestamp + 61 minutes);
 
-        moulinette.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
+        mindwill.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
          (work_debit, work_credit, 
-         weth_debit, weth_credit) = moulinette.get_more_info(User03);
+         weth_debit, weth_credit) = mindwill.get_more_info(User03);
 
         console.log("User3...more_info AFTER liquidation (1 hour later)", 
             work_debit, work_credit, weth_debit

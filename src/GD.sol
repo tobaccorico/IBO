@@ -29,11 +29,11 @@ interface IERC721Receiver {
         bytes calldata data
     ) external returns (bytes4);
 } // http://42.fr Piscine
-import "./MOulinette.sol";
-contract Quid is ERC20, // OFTOwnable2Step, 
+import "./Mindwill.sol";
+contract GHODollar is ERC20, // OFTOwnable2Step, 
     IERC721Receiver, ReentrancyGuard { 
-    using SafeTransferLib for ERC4626;
     using SafeTransferLib for ERC20;
+    using SafeTransferLib for ERC4626;
     uint public ROI; uint public START;
     // "Walked in the kitchen, found a
     // [Pod] to [Piscine]" ~ 2 tune chi
@@ -59,7 +59,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     address[][24] public voters; // by batch
     mapping (address => bool) public winners;
     // ^ the mapping prevents duplicates...
-    address payable public Moulinette; 
+    address payable public Mindwill; 
     address public immutable SCRVUSD;
     address public immutable CRVUSD;
     address public immutable SFRAX;
@@ -77,13 +77,12 @@ contract Quid is ERC20, // OFTOwnable2Step,
     IDSROracle internal DSR;
     ISCRVOracle internal CRV;
     uint constant WAD = 1e18;
-    modifier onlyGenerators {
+    modifier onlyUs {
         address sender = msg.sender;
-        require(sender == Moulinette ||
+        require(sender == Mindwill ||
                 sender == address(this), "!?");
         _;
-    } // en.wiktionary.org/wiki/moulinette
-    // the answer, my fren, is blowin' in the
+    }
     constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
         address _usde, address _susde, 
@@ -107,11 +106,11 @@ contract Quid is ERC20, // OFTOwnable2Step,
         vaults[USDE] = SUSDE; 
         vaults[USDS] = SUSDS; 
         vaults[CRVUSD] = SCRVUSD;
-        Moulinette = payable(_mo);
+        Mindwill = payable(_mo);
         ERC20(USDC).approve(VAULT, type(uint).max);
-        if (address(MO(Moulinette).token0()) == USDC) {
-            require(address(MO(Moulinette).token1())
-            == address(MO(Moulinette).WETH9()), "42");
+        if (address(MO(Mindwill).token0()) == USDC) {
+            require(address(MO(Mindwill).token1())
+            == address(MO(Mindwill).WETH9()), "42");
             vaults[FRAX] = SFRAX; // TODO fip-420...
             ERC20(USDS).approve(SUSDS, type(uint).max);
             ERC20(CRVUSD).approve(SCRVUSD, type(uint).max);
@@ -120,15 +119,15 @@ contract Quid is ERC20, // OFTOwnable2Step,
             ERC20(FRAX).approve(SFRAX,  type(uint).max);
             ERC4626(SUSDE).approve(MORPHO, type(uint).max);
             ERC20(DAI).approve(MORPHO, type(uint).max);
-        } else { require(address(MO(Moulinette).token1())
-            == USDC && address(MO(Moulinette).token0())
-            == address(MO(Moulinette).WETH9()), "42"); 
+        } else { require(address(MO(Mindwill).token1())
+            == USDC && address(MO(Mindwill).token0())
+            == address(MO(Mindwill).WETH9()), "42"); 
             ERC20(SUSDE).approve(MORPHO, type(uint).max); // deployed 
             ERC20(USDC).approve(MORPHO, type(uint).max); // on Base...
-            DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1);
+            DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); // only Base
             CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
-            // 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
-            // 0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arb
+            // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
+            //  0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arb
         }
     } uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3 years
@@ -144,7 +143,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         // TODO on Arbitrum there is no vault yet...
         total += usdc ? ERC4626(VAULT).maxWithdraw(
                           address(this)) * 1e12 : 0;
-        if (!MO(Moulinette).token1isWETH()) { // L2
+        if (!MO(Mindwill).token1isWETH()) { // L2
             // total += perVault[FRAX].debit; // ARB only
             total += perVault[USDE].debit;
             total += FullMath.mulDiv(_getPrice(SUSDE),
@@ -180,7 +179,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     function _deposit(address from,
         address token, uint amount)
         internal returns (uint usd) {
-        bool l2 = !MO(Moulinette).token1isWETH();
+        bool l2 = !MO(Mindwill).token1isWETH();
         bool isDollar = false; // $ is ^ on l2
         if (token == SCRVUSD || // token == SFRAX || TODO 
             token == SUSDS || // token == SDAI || L1...
@@ -216,25 +215,25 @@ contract Quid is ERC20, // OFTOwnable2Step,
 
     // takes $ amount input in units of 1e18...
     function withdrawUSDC(uint amount) public
-        onlyGenerators returns (uint withdrawn) {
+        onlyUs returns (uint withdrawn) {
         if (amount > 0) {
              withdrawn = FullMath.min(amount / 1e12, 
                 ERC4626(VAULT).maxWithdraw(
                             address(this)));
             if (withdrawn > 0) {
                 ERC4626(VAULT).withdraw(withdrawn, 
-                    Moulinette, address(this)); 
+                    Mindwill, address(this)); 
             }
         } else {
             return 0;
         }
     } // TODO deploy Morpho vault on ARB
 
-    function qd_amt_to_dollar_amt(uint qd_amt) public
+    function gd_amt_to_dollar_amt(uint gd_amt) public
         view returns (uint amount) { uint in_days = (
             (block.timestamp - START) / 1 days
         );  amount = FullMath.mulDiv((in_days * 
-            PENNY + START_PRICE), qd_amt, WAD);
+            PENNY + START_PRICE), gd_amt, WAD);
     } // get the current ^^^^ to mint() QD...
     function get_total_supply_cap()
         public view returns (uint) {
@@ -266,7 +265,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         ROI += FullMath.mulDiv(WAD, day.credit - 
                          day.debit, day.debit);
         // ROI in MO is a snapshot (avg per day)
-        MO(Moulinette).setMetrics(ROI / ((DAYS 
+        MO(Mindwill).setMetrics(ROI / ((DAYS 
                      / 1 days) * batch)); 
     } function currentBatch() public view returns 
         (uint batch) { batch = (block.timestamp - 
@@ -290,12 +289,12 @@ contract Quid is ERC20, // OFTOwnable2Step,
     }
    
     function turn(address from, uint value)
-        public onlyGenerators returns (uint) {
+        public onlyUs returns (uint) {
         uint balance_from = this.balanceOf(from);
         _burn(from, value); _transferHelper(from, 
                                 address(0), value);
         // carry.debit will be untouched here...
-        return MO(Moulinette).transferHelper(from,
+        return MO(Mindwill).transferHelper(from,
                 address(0), value, balance_from);
     }
     function transfer(address to, // `to` is receiver
@@ -304,7 +303,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint value = FullMath.min(amount, balance_from);
         uint from_vote = feeVotes[msg.sender];
         bool result = true; 
-        if (to == Moulinette) {
+        if (to == Mindwill) {
             _burn(msg.sender, value);
         } else if (to != address(0)) {
             uint to_vote = feeVotes[to];
@@ -313,7 +312,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
             _calculateMedian(this.balanceOf(to),
                     to_vote, balance_to, to_vote);
         } _transferHelper(msg.sender, to, value);
-        uint sent = MO(Moulinette).transferHelper(
+        uint sent = MO(Mindwill).transferHelper(
             msg.sender, to, value, balance_from);
         if (value != sent) { value = amount - sent;
             _mint(msg.sender, value);
@@ -344,16 +343,16 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint balance_from = this.balanceOf(from);
         uint value = FullMath.min(amount, balance_from);
         uint from_vote = feeVotes[to]; bool result = true;
-        if (to == Moulinette) {
-            require(msg.sender == Moulinette, 
+        if (to == Mindwill) {
+            require(msg.sender == Mindwill, 
             "403"); _burn(from, amount);
-        } if (msg.sender != Moulinette) {
+        } if (msg.sender != Mindwill) {
             uint to_vote = feeVotes[to];
             uint balance_to = this.balanceOf(to);
             result = super.transferFrom(from, to, value);
             _calculateMedian(this.balanceOf(to), to_vote,
                                     balance_to, to_vote);
-        } MO(Moulinette).transferHelper(
+        } MO(Mindwill).transferHelper(
         from, to, value, balance_from);
         _transferHelper(from, to, value);
         _calculateMedian(this.balanceOf(from),
@@ -363,7 +362,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
     function vote(uint new_vote) external {
         uint batch = currentBatch(); // 0-24
         if (batch < 24 && !hasVoted[msg.sender][batch]) {
-            (uint carry,) = MO(Moulinette).get_info(msg.sender);
+            (uint carry,) = MO(Mindwill).get_info(msg.sender);
             if (carry > GRIEVANCES / 10) { 
                 hasVoted[msg.sender][batch] = true;
                 voters[batch].push(msg.sender); 
@@ -402,7 +401,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
                 )) { SUM -= WEIGHTS[K]; K -= 1; }
             } else { while (SUM < mid) { K += 1;
                             SUM += WEIGHTS[K]; }
-            } MO(Moulinette).setFee(K);
+            } MO(Mindwill).setFee(K);
         } else { 
             SUM = 0; 
         } // TODO fix
@@ -434,7 +433,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         if (token == address(this)) {
             batch = currentBatch(); _mint(pledge, amount); // QD
             consideration[pledge][batch] += amount; // redeem ^
-            require(msg.sender == Moulinette, "authorisation");
+            require(msg.sender == Mindwill, "authorisation");
         }   else if (block.timestamp <= START + DAYS 
             && batch < 24) { batch = currentBatch(/*when*/); // 0 - 24
                 uint in_days = ((block.timestamp - START) / 1 days);
@@ -447,7 +446,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
                                 pledge, token, cost);
                 consideration[pledge][batch] += amount;
                 _mint(pledge, amount); // totalSupply++
-                MO(Moulinette).mint(pledge, cost, amount);
+                MO(Mindwill).mint(pledge, cost, amount);
                 Piscine[batch][in_days].credit += amount;
                 Piscine[batch][in_days].debit += cost;
                 // 43rd row is the total for the batch
@@ -511,8 +510,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
     
     // internal Morpho optimiser, highly customisable
     function morph(address to, uint amount) // 4
-        public onlyGenerators returns (uint sent) {
-        bool l2 = !MO(Moulinette).token1isWETH();
+        public onlyUs returns (uint sent) {
+        bool l2 = !MO(Mindwill).token1isWETH();
         uint total = get_total_deposits(false);
         if (msg.sender == address(this)) {    
             // get batch which just ended...
@@ -527,7 +526,7 @@ contract Quid is ERC20, // OFTOwnable2Step,
         uint sharesWithdrawn; address repay = l2 ? VAULT : SDAI; 
         
         MarketParams memory params = IMorpho(MORPHO).idToMarketParams(ID);
-        (uint delta, uint cap) = MO(Moulinette).capitalisation(0, false);
+        (uint delta, uint cap) = MO(Mindwill).capitalisation(0, false);
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
                         // on L2 this is USDC, on L1 it's DAI...
                         IMorpho(MORPHO), params, address(this));  

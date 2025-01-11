@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity >=0.8.4 <0.9.0;
-import {Quid} from "./QD.sol";
+import {GHODollar} from "./GD.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
@@ -43,12 +43,12 @@ contract MO is ReentrancyGuard {
         uint average_price; uint average_value;
         uint deductible; uint cap; uint minting;
         bool liquidate; uint repay; uint collat;
-    } Quid QUID; // tethered to the MO contract
+    } GHODollar GD; // tethered to MO contract
 
     function get_info(address who) view
         external returns (uint, uint) {
         Offer memory pledge = pledges[who];
-        return (pledge.carry.debit, QUID.balanceOf(who));
+        return (pledge.carry.debit, GD.balanceOf(who));
         // this is more of an internal tracking variable
     }   function get_more_info(address who) view
         external returns (uint, uint, uint, uint) {
@@ -66,7 +66,7 @@ contract MO is ReentrancyGuard {
         uint credit; // sum[amt x price at deposit]
         uint debit; // quantity of tokens pledged
     } /* carry.credit = contribution to weighted
-     SUM of [(QD / total QD) x (ROI / avg ROI)] */
+     SUM of [(GD / total GD) x (ROI / avg ROI)] */
     uint public SUM = 1; uint public AVG_ROI = 1;
     struct Offer { Pod weth; Pod carry; Pod work;
     // work is force times distance (leverage) ^
@@ -87,15 +87,15 @@ contract MO is ReentrancyGuard {
         return (pledge, price, sqrtPrice);
     } 
     function setQuid(address _quid) external { 
-        require(address(QUID) == 
-        address(0), "already set");
-        QUID = Quid(_quid);
-        require(QUID.Moulinette()
-            == address(this), "42");
+        require(address(GD) == 
+                address(0), "set"); 
+        GD = GHODollar(_quid);
+        require(GD.Mindwill() == 
+            address(this), "42");
     }
     modifier onlyQuid {
         require(msg.sender
-            == address(QUID),
+            == address(GD),
             "unauthorised"); _;
     }
     receive() external payable {}
@@ -116,7 +116,7 @@ contract MO is ReentrancyGuard {
             return FullMath.mulDiv(amt,
               100 + (100 - cap), 100);
     }
-    // not same as eponymous function in QD
+    // not same as eponymous function in GD
     function qd_amt_to_dollar_amt(uint cap,
         uint amt) public view returns (uint) {
         if (cap == 0) {
@@ -124,7 +124,6 @@ contract MO is ReentrancyGuard {
         }
         return FullMath.mulDiv(amt, cap, 100);
     }
-
 
     function set_price_eth(bool up,
         bool refresh) external {
@@ -160,16 +159,16 @@ contract MO is ReentrancyGuard {
         // and Arbitrum; but not on USDT<>BNB
     } 
 
-    // present value of the expected cash flows
+    // present value of the expected cash flows...
     function capitalisation(uint qd, bool burn)
-        public view returns (uint, uint) { // ^ in QD
+        public view returns (uint, uint) { // ^ in GD
         (uint160 sqrtPriceX96,,,,,,) = POOL.slot0();
         uint price = getPrice(sqrtPriceX96); // in $
         Offer memory pledge = pledges[address(this)];
         // collateral may be sold or claimed in fold
         uint collateral = FullMath.mulDiv(price,
             pledge.work.credit, WAD // in $ for
-        ); // ETH pledged as to borrow QD;
+        ); // ETH pledged as to borrow GD;
         // collected in deposit and fold...
         uint deductibles = FullMath.mulDiv(
             price, pledge.weth.debit, WAD // $
@@ -179,27 +178,29 @@ contract MO is ReentrancyGuard {
         uint assets = collateral + deductibles +
         pledge.work.debit; uint eth; uint usdc; 
         // business float: working capital (LP)
+        (int24 tick_lower, 
+         int24 tick_upper) = _adjustTicks(LAST_TICK);
         if (token1isWETH) {
             (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
-                TickMath.getSqrtPriceAtTick(LOWER_TICK),
-                TickMath.getSqrtPriceAtTick(UPPER_TICK),
+                TickMath.getSqrtPriceAtTick(tick_lower),
+                TickMath.getSqrtPriceAtTick(tick_upper),
                 liquidityUnderManagement);
         } else {
             (eth, usdc) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
-                TickMath.getSqrtPriceAtTick(LOWER_TICK),
-                TickMath.getSqrtPriceAtTick(UPPER_TICK),
+                TickMath.getSqrtPriceAtTick(tick_lower),
+                TickMath.getSqrtPriceAtTick(tick_upper),
                 liquidityUnderManagement);
         }
         require(FullMath.mulDiv(eth, price, 
             WAD) + usdc * 1e12 >= assets + 
             FullMath.mulDiv(pledge.weth.credit, 
                  price, WAD)); // ^ hedged ETH
-        assets += QUID.get_total_deposits(true);
-        // total only includes QD minted for a 
+        assets += GD.get_total_deposits(true);
+        // total only includes GD minted for a 
         // discount in exchange for term deposit
-        uint total = QUID.totalSupply(); 
+        uint total = GD.totalSupply(); 
         if (qd > 0) { 
             total = (burn) ? 
             total - qd : total + qd;
@@ -210,13 +211,13 @@ contract MO is ReentrancyGuard {
         } // returns delta from being 100% backed
     }
 
-    // helpers allow treating QD balances
+    // helpers allow treating GD balances
     // uniquely without needing ERC721...
     function transferHelper(address from,
-        address to, uint amount, // QD
+        address to, uint amount, // GD
         uint priorBalance) onlyQuid // ^
         public returns (uint) {
-        // repay work.credit debt by QD
+        // repay work.credit debt by GD
         if (to == address(this)) { // transfer to MO
             uint credit = pledges[from].work.credit;
             (, uint cap) = capitalisation(
@@ -226,12 +227,10 @@ contract MO is ReentrancyGuard {
                 cap, amount), credit);
 
             pledges[from].work.credit -= burn; return burn;
-        } else if (to != address(0)) {
-            // percentage of carry.debit gets
-            // transferred over in proportion
-            // to amount's % of total balance
-            // determine % of total balance
-            // transferred for ROI pro rata
+        } else if (to != address(0)) { // % of carry.debit 
+            // gets transferred over pro rata to amount's % 
+            // of total balance, from it % for ROI transfer
+            // for purposes of "tokenising NFT into ERC20"
             uint ratio = FullMath.mulDiv(WAD,
                     amount, priorBalance);
             require(ratio <= WAD, "not enough");
@@ -249,13 +248,13 @@ contract MO is ReentrancyGuard {
         SUM -= FullMath.min(SUM, credit); // old--
         // may be zero if this is the first time
         // _creditHelper is called for `who`...
-        uint balance = QUID.balanceOf(who);
+        uint balance = GD.balanceOf(who);
         uint debit = pledges[who].carry.debit;
         uint share = FullMath.mulDiv(WAD,
-            balance, QUID.totalSupply());
+            balance, GD.totalSupply());
         credit = share; // workaround from using NFT
-        if (debit > 0 && QUID.currentBatch() > 0) {
-            // projected ROI if QD is $1...
+        if (debit > 0 && GD.currentBatch() > 0) {
+            // projected ROI if GD is $1...
             uint roi = FullMath.mulDiv(WAD,
                     balance - debit, debit);
             // calculate individual ROI over total
@@ -444,16 +443,16 @@ contract MO is ReentrancyGuard {
             (targetETH, targetUSDC) = LiquidityAmounts.getAmountsForLiquidity(
                                              current, lower, upper, liquidity);
         } targetUSDC *= 1e12; // must also divide at the end for precision...
-        address vault = QUID.VAULT();
+        address vault = GD.VAULT();
         if (scaled > targetUSDC) {
             scaled -= targetUSDC;
             ERC4626(vault).deposit(
                 scaled / 1e12, 
-                address(QUID));
+                address(GD));
                 scaled = targetUSDC;
         } else { 
             scaled += ERC4626(vault).convertToAssets(
-                QUID.withdrawUSDC(targetUSDC - scaled)) * 1e12;
+                GD.withdrawUSDC(targetUSDC - scaled)) * 1e12;
         } 
         // x / y = k...
         if (targetUSDC > scaled) {
@@ -483,7 +482,7 @@ contract MO is ReentrancyGuard {
                     block.timestamp, selling, 0)) * 1e12;
             
             ky = FullMath.mulDiv(
-            eth, WAD, scaled);
+                eth, WAD, scaled);
             console.log("!?!?!?!?!?! K !?!?!?!?!?!", k);
             console.log("!?!?!?!?!?! KY !?!?!?!?!?!", ky);
             // require(k == ky, "fail"); // TODO
@@ -524,7 +523,7 @@ contract MO is ReentrancyGuard {
             pledge.weth.credit += in_dollars - deductible;
             // ^ the average dollar value of hedged ETH...
             pledges[address(this)].weth.credit += hedged;
-            require(QUID.get_total_deposits(true) > FullMath.mulDiv(
+            require(GD.get_total_deposits(true) > FullMath.mulDiv(
                 pledges[address(this)].weth.credit, price, WAD), 
                 "over-encumbered"); // ^ ETH hedged 
         }       pledges[beneficiary] = pledge;
@@ -533,7 +532,7 @@ contract MO is ReentrancyGuard {
                              : _repackNFT(amount, in_dollars, price);
     }           
 
-    // call in QD's worth (обнал sans liabilities)
+    // call in GD's worth (обнал sans liabilities)
     // calculates the coverage absorption for each
     // insurer by first determining their share %
     // and then adjusting based on average ROI...
@@ -543,14 +542,14 @@ contract MO is ReentrancyGuard {
     function redeem(uint amount) // into $
         external nonReentrant {
         amount = FullMath.min(
-            QUID.matureBalanceOf(
+            GD.matureBalanceOf(
                        msg.sender), amount);
         require(amount > 0, "let it steep");
         // can be said of tea or a t-bill...
         (uint delta, 
         uint cap) = capitalisation(amount, true);
         uint share = FullMath.mulDiv(WAD, amount,
-                QUID.matureBalanceOf(msg.sender));
+                GD.matureBalanceOf(msg.sender));
    
         uint absorb = FullMath.mulDiv(WAD, 
             pledges[msg.sender].carry.credit, SUM);
@@ -559,17 +558,17 @@ contract MO is ReentrancyGuard {
             pledges[address(this)].carry.credit, WAD); 
     
         /* carry.credit = contribution to weighted
-         SUM of [(QD / total QD) x (ROI / avg ROI)] */
+         SUM of [(GD / total GD) x (ROI / avg ROI)] */
         // see _creditHelper to see how SUM is handled
         if (WAD > share) { // redeeming less than 100%
         // so we recalculate, previous value of absorb
         // is max $ pledge would absorb if redeemed 100%
             absorb = FullMath.mulDiv(absorb, share, WAD);
-        } QUID.turn(msg.sender, amount); // creditHelper, 
+        } GD.turn(msg.sender, amount); // creditHelper, 
         // in turn, will handle decrementing carry.credit
         absorb = FullMath.min(absorb, amount / 3); // cap loss
         amount -= absorb; // this is how liabilities get absorbed
-        amount -= QUID.morph(msg.sender, amount); // L1 & Base
+        amount -= GD.morph(msg.sender, amount); // L1 & Base
         if (amount > 0) { (, uint price,) = _fetch(msg.sender); 
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) { // TODO verify order of ticks 
@@ -589,7 +588,7 @@ contract MO is ReentrancyGuard {
                 delta = amount / 1e12 - amount1; amount = amount1;
                 (amount0, amount1) = _swap(amount0, 0, price);
             }
-            if (delta > 0) { delta = QUID.withdrawUSDC(delta * 1e12); }
+            if (delta > 0) { delta = GD.withdrawUSDC(delta * 1e12); }
             ERC20(USDC).transfer(msg.sender, amount + delta);
             // amount + delta is the liquid USDC in contract
             pledges[address(this)].carry.credit -= absorb;
@@ -597,7 +596,7 @@ contract MO is ReentrancyGuard {
         } 
     }
 
-    // bool quid says if amount is QD
+    // bool quid says if amount is GD
     // ETH can only be withdrawn from
     // pledge.work.debit; if ETH was
     // deposited pledge.weth.debit,
@@ -609,7 +608,7 @@ contract MO is ReentrancyGuard {
             != block.number, "non-flashable");
         (Offer memory pledge, uint price, 
         uint160 sqrtPrice) = _fetch(msg.sender);
-        if (quid) { // amount param in units of QD
+        if (quid) { // amount param in units of GD
             if (msg.value > 0) { 
                 WETH9.deposit{ value: msg.value }();
                 pledges[address(this)].work.credit +=
@@ -624,7 +623,7 @@ contract MO is ReentrancyGuard {
             if (amount > 0) { pledge.work.credit += amount;
                 (, uint cap) = capitalisation(amount, false);
                 amount = dollar_amt_to_qd_amt(cap, amount);
-                QUID.mint(msg.sender, amount, address(QUID));
+                GD.mint(msg.sender, amount, address(GD));
                 pledges[address(this)].carry.credit += amount;
             } // ^ we only add to total supply in this function
         } else { uint withdrawable; // of ETH collateral (work.debit)
@@ -687,7 +686,7 @@ contract MO is ReentrancyGuard {
         external payable nonReentrant { FoldState memory state;
         (Offer memory pledge, uint price, ) = _fetch(beneficiary); 
         // call in collateral that's hedged, or liquidate;
-        // if there is a covered event, QD may be minted,
+        // if there is a covered event, GD may be minted,
         // or simply clear the debt of a long position...
         // "teardrops on the fire of a confession", how
         // "we can serve our [wick nest] or we can serve
@@ -718,7 +717,7 @@ contract MO is ReentrancyGuard {
                 if (state.collat / 10 > state.delta) { // must get
                 // back to minimum CR of 1.1 (safety invariant)...
                     state.repay = (state.collat / 10) - state.delta;
-                } // ^ for using QD minted in order to payoff debt
+                } // ^ for using GD minted in order to payoff debt
             } // delta becomes remaining value after...^^^^^^^^^^^
         } if (amount > 0) { // TODO the script which calls fold()
         // must pass in a sufficient amount param (with sell = true)
@@ -756,7 +755,7 @@ contract MO is ReentrancyGuard {
                     state.cap = FullMath.min(state.minting, state.repay);
                     // ^^^^^^ variable re-used to conserve stack space...
                     pledge.work.credit -= state.cap; // enough to recap?
-                    state.minting -= state.cap; // for QD amount to mint
+                    state.minting -= state.cap; // for GD amount to mint
                     state.repay -= state.cap; // remainder for liquidate
                 }   (, state.cap) = capitalisation(state.delta, false);
                 // new capitalisation including delta of minted supply
@@ -765,7 +764,7 @@ contract MO is ReentrancyGuard {
                 // if not, can't mint delta if under-capitalised...
                     state.minting = dollar_amt_to_qd_amt(
                                 state.cap, state.minting);
-                    QUID.mint(beneficiary, state.minting, address(QUID));
+                    GD.mint(beneficiary, state.minting, address(GD));
                     pledges[address(this)].carry.credit += state.minting;
                 }   else { state.deductible = 0; } 
             }   
@@ -788,8 +787,8 @@ contract MO is ReentrancyGuard {
         if (state.liquidate) { // ⚡️ strikes and the 🏀 court lights get
             (, state.cap) = capitalisation(state.repay, true); // dim
             amount = FullMath.min(dollar_amt_to_qd_amt(state.cap, 
-                state.repay), QUID.balanceOf(beneficiary));
-            QUID.transferFrom(beneficiary, address(this), amount);
+                state.repay), GD.balanceOf(beneficiary));
+            GD.transferFrom(beneficiary, address(this), amount);
             amount = qd_amt_to_dollar_amt(state.cap, amount);
             pledge.work.credit -= amount; // subtract $ value
             state.delta = block.timestamp - pledge.last.credit;
