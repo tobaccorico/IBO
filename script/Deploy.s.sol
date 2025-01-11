@@ -56,7 +56,7 @@ contract Deploy is Script {
 
     // app.morpho.org/vault?vault=0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca&network=base
     ERC4626 public VAULT = ERC4626(0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca);
-    // ERC4626(0xd63070114470f685b75B74D60EEc7c1113d33a3D); // TODO deploy L1
+    // ERC4626(0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458); // TODO deploy L1
    
     ERC20 public FRAX = ERC20(0x17FC002b466eEc40DaE837Fc4bE5c67993ddBd6F); // Arbitrum
     // = ERC20(0x853d955aCEf822Db058eb8505911ED77F175b99e);

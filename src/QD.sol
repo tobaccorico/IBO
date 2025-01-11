@@ -142,8 +142,8 @@ contract Quid is ERC20, // OFTOwnable2Step,
         // this is only *part* of the captalisation()
         returns (uint total) { // handle USDC first
         // TODO on Arbitrum there is no vault yet...
-        total += usdc ? ERC4626(VAULT).maxWithdraw(
-                          address(this)) * 1e12 : 0;
+        // total += usdc ? ERC4626(VAULT).maxWithdraw(
+        //                   address(this)) * 1e12 : 0;
         if (!MO(Moulinette).token1isWETH()) { // L2
             // total += perVault[FRAX].debit; // ARB only
             total += perVault[USDE].debit;
@@ -217,12 +217,16 @@ contract Quid is ERC20, // OFTOwnable2Step,
     // takes $ amount input in units of 1e18...
     function withdrawUSDC(uint amount) public
         onlyGenerators returns (uint withdrawn) {
-        withdrawn = FullMath.min(amount / 1e12, 
-            ERC4626(VAULT).maxWithdraw(
-                         address(this)));
-        if (withdrawn > 0) {
-            ERC4626(VAULT).withdraw(withdrawn, 
-                Moulinette, address(this)); 
+        if (amount > 0) {
+             withdrawn = FullMath.min(amount / 1e12, 
+                ERC4626(VAULT).maxWithdraw(
+                            address(this)));
+            if (withdrawn > 0) {
+                ERC4626(VAULT).withdraw(withdrawn, 
+                    Moulinette, address(this)); 
+            }
+        } else {
+            return 0;
         }
     } // TODO deploy Morpho vault on ARB
 

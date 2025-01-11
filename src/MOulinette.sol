@@ -33,6 +33,8 @@ contract MO is ReentrancyGuard {
     // uint internal _ETH_PRICE; // TODO 
     uint constant WAD = 1e18;
     uint24 constant POOL_FEE = 500;
+    int24 constant MAX_TICK = 887220;
+    int24 constant TICK_SPACING = 10;
     INonfungiblePositionManager NFPM;
     IUniswapV3Pool POOL; ISwapRouter ROUTER;
     uint128 liquidityUnderManagement; // UniV3
@@ -290,8 +292,8 @@ contract MO is ReentrancyGuard {
                 amount0 += collected0; amount1 += collected1;
                 NFPM.burn(ID); 
             }
-        } if (liquidity > 0 || ID == 0) { // 1st time or repack
-            (UPPER_TICK, LOWER_TICK) = _adjustTicks(LAST_TICK);
+        } if (liquidity > 0 || ID == 0) {
+            (LOWER_TICK, UPPER_TICK) = _adjustTicks(LAST_TICK);
             if (token1isWETH) { (amount1, amount0) = _swap(
                                  amount1, amount0, price);
             } else { (amount0, amount1) = _swap(
@@ -376,33 +378,37 @@ contract MO is ReentrancyGuard {
                         (amount0, amount1) = _collect(0);
     }
     function _adjustToNearestIncrement(int24 input)
-        internal pure returns (int24 result) {
-        int24 remainder = input % 10; // 10
-        // is the tick width for WETH<>USDC...
-        if (remainder == 0) { result = input;
-        } else if (remainder >= 5) { // round up
-            result = input + (10 - remainder);
-        } else { // round down instead...
-            result = input - remainder;
-        } // just here as sanity check
-        if (result > 887220) { // max
-            return 887220;
-        } else if (-887220 > result) {
-            return -887220;
-        }   return result;
-    } // adjust to the nearest multiple of our tick width
-    function _adjustTicks(int24 twap) internal pure returns
-        (int24 adjustedIncrease, int24 adjustedDecrease) {
-        // dynamic width of the gap depending on % delta vol TODO
-        int256 upper = int256(WAD + (WAD / 28));
-        int256 lower = int256(WAD - (WAD / 28));
-        int24 increase = int24((int256(twap) * upper) / int256(WAD));
-        int24 decrease = int24((int256(twap) * lower) / int256(WAD));
-        adjustedIncrease = _adjustToNearestIncrement(increase);
-        adjustedDecrease = _adjustToNearestIncrement(decrease);
-        if (adjustedIncrease == adjustedDecrease) { // edge case
-            adjustedIncrease += 10;
+        internal pure returns (int24) {
+        int24 remainder = input % TICK_SPACING;
+        if (remainder == 0) return input;
+        
+        int24 result = remainder >= TICK_SPACING / 2
+            ? input + (TICK_SPACING - remainder)
+            : input - remainder;
+        
+        // Clamp to valid tick range
+        return result > MAX_TICK ? MAX_TICK :
+            result < -MAX_TICK ? -MAX_TICK :
+            result;
+    }
+
+    function _adjustTicks(int24 currentTick) internal 
+        pure returns (int24 lower, int24 upper) {
+        // WINDing stairs, leading to the mid-chamber,
+        // consisted of three, five, and seven steps.
+        int256 tickDelta = (int256(currentTick) * 357) / 10000;
+        tickDelta = tickDelta == 0 ? TICK_SPACING : tickDelta;
+    
+        upper = _adjustToNearestIncrement(
+            currentTick + int24(tickDelta));
+        lower = _adjustToNearestIncrement(
+            currentTick - int24(tickDelta));
+        
+        // Ensure minimum spacing between ticks
+        if (upper == lower) {
+            upper += TICK_SPACING;
         }
+        return (lower, upper);
     }
 
     function _swap(uint eth, uint usdc, 
@@ -422,17 +428,17 @@ contract MO is ReentrancyGuard {
         //             USDC, POOL_FEE, address(WETH9)), address(this),
         //             block.timestamp, selling, 0));
         // }
-        uint160 lower = TickMath.getSqrtPriceAtTick(LOWER_TICK);
-        uint160 upper = TickMath.getSqrtPriceAtTick(UPPER_TICK);
-        uint160 current = TickMath.getSqrtPriceAtTick(LAST_TICK);
+        (int24 tick_lower, int24 tick_upper) = _adjustTicks(LAST_TICK);
+        uint160 lower = TickMath.getSqrtPriceAtTick(tick_lower);
+        uint160 upper = TickMath.getSqrtPriceAtTick(tick_upper);
+        uint160 current = TickMath.getSqrtPriceAtTick(LAST_TICK); 
         uint128 liquidity; uint scaled = usdc * 1e12; // precision
         uint targetETH; uint targetUSDC;
-        if (token1isWETH) { // TODO check ticks order for getLiquidity
+        if (token1isWETH) {
             liquidity = LiquidityAmounts.getLiquidityForAmount1(
-                                            lower, current, eth);
+                                                current, upper, eth);
             (targetUSDC, targetETH) = LiquidityAmounts.getAmountsForLiquidity(
                                              current, lower, upper, liquidity);
-            
         } else { liquidity = LiquidityAmounts.getLiquidityForAmount0(
                                                 current, upper, eth);
             (targetETH, targetUSDC) = LiquidityAmounts.getAmountsForLiquidity(
@@ -453,13 +459,10 @@ contract MO is ReentrancyGuard {
         if (targetUSDC > scaled) {
             uint k = FullMath.mulDiv(
             targetETH, WAD, targetUSDC);
-            console.log("!>!>!>>!>!>!>!>>!>!> K  !>!>!>>!>!>!>!>>!>!>", k);
             uint denom = WAD + FullMath.mulDiv(
                                 k, price, WAD);
-            console.log("!>!>!>>!>!>!>!>>!>!> denom !>!>!>>!>!>!>!>>!>!>", denom);
-            console.log("!>!>!>>!>!>!>!>>!>!> scaled !>!>!>>!>!>!>!>>!>!>", scaled + 1);
-            uint ky =  k * (scaled + 1);
-            console.log("!>!>!>>!>!>!>!>>!>!> KY  !>!>!>>!>!>!>!>>!>!>", ky);
+        
+            uint ky = k * (scaled + 1);
             // assume eth is X and usdc is Y...
             // our formula is (x - ky)/(1 + kp);
             // we are selling X to buy Y, where
@@ -470,9 +473,7 @@ contract MO is ReentrancyGuard {
             // x - n = ky + knp
             // x - ky = n + knp
             // x - ky = n(1 + kp)
-             console.log("!>!>!>>!>!>!>!>>!>!> eth !>!>!>>!>!>!>!>>!>!>", eth);
-            uint selling = (eth - ky) / denom;
-            console.log("!>!>!>>!>!>!>!>>!>!> selling  !>!>!>>!>!>!>!>>!>!>", selling);
+            uint selling = FullMath.mulDiv(WAD, eth - ky,  denom);
             // console.log("selling...", selling);
             // TODO maybe divide by WAD again
             eth -= selling; 
@@ -480,9 +481,11 @@ contract MO is ReentrancyGuard {
                 ISwapRouter.ExactInputParams(abi.encodePacked(
                     address(WETH9), POOL_FEE, USDC), address(this),
                     block.timestamp, selling, 0)) * 1e12;
+            
+            ky = FullMath.mulDiv(
+            eth, WAD, scaled);
+            require(k == ky, "fail");
         } 
-        console.log(" !>!>!>>!>!>!>!>>!>!> AFTER eth  !>!>!>>!>!>!>!>>!>!>", eth);
-        console.log(" !>!>!>>!>!>!>!>>!>!> AFTER usdc !>!>!>>!>!>!>!>>!>!>", scaled / 1e12);
         return (eth, scaled / 1e12);
     }
 
