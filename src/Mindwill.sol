@@ -108,7 +108,7 @@ contract MO is ReentrancyGuard {
     function setMetrics(uint avg_roi) 
         public onlyQuid { AVG_ROI = avg_roi;
     } // TODO add more informative metrics...
-    function dollar_amt_to_qd_amt(uint cap, 
+    function dollar_amt_to_gd_amt(uint cap, 
         uint amt) public view returns (uint) {
             if (cap == 0) { 
                 (, cap) = capitalisation(0, false);
@@ -117,7 +117,7 @@ contract MO is ReentrancyGuard {
               100 + (100 - cap), 100);
     }
     // not same as eponymous function in GD
-    function qd_amt_to_dollar_amt(uint cap,
+    function gd_amt_to_dollar_amt(uint cap,
         uint amt) public view returns (uint) {
         if (cap == 0) {
             (, cap) = capitalisation(0, false);
@@ -223,7 +223,7 @@ contract MO is ReentrancyGuard {
             (, uint cap) = capitalisation(
                             amount, true);
             uint burn = FullMath.min(
-                qd_amt_to_dollar_amt(
+                gd_amt_to_dollar_amt(
                 cap, amount), credit);
 
             pledges[from].work.credit -= burn; return burn;
@@ -622,7 +622,7 @@ contract MO is ReentrancyGuard {
             haircut - pledge.work.credit);
             if (amount > 0) { pledge.work.credit += amount;
                 (, uint cap) = capitalisation(amount, false);
-                amount = dollar_amt_to_qd_amt(cap, amount);
+                amount = dollar_amt_to_gd_amt(cap, amount);
                 GD.mint(msg.sender, amount, address(GD));
                 pledges[address(this)].carry.credit += amount;
             } // ^ we only add to total supply in this function
@@ -762,7 +762,7 @@ contract MO is ReentrancyGuard {
                 if (state.minting > state.delta || state.cap > 64) { // TODO guage
                 // minting will equal delta unless it's a sell, and 
                 // if not, can't mint delta if under-capitalised...
-                    state.minting = dollar_amt_to_qd_amt(
+                    state.minting = dollar_amt_to_gd_amt(
                                 state.cap, state.minting);
                     GD.mint(beneficiary, state.minting, address(GD));
                     pledges[address(this)].carry.credit += state.minting;
@@ -786,10 +786,10 @@ contract MO is ReentrancyGuard {
         // in small doses, so don't think that I'm pushing you away, when
         if (state.liquidate) { // ⚡️ strikes and the 🏀 court lights get
             (, state.cap) = capitalisation(state.repay, true); // dim
-            amount = FullMath.min(dollar_amt_to_qd_amt(state.cap, 
+            amount = FullMath.min(dollar_amt_to_gd_amt(state.cap, 
                 state.repay), GD.balanceOf(beneficiary));
             GD.transferFrom(beneficiary, address(this), amount);
-            amount = qd_amt_to_dollar_amt(state.cap, amount);
+            amount = gd_amt_to_dollar_amt(state.cap, amount);
             pledge.work.credit -= amount; // subtract $ value
             state.delta = block.timestamp - pledge.last.credit;
             if (pledge.work.credit > state.collat // ^ time

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity >=0.8.4 <0.9.0;
 import {GHODollar} from "../src/GD.sol";
-import {MO} from "../src/mindwill.sol";
+import {MO} from "../src/Mindwill.sol";
 
 import {mockVault} from "../src/mockVault.sol";
 import {mockToken} from "../src/mockToken.sol";
