@@ -179,7 +179,7 @@ export const Mint = () => {
   const qdAmountTousdeAmt = useCallback(async (qdAmount, delay = 0) => {
     const qdAmountBN = qdAmount ? qdAmount.toString() : 0
 
-    return quid ? await quid.methods.qd_amt_to_dollar_amt(qdAmountBN).call() : 0
+    return quid ? await quid.methods.gd_amt_to_dollar_amt(qdAmountBN).call() : 0
   }, [quid])
 
   const handleChangeValue = useCallback((e) => {

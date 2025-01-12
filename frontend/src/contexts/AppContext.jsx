@@ -139,7 +139,7 @@ export const AppContextProvider = ({ children }) => {
 
         const qdAmount = parseUnits("1", 18).toBigInt()
 
-        const data = await quid.methods.qd_amt_to_dollar_amt(qdAmount, currentTimestamp).call()
+        const data = await quid.methods.gd_amt_to_dollar_amt(qdAmount, currentTimestamp).call()
 
         const value = Number(formatUnits(data, 18) * 100)
 

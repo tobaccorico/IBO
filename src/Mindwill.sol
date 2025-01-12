@@ -571,7 +571,7 @@ contract MO is ReentrancyGuard {
         amount -= GD.morph(msg.sender, amount); // L1 & Base
         if (amount > 0) { (, uint price,) = _fetch(msg.sender); 
             uint amount0; uint amount1; uint128 liquidity;
-            if (token1isWETH) { // TODO verify order of ticks 
+            if (token1isWETH) {
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
                             TickMath.getSqrtPriceAtTick(LAST_TICK),
                             TickMath.getSqrtPriceAtTick(UPPER_TICK), 

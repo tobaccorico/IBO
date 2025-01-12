@@ -28,7 +28,7 @@ interface IERC721Receiver {
         uint256 tokenId,
         bytes calldata data
     ) external returns (bytes4);
-} // http://42.fr Piscine
+} 
 import "./Mindwill.sol";
 contract GHODollar is ERC20, // OFTOwnable2Step, 
     IERC721Receiver, ReentrancyGuard { 
@@ -275,8 +275,6 @@ contract GHODollar is ERC20, // OFTOwnable2Step,
         public view returns (uint) { // in 3
         uint batch = currentBatch(); // 1-33
         if (batch < 8) { return 0; } // TODO
-        // 50 cents sets the scene 
-        // о суете это сын or sin
         else if (batch < 33) {
             return batch - 8;
         } else { return 24; }
