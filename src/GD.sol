@@ -49,7 +49,7 @@ contract Good is ERC20, // OFTOwnable2Step,
     mapping(address => address) internal vaults;
     mapping (address => bool[24]) public hasVoted;
     // token-holders vote for deductibles, their
-    // QD balances are applied to  total weights
+    // GD balances are applied to  total weights
     // for voted % (weights are the balances)...
     // index 0 is the largest possible vote = 9%
     // index 89 represents the smallest one = 1%
@@ -92,7 +92,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         address _crv, address _scrv)
         /* OFTOwnable2Step("QU!D", "QZ", 
         LZ, QUID) { VAULT = _vault; */
-        ERC20("QU!D", "QD", 18) { // $
+        ERC20("QU!D", "GD", 18) { // $
         START = block.timestamp; // now
         VAULT = _vault; ID = _morpho;
         deployed = START; USDC = _usdc; 
@@ -234,7 +234,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             (block.timestamp - START) / 1 days
         );  amount = FullMath.mulDiv((in_days * 
             PENNY + START_PRICE), gd_amt, WAD);
-    } // get the current ^^^^ to mint() QD...
+    } // get the current ^^^^ to mint() GD...
     function get_total_supply_cap()
         public view returns (uint) {
         uint batch = currentBatch();
@@ -251,7 +251,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             this.morph(QUID, keep);
             _batchUp(currentBatch(), 
                 QUID, BACKEND);
-        } // 16M QD over 24... 
+        } // 16M GD over 24... 
     } 
     function _batchUp(uint batch, 
         address to, uint cut) internal {
@@ -278,7 +278,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         else if (batch < 33) {
             return batch - 8;
         } else { return 24; }
-    }
+    } // in 2028, 
     function matureBalanceOf(address account)
         public view returns (uint total) {
         uint batches = matureBatches();
@@ -321,12 +321,12 @@ contract Good is ERC20, // OFTOwnable2Step,
     }
     function _transferHelper(address from,
         address to, uint amount) internal {
-        require(amount > WAD, "minimum 1 QD");
+        require(amount > WAD, "minimum 1 GD");
         // int or tx reverts when we go below 0 in loop
         int i = to == address(0) ? int(matureBatches()) :
                                       int(currentBatch());
         while (amount > 0 && i >= 0) { uint k = uint(i);
-            uint amt = consideration[from][k]; // QD...
+            uint amt = consideration[from][k]; // GD...
             if (amt > 0) { 
                 amt = FullMath.min(amount, amt);
                 consideration[from][k] -= amt;
@@ -429,7 +429,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         address token /*, uint when */) public 
         nonReentrant { uint batch;
         if (token == address(this)) {
-            batch = currentBatch(); _mint(pledge, amount); // QD
+            batch = currentBatch(); _mint(pledge, amount); // GD
             consideration[pledge][batch] += amount; // redeem ^
             require(msg.sender == Mindwill, "authorisation");
         }   else if (block.timestamp <= START + DAYS 
@@ -439,7 +439,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                     * MAX_PER_DAY >= Piscine[batch][42].credit 
                     + amount, "cap"); uint price = in_days * 
                                         PENNY + START_PRICE;
-                uint cost = FullMath.mulDiv( // to mint QD
+                uint cost = FullMath.mulDiv( // to mint GD
                         price, amount, WAD); _deposit(
                                 pledge, token, cost);
                 consideration[pledge][batch] += amount;

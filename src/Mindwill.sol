@@ -86,12 +86,10 @@ contract MO is ReentrancyGuard {
         LAST_TICK = tick; uint price = getPrice(sqrtPrice);
         return (pledge, price, sqrtPrice);
     } 
-    function setQuid(address _quid) external { 
-        require(address(GD) == 
-                address(0), "set"); 
-        GD = Good(_quid);
-        require(GD.Mindwill() == 
-            address(this), "42");
+    function setQuid(address _quid) 
+        external { require(address(GD) == 
+            address(0), "set"); GD = Good(_quid);
+        require(GD.Mindwill() == address(this), "42");
     }
     modifier onlyQuid {
         require(msg.sender
@@ -133,7 +131,7 @@ contract MO is ReentrancyGuard {
           _ETH_PRICE = getPrice(sqrtPriceX96);
         } else { uint delta = _ETH_PRICE / 5;
             _ETH_PRICE = up ? _ETH_PRICE + delta
-                            : _ETH_PRICE - delta;
+                              : _ETH_PRICE - delta;
         } // TODO remove this testing function...
     }
 
@@ -144,6 +142,7 @@ contract MO is ReentrancyGuard {
         POOL = IUniswapV3Pool(_pool);
         ROUTER = ISwapRouter(_router);
         NFPM = INonfungiblePositionManager(_nfpm);
+        token1isWETH = address(token0) == USDC;
         token0 = ERC20(POOL.token0());
         token1 = ERC20(POOL.token1());
         token0.approve(_router, 
@@ -154,13 +153,11 @@ contract MO is ReentrancyGuard {
             type(uint256).max);
         token1.approve(_nfpm,
             type(uint256).max);
-        token1isWETH = address(token0) == USDC;
-        // needed as order is swapped on Base,
-        // and Arbitrum; but not on USDT<>BNB
+        
     } 
 
     // present value of the expected cash flows...
-    function capitalisation(uint qd, bool burn)
+    function capitalisation(uint quid, bool burn)
         public view returns (uint, uint) { // ^ in GD
         (uint160 sqrtPriceX96,,,,,,) = POOL.slot0();
         uint price = getPrice(sqrtPriceX96); // in $
@@ -180,7 +177,7 @@ contract MO is ReentrancyGuard {
         // business float: working capital (LP)
         (int24 tick_lower, 
          int24 tick_upper) = _adjustTicks(LAST_TICK);
-        if (token1isWETH) {
+        if (token1isWETH) { // make sure LAST_TICK is not zero...
             (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
                 TickMath.getSqrtPriceAtTick(tick_lower),
@@ -198,12 +195,10 @@ contract MO is ReentrancyGuard {
             FullMath.mulDiv(pledge.weth.credit, 
                  price, WAD)); // ^ hedged ETH
         assets += GD.get_total_deposits(true);
-        // total only includes GD minted for a 
-        // discount in exchange for term deposit
         uint total = GD.totalSupply(); 
-        if (qd > 0) { 
+        if (quid > 0) { 
             total = (burn) ? 
-            total - qd : total + qd;
+            total - quid : total + quid;
         }   if (assets >= total) 
             { return (assets - total, 100); }
             else { return ((total - assets),
@@ -278,8 +273,8 @@ contract MO is ReentrancyGuard {
             // not the first time _repackNFT is called
             if ((LAST_TICK > UPPER_TICK || LAST_TICK < LOWER_TICK) &&
             // "to improve is to change, to perfect is to change often"
-            block.timestamp - pledges[address(this)].last.credit >= 10 minutes
-                && last != block.number) { // TODO comment out for local testing 
+            block.timestamp - pledges[address(this)].last.credit >= 10 minutes) {
+                // && last != block.number) { // TODO comment out for local testing 
                 // we want to make sure that all of the WETH deposited to this
                 // contract is always in range (collecting), and range is ~7%
                 // below and above tick, as voltage regulators watch currents
@@ -301,7 +296,7 @@ contract MO is ReentrancyGuard {
             (ID, liquidityUnderManagement,,) = NFPM.mint(
                 INonfungiblePositionManager.MintParams({ token0: address(token0),
                     token1: address(token1), fee: POOL_FEE, tickLower: LOWER_TICK,
-                    tickUpper: UPPER_TICK, amount0Desired: amount0,
+                        tickUpper: UPPER_TICK, amount0Desired: amount0,
                     amount1Desired: amount1, amount0Min: 0, amount1Min: 0,
                     recipient: address(this), deadline: block.timestamp }));
                     pledges[address(this)].last.credit = block.timestamp;
@@ -393,7 +388,7 @@ contract MO is ReentrancyGuard {
 
     function _adjustTicks(int24 currentTick) internal 
         pure returns (int24 lower, int24 upper) {
-        // WINDing stairs, leading to the mid-chamber,
+        // Minding stairs, leading to the mid-chamber,
         // consisted of three, five, and seven steps.
         int256 tickDelta = (int256(currentTick) * 357) / 10000;
         tickDelta = tickDelta == 0 ? TICK_SPACING : tickDelta;
@@ -402,12 +397,11 @@ contract MO is ReentrancyGuard {
             currentTick + int24(tickDelta));
         lower = _adjustToNearestIncrement(
             currentTick - int24(tickDelta));
-        
-        // Ensure minimum spacing between ticks
-        if (upper == lower) {
+        // Ensure minimum 
+        // spacing between 
+        if (upper == lower) { 
             upper += TICK_SPACING;
-        }
-        return (lower, upper);
+        }   return (lower, upper);
     }
 
     function _swap(uint eth, uint usdc, 
@@ -499,7 +493,7 @@ contract MO is ReentrancyGuard {
         pledges[address(this)].carry.credit += 
         minted - cost; _creditHelper(to); 
         // affects ROI, thus redemption
-    }
+    } // ты что-то варишь, тот товарищ?
 
     // this function will take deposits of ETH only...
     function deposit(address beneficiary, uint amount, 
@@ -797,8 +791,8 @@ contract MO is ReentrancyGuard {
             pledge.work.credit -= amount; // subtract $ value
             state.delta = block.timestamp - pledge.last.credit;
             if (pledge.work.credit > state.collat // ^ time
-                && state.delta >= 10 minutes) {
-                if (pledge.work.credit > WAD * 10) {
+                && state.delta >= 10 minutes) { // on the... 
+                if (pledge.work.credit > WAD * 10) { // dime
                     // liquidation bot doesn't
                     // skip a chance to fold()
                     state.delta /= 10 minutes;
