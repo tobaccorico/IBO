@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity >=0.8.4 <0.9.0;
-import {GHODollar} from "./GD.sol";
+import {Good} from "./GD.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
@@ -43,7 +43,7 @@ contract MO is ReentrancyGuard {
         uint average_price; uint average_value;
         uint deductible; uint cap; uint minting;
         bool liquidate; uint repay; uint collat;
-    } GHODollar GD; // tethered to MO contract
+    } Good GD; // tethered to MO contract
 
     function get_info(address who) view
         external returns (uint, uint) {
@@ -89,7 +89,7 @@ contract MO is ReentrancyGuard {
     function setQuid(address _quid) external { 
         require(address(GD) == 
                 address(0), "set"); 
-        GD = GHODollar(_quid);
+        GD = Good(_quid);
         require(GD.Mindwill() == 
             address(this), "42");
     }
@@ -435,7 +435,7 @@ contract MO is ReentrancyGuard {
         uint targetETH; uint targetUSDC;
         if (token1isWETH) {
             liquidity = LiquidityAmounts.getLiquidityForAmount1(
-                                                current, upper, eth);
+                                            current, upper, eth);
             (targetUSDC, targetETH) = LiquidityAmounts.getAmountsForLiquidity(
                                              current, lower, upper, liquidity);
         } else { liquidity = LiquidityAmounts.getLiquidityForAmount0(
@@ -449,12 +449,11 @@ contract MO is ReentrancyGuard {
             ERC4626(vault).deposit(
                 scaled / 1e12, 
                 address(GD));
-                scaled = targetUSDC;
+            scaled = targetUSDC;
         } else { 
             scaled += ERC4626(vault).convertToAssets(
                 GD.withdrawUSDC(targetUSDC - scaled)) * 1e12;
         } 
-        // x / y = k...
         if (targetUSDC > scaled) {
             uint k = FullMath.mulDiv(
             targetETH, WAD, targetUSDC);
@@ -472,7 +471,8 @@ contract MO is ReentrancyGuard {
             // x - n = ky + knp
             // x - ky = n + knp
             // x - ky = n(1 + kp)
-            uint selling = FullMath.mulDiv(WAD, eth - ky,  denom);
+            uint selling = FullMath.mulDiv(
+                    WAD, eth - ky,  denom);
             // console.log("selling...", selling);
             // TODO maybe divide by WAD again
             eth -= selling; 
@@ -483,10 +483,10 @@ contract MO is ReentrancyGuard {
             
             ky = FullMath.mulDiv(
                 eth, WAD, scaled);
-            console.log("!?!?!?!?!?! K !?!?!?!?!?!", k);
-            console.log("!?!?!?!?!?! KY !?!?!?!?!?!", ky);
-            // require(k == ky, "fail"); // TODO
-            require(false, "fail");
+            
+            require(FullMath.mulDiv(
+                100, ky - k, k) < 7, 
+                "margin of error"); 
         } 
         return (eth, scaled / 1e12);
     }
@@ -540,7 +540,9 @@ contract MO is ReentrancyGuard {
     // "you never count your money while you're
     // sittin' at the table...there'll be time
     function redeem(uint amount) // into $
-        external nonReentrant {
+        external nonReentrant { // TODO param
+        // which allows to facilitate mint 
+        // GHO instead of dispersing stables
         amount = FullMath.min(
             GD.matureBalanceOf(
                        msg.sender), amount);

@@ -30,7 +30,7 @@ interface IERC721Receiver {
     ) external returns (bytes4);
 } 
 import "./Mindwill.sol";
-contract GHODollar is ERC20, // OFTOwnable2Step, 
+contract Good is ERC20, // OFTOwnable2Step, 
     IERC721Receiver, ReentrancyGuard { 
     using SafeTransferLib for ERC20;
     using SafeTransferLib for ERC4626;

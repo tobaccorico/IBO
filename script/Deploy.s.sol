@@ -1,6 +1,6 @@
 
 pragma solidity 0.8.25;
-import {GHODollar} from "../src/GD.sol";
+import {Good} from "../src/GD.sol";
 import {MO} from "../src/mindwill.sol";
 import "lib/forge-std/src/console.sol";
 import {Script} from "lib/forge-std/src/Script.sol";
@@ -19,7 +19,7 @@ import {MorphoChainlinkOracleV2} from "../src/imports/morpho/MorphoChainlinkOrac
 import {INonfungiblePositionManager} from "../src/imports/INonfungiblePositionManager.sol";
 import {IMorphoChainlinkOracleV2Factory} from "../src/imports/morpho/IMorphoChainlinkOracleV2Factory.sol";
 contract Deploy is Script {
-    GHODollar public quid; 
+    Good public quid; 
     MO public mindwill;
     
     ERC20 public USDC = ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); 
@@ -175,7 +175,7 @@ contract Deploy is Script {
         //     deadline: block.timestamp + 3600
         // }));
        
-        quid = new GHODollar(address(mindwill), // TODO deploy Morpho
+        quid = new Good(address(mindwill), // TODO deploy Morpho
             address(USDC), address(VAULT), ID, // vault on ARB
             address(USDE), address(SUSDE),
             address(FRAX), address (SFRAX),

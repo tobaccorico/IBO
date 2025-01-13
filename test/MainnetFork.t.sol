@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity >=0.8.4 <0.9.0;
-import {GHODollar} from "../src/GD.sol";
+import {Good} from "../src/GD.sol";
 import {MO} from "../src/Mindwill.sol";
 
 import {mockVault} from "../src/mockVault.sol";
@@ -23,7 +23,7 @@ interface ICollection is IERC721 {
     external view returns (uint);
 } 
 contract MainnetFork is Test {
-    GHODollar public quid;
+    Good public quid;
     MO public mindwill;
     mockToken public DAI; // = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     mockVault public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
@@ -69,7 +69,7 @@ contract MainnetFork is Test {
     uint public dub_dub_in_eth = 10000000000000000; // ~$40
     
     function setUp() public {
-        uint256 mainnetFork = vm.createFork("https://rpc.ankr.com/eth", 21601803);
+        uint256 mainnetFork = vm.createFork("https://rpc.ankr.com/eth", 21601003);
         vm.selectFork(mainnetFork);
 
         vm.deal(User01, 1_000_000_000_000_000 ether);
@@ -91,7 +91,7 @@ contract MainnetFork is Test {
             address(nfpm), address(pool), 
             address(router)
         );
-        quid = new GHODollar(address(mindwill), 
+        quid = new Good(address(mindwill), 
         // app.morpho.org/vault?vault=0xd63070114470f685b75B74D60EEc7c1113d33a3D&network=mainnet
             address(usdc), 0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458, // Guantlet Morpho Vault
             0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
