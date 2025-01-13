@@ -78,7 +78,7 @@ contract MO is ReentrancyGuard {
     // carry is relevant in redemption
     // recall the 3rd Delphic maxim...
     mapping (address => Offer) pledges;
-    function _fetch(address beneficiary) internal 
+    function fetch(address beneficiary) public 
         returns (Offer memory, uint, uint160) { 
         Offer memory pledge = pledges[beneficiary];
         (uint160 sqrtPrice, int24 tick,,,,,) = POOL.slot0();
@@ -140,9 +140,9 @@ contract MO is ReentrancyGuard {
         POOL = IUniswapV3Pool(_pool);
         ROUTER = ISwapRouter(_router);
         NFPM = INonfungiblePositionManager(_nfpm);
-        token1isWETH = address(token0) == USDC;
         token0 = ERC20(POOL.token0());
         token1 = ERC20(POOL.token1());
+        token1isWETH = address(token0) == USDC;
         token0.approve(_router, 
             type(uint256).max);
         token1.approve(_router,
@@ -265,6 +265,7 @@ contract MO is ReentrancyGuard {
         uint price) internal { uint128 liquidity;
         uint last = flashLoanProtect[address(this)];
         flashLoanProtect[address(this)] = block.number;
+        (LOWER_TICK, UPPER_TICK) = _adjustTicks(LAST_TICK);
         if (pledges[address(this)].last.credit != 0) { 
             // not the first time _repackNFT is called
             if ((LAST_TICK > UPPER_TICK || LAST_TICK < LOWER_TICK) &&
@@ -283,16 +284,16 @@ contract MO is ReentrancyGuard {
                 NFPM.burn(ID); 
             }
         } if (liquidity > 0 || ID == 0) {
-            (LOWER_TICK, UPPER_TICK) = _adjustTicks(LAST_TICK);
-            if (token1isWETH) { (amount1, amount0) = _swap(
-                                 amount1, amount0, price);
-            } else { (amount0, amount1) = _swap(
-                      amount0, amount1, price); 
-            } 
-            (ID, liquidityUnderManagement,,) = NFPM.mint(
-                INonfungiblePositionManager.MintParams({ token0: address(token0),
-                    token1: address(token1), fee: POOL_FEE, tickLower: LOWER_TICK,
-                        tickUpper: UPPER_TICK, amount0Desired: amount0,
+            if (ID != 0) {
+                if (token1isWETH) { (amount1, amount0) = _swap(
+                                     amount1, amount0, price);
+                } else { (amount0, amount1) = _swap(
+                          amount0, amount1, price); 
+                } 
+            }   (ID, liquidityUnderManagement,,) = NFPM.mint(
+                    INonfungiblePositionManager.MintParams({ token0: address(token0),
+                        token1: address(token1), fee: POOL_FEE, tickLower: LOWER_TICK,
+                            tickUpper: UPPER_TICK, amount0Desired: amount0,
                     amount1Desired: amount1, amount0Min: 0, amount1Min: 0,
                     recipient: address(this), deadline: block.timestamp }));
                     pledges[address(this)].last.credit = block.timestamp;
@@ -400,7 +401,10 @@ contract MO is ReentrancyGuard {
     }
     function _swap(uint eth, uint usdc, 
         uint price) internal returns (uint, uint) {
+        console.log("###########      USDC      ###########", usdc);
+        console.log("###########      eth      ###########", eth);
         uint usd = FullMath.mulDiv(eth, price, WAD);
+        console.log("###########      usd      ###########", usd);
         // if we assumed a 1:1 ratio of eth value
         // to usdc, then this is how'd we balance:
         // int delta = (int(usd) - int(scaled))
@@ -433,6 +437,8 @@ contract MO is ReentrancyGuard {
         } targetUSDC *= 1e12; // must also divide at the end for precision...
         address vault = GD.VAULT();
         // TODO in mainnet fork test
+        console.log("targetUSDC", targetUSDC);
+        console.log("targetETH", targetETH);
         if (scaled > targetUSDC) { // use
             scaled -= targetUSDC; // prank 
             console.log("m8 !", scaled); // USDC
@@ -493,7 +499,7 @@ contract MO is ReentrancyGuard {
     function deposit(address beneficiary, uint amount, 
         bool long) external nonReentrant payable { 
         uint in_dollars; (Offer memory pledge, 
-         uint price, ) = _fetch(beneficiary);
+         uint price, ) = fetch(beneficiary);
         if (amount > 0) { WETH9.transferFrom(
             msg.sender, address(this), amount);
         } else { require(msg.value > 0, "ETH!"); }
@@ -559,7 +565,7 @@ contract MO is ReentrancyGuard {
         absorb = FullMath.min(absorb, amount / 3); // cap loss
         amount -= absorb; // this is how liabilities get absorbed
         amount -= GD.morph(msg.sender, amount); // L1 & Base
-        if (amount > 0) { (, uint price,) = _fetch(msg.sender); 
+        if (amount > 0) { (, uint price,) = fetch(msg.sender); 
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) {
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
@@ -597,7 +603,7 @@ contract MO is ReentrancyGuard {
         require(flashLoanProtect[msg.sender] 
             != block.number, "non-flashable");
         (Offer memory pledge, uint price, 
-        uint160 sqrtPrice) = _fetch(msg.sender);
+        uint160 sqrtPrice) = fetch(msg.sender);
         if (quid) { // amount param in units of GD
             if (msg.value > 0) { 
                 WETH9.deposit{ value: msg.value }();
@@ -674,7 +680,7 @@ contract MO is ReentrancyGuard {
     // the cold and damp...know when to hold 'em...know when to...
     function fold(address beneficiary, uint amount, bool sell)
         external payable nonReentrant { FoldState memory state;
-        (Offer memory pledge, uint price, ) = _fetch(beneficiary); 
+        (Offer memory pledge, uint price, ) = fetch(beneficiary); 
         // call in collateral that's hedged, or liquidate;
         // if there is a covered event, GD may be minted,
         // or simply clear the debt of a long position...

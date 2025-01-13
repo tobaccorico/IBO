@@ -102,6 +102,8 @@ contract MainnetFork is Test {
             address(CRVUSD), address(SCRVUSD)
         );  mindwill.setQuid(address(quid));
         mindwill.set_price_eth(false, true);
+        (,uint price,) = mindwill.fetch(User01);
+        console.log("?!?!?!?!? price ?!?!?!?!?", price);
         // TODO uncomment
     }
     
@@ -169,6 +171,8 @@ contract MainnetFork is Test {
 
         (quid_credit, quid_debit) = mindwill.get_info(User01);
         console.log("User1...after transfer", quid_credit, quid_debit);
+
+        console.log("<><><><><><><>  total        <><><><><><><><>", quid.get_total_deposits(true));
         
         vm.startPrank(User01);
         

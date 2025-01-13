@@ -28,7 +28,7 @@ interface IERC721Receiver {
         uint256 tokenId,
         bytes calldata data
     ) external returns (bytes4);
-} 
+} // in the windmills of my mind
 import "./Mindwill.sol";
 contract Good is ERC20, // OFTOwnable2Step, 
     IERC721Receiver, ReentrancyGuard { 
@@ -154,7 +154,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             total += perVault[DAI].debit;
             total += perVault[CRVUSD].debit;
             total += FullMath.mulDiv(_getPrice(SCRVUSD),
-                        perVault[SCRVUSD].debit, WAD);
+                        perVault[SCRVUSD].debit, WAD); 
         } /* TODO uncomment for Ethereum L1 mainnet */
         else { // includes collateral deployed in ID,
             // as Pod.credit, initially only for SUSDE,
@@ -173,21 +173,21 @@ contract Good is ERC20, // OFTOwnable2Step,
                      ERC4626(SFRAX).maxWithdraw(address(this)));
             total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
                 perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
-                     ERC4626(SCRVUSD).maxWithdraw(address(this)));
+                     ERC4626(SCRVUSD).maxWithdraw(address(this)));    
         } // commented out for compilation purposes (less bytecode)
     } // TODO figure out which one of these causing issues
     function _deposit(address from,
         address token, uint amount)
         internal returns (uint usd) {
-        bool l2 = !MO(Mindwill).token1isWETH();
+        bool l1 = MO(Mindwill).token1isWETH();
         bool isDollar = false; // $ is ^ on l2
         if (token == SCRVUSD || // token == SFRAX || TODO 
             token == SUSDS || // token == SDAI || L1...
             token == SUSDE) { isDollar = true;
-            if (!l2) { amount = FullMath.min(
-                ERC4626(token).allowance(
-                    from, address(this)),
-                ERC4626(token).convertToShares(amount));
+            if (l1) { amount = FullMath.min(
+                    ERC4626(token).allowance(
+                        from, address(this)),
+                    ERC4626(token).convertToShares(amount));
                 usd = ERC4626(token).convertToAssets(amount);
                       ERC4626(token).transferFrom(msg.sender,
                                       address(this), amount);
@@ -204,7 +204,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                                 from, address(this)));
                    ERC20(token).transferFrom(from,
                                 address(this), usd);
-                   if (!l2 || token == USDC) {
+                   if (l1 || token == USDC) {
                         address vault = vaults[token];
                         amount = ERC4626(vault).deposit(
                                     usd, address(this));
@@ -508,7 +508,7 @@ contract Good is ERC20, // OFTOwnable2Step,
     // internal Morpho optimiser, highly customisable
     function morph(address to, uint amount) // 4
         public onlyUs returns (uint sent) {
-        bool l2 = !MO(Mindwill).token1isWETH();
+        bool l2 = MO(Mindwill).token1isWETH();
         uint total = get_total_deposits(false);
         if (msg.sender == address(this)) {    
             // get batch which just ended...

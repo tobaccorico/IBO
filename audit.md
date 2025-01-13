@@ -15,7 +15,7 @@ as are its sensors, observing temp.
 determines your ride quality  
 
 where water’s thirsty and bread loaf is like stone  
-in [times] of sacred wooing 💍 as today prepares  
+in times of sacred wooing 💍 as today prepares  
 tomorrow’s secret ruin...beyond the pines, trailing  
 pet rocks won't stop 'til it's yesterday.  
 Referee whistle make it official:
@@ -23,7 +23,7 @@ Referee whistle make it official:
 ## Invariants
 
 "Squeezing water out of stones and eating bearer bonds," like  
-Shahmen Mangroves, My 5 string serenade kicks off
+Shahmen Mangroves, my 5 string serenade kicks off
 with 5  
  wagon and an all sixes `BACKEND` 24 times. 
 as we have  
