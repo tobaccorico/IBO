@@ -412,7 +412,7 @@ contract MO is ReentrancyGuard {
 
     function _swap(uint eth, uint usdc, 
         uint price) internal returns (uint, uint) {
-        // uint usd = FullMath.mulDiv(eth, price, WAD);
+        uint usd = FullMath.mulDiv(eth, price, WAD);
         // if we assumed a 1:1 ratio of eth value
         // to usdc, then this is how'd we balance:
         // int delta = (int(usd) - int(scaled))
@@ -444,8 +444,10 @@ contract MO is ReentrancyGuard {
                                              current, lower, upper, liquidity);
         } targetUSDC *= 1e12; // must also divide at the end for precision...
         address vault = GD.VAULT();
-        if (scaled > targetUSDC) {
-            scaled -= targetUSDC;
+        // TODO in mainnet fork test
+        if (scaled > targetUSDC) { // use
+            scaled -= targetUSDC; // prank 
+            console.log("m8 !", scaled); // USDC
             ERC4626(vault).deposit(
                 scaled / 1e12, 
                 address(GD));
@@ -483,12 +485,12 @@ contract MO is ReentrancyGuard {
             
             ky = FullMath.mulDiv(
                 eth, WAD, scaled);
-            
             require(FullMath.mulDiv(
-                100, ky - k, k) < 7, 
+                1000, ky - k, k) < 68, 
                 "margin of error"); 
-        } 
-        return (eth, scaled / 1e12);
+                // (($10m x (0.0725 x 3/12)
+                // - 11000 / $10m)) x 4
+        } return (eth, scaled / 1e12);
     }
 
     function mint(address to, uint cost, 
@@ -545,7 +547,7 @@ contract MO is ReentrancyGuard {
         // GHO instead of dispersing stables
         amount = FullMath.min(
             GD.matureBalanceOf(
-                       msg.sender), amount);
+                    msg.sender), amount);
         require(amount > 0, "let it steep");
         // can be said of tea or a t-bill...
         (uint delta, 
