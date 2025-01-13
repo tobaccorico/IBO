@@ -43,11 +43,10 @@ contract MO is ReentrancyGuard {
         uint average_price; uint average_value;
         uint deductible; uint cap; uint minting;
         bool liquidate; uint repay; uint collat;
-    } Good GD; // tethered to MO contract
-
+    } Good GD; // hooked 25 to life MO contract
     function get_info(address who) view
-        external returns (uint, uint) {
-        Offer memory pledge = pledges[who];
+        external returns (uint, uint) { // you good
+        Offer memory pledge = pledges[who]; // bro?
         return (pledge.carry.debit, GD.balanceOf(who));
         // this is more of an internal tracking variable
     }   function get_more_info(address who) view
@@ -101,8 +100,7 @@ contract MO is ReentrancyGuard {
         public onlyQuid { require(
             index < 33, "out of bounds");
         FEE = WAD * (36 - index) / 400;
-    }
-        
+    }   
     function setMetrics(uint avg_roi) 
         public onlyQuid { AVG_ROI = avg_roi;
     } // TODO add more informative metrics...
@@ -154,9 +152,7 @@ contract MO is ReentrancyGuard {
         token1.approve(_nfpm,
             type(uint256).max);
         
-    } 
-
-    // present value of the expected cash flows...
+    } // present value of the expected cash flows
     function capitalisation(uint quid, bool burn)
         public view returns (uint, uint) { // ^ in GD
         (uint160 sqrtPriceX96,,,,,,) = POOL.slot0();
@@ -385,7 +381,6 @@ contract MO is ReentrancyGuard {
             result < -MAX_TICK ? -MAX_TICK :
             result;
     }
-
     function _adjustTicks(int24 currentTick) internal 
         pure returns (int24 lower, int24 upper) {
         // Minding stairs, leading to the mid-chamber,
@@ -403,7 +398,6 @@ contract MO is ReentrancyGuard {
             upper += TICK_SPACING;
         }   return (lower, upper);
     }
-
     function _swap(uint eth, uint usdc, 
         uint price) internal returns (uint, uint) {
         uint usd = FullMath.mulDiv(eth, price, WAD);
@@ -526,9 +520,7 @@ contract MO is ReentrancyGuard {
                 (amount, in_dollars) = _swap(amount, 0, price);
                 token1isWETH ? _repackNFT(in_dollars, amount, price) 
                              : _repackNFT(amount, in_dollars, price);
-    }           
-
-    // call in GD's worth (обнал sans liabilities)
+    } // call in GD's worth (обнал sans liabilities)
     // calculates the coverage absorption for each
     // insurer by first determining their share %
     // and then adjusting based on average ROI...

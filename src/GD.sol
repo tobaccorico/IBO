@@ -278,14 +278,13 @@ contract Good is ERC20, // OFTOwnable2Step,
         else if (batch < 33) {
             return batch - 8;
         } else { return 24; }
-    } // in 2028, 
+    } 
     function matureBalanceOf(address account)
         public view returns (uint total) {
         uint batches = matureBatches();
         for (uint i = 0; i < batches; i++) {
         total += consideration[account][i]; }
-    }
-   
+    } // redeeming matured GD calls turn from MO
     function turn(address from, uint value)
         public onlyUs returns (uint) {
         uint balance_from = this.balanceOf(from);
@@ -423,7 +422,7 @@ contract Good is ERC20, // OFTOwnable2Step,
     
     // systematic uncertainty + unsystematic = total
     // demand uncertainty. typically systematic will
-    // dominate unsystematic. in my experiecne, the 
+    // dominate unsystematic. in my experience, the 
     // 2 tend to break according to pareto principle
     function mint(address pledge, uint amount, 
         address token /*, uint when */) public 
@@ -522,7 +521,6 @@ contract Good is ERC20, // OFTOwnable2Step,
         uint inDollars; address vault; uint i; // for loop
         uint[5] memory amounts; address[5] memory tokens; 
         uint sharesWithdrawn; address repay = l2 ? VAULT : SDAI; 
-        
         MarketParams memory params = IMorpho(MORPHO).idToMarketParams(ID);
         (uint delta, uint cap) = MO(Mindwill).capitalisation(0, false);
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
@@ -558,83 +556,73 @@ contract Good is ERC20, // OFTOwnable2Step,
                                     address(this), address(this));
             perVault[repay].credit += ERC4626(repay).deposit( 
                                     borrowed, address(this));
-        } 
-        else if (borrowed > 0 && cap == 100) { 
-            delta = delta > perVault[repay].credit ? 
-                            perVault[repay].credit : delta;
-            delta = FullMath.min(borrowed, delta);
-            (sharesWithdrawn,) = IMorpho(MORPHO).repay(params, 
-                ERC4626(repay).withdraw(delta, address(this), 
-                address(this)), 0, address(this), "");
-            perVault[repay].credit -= sharesWithdrawn;
-            inDollars = ERC4626(repay).convertToAssets(
-                                        sharesWithdrawn);
-            if (!l2) { 
-                // TODO uncomment for L1...
-                collat = FullMath.min(collat, 
-                    FullMath.mulDiv(WAD, inDollars, 
-                    _getPrice(SUSDE)) 
-                );
-            }
-            else {
-                collat = FullMath.min(collat, 
-                ERC4626(SUSDE).convertToShares(inDollars));
-            }
-            IMorpho(MORPHO).withdrawCollateral(params, 
-                collat, address(this), address(this));
-                perVault[SUSDE].credit -= collat;
-                perVault[SUSDE].debit += collat;
-        }
-        else if (borrowed == 0 && perVault[SUSDE].credit > 0) {
-            IMorpho(MORPHO).withdrawCollateral(params, 
-            perVault[SUSDE].credit, address(this), address(this));
-            perVault[SUSDE].debit += perVault[SUSDE].credit;
-            perVault[SUSDE].credit = 0;
-        }
-        if (!l2) { // no USDC here
-            for (i = 0; i < 5; i++) { 
-                amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                        WAD, amounts[i], total), WAD);
-                if (amounts[i] > 0) { 
-                    vault = vaults[tokens[i]]; // functionally equivalent to maxWithdraw()
-                    sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),
-                                               ERC4626(vault).convertToShares(amounts[i]));
-                    require(sharesWithdrawn == ERC4626(vault).withdraw(sharesWithdrawn, 
-                                                            to, address(this)), "$m");
-                    perVault[vault].debit -= sharesWithdrawn;
-                    amounts[i] = ERC4626(vault).convertToAssets(
-                        sharesWithdrawn); sent += amounts[i];
-                } 
-            }
-        } // TODO uncomment for L1, commented here to save bytecode
-        else { 
+        }   else if (borrowed > 0 && cap == 100) { 
+                delta = delta > perVault[repay].credit ? 
+                                perVault[repay].credit : delta;
+                delta = FullMath.min(borrowed, delta);
+                (sharesWithdrawn,) = IMorpho(MORPHO).repay(params, 
+                    ERC4626(repay).withdraw(delta, address(this), 
+                    address(this)), 0, address(this), "");
+                perVault[repay].credit -= sharesWithdrawn;
+                inDollars = ERC4626(repay).convertToAssets(
+                                            sharesWithdrawn);
+                if (!l2) { 
+                    collat = FullMath.min(collat, 
+                        FullMath.mulDiv(WAD, inDollars, 
+                        _getPrice(SUSDE)) 
+                    );
+                } else { collat = FullMath.min(collat, 
+                    ERC4626(SUSDE).convertToShares(inDollars));
+                }   IMorpho(MORPHO).withdrawCollateral(params, 
+                        collat, address(this), address(this));
+                        perVault[SUSDE].credit -= collat;
+                        perVault[SUSDE].debit += collat;
+        } else if (borrowed == 0 && perVault[SUSDE].credit > 0) {
+                IMorpho(MORPHO).withdrawCollateral(params, 
+                perVault[SUSDE].credit, address(this), address(this));
+                perVault[SUSDE].debit += perVault[SUSDE].credit;
+                perVault[SUSDE].credit = 0;
+        }       if (!l2) { // no USDC here
+                    for (i = 0; i < 5; i++) { 
+                        amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
+                                                WAD, amounts[i], total), WAD);
+                        if (amounts[i] > 0) { 
+                            vault = vaults[tokens[i]]; // functionally equivalent to maxWithdraw()
+                            sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),
+                                                    ERC4626(vault).convertToShares(amounts[i]));
+                            require(sharesWithdrawn == ERC4626(vault).withdraw(sharesWithdrawn, 
+                                                                    to, address(this)), "$m");
+                            perVault[vault].debit -= sharesWithdrawn;
+                            amounts[i] = ERC4626(vault).convertToAssets(
+                                sharesWithdrawn); sent += amounts[i];
+                        } 
+                    }
+        } else { // TODO uncomment L1, commented to save bytecode
             if (amounts[0] > 0) { sent = FullMath.min(amounts[0],
                     ERC20(tokens[0]).balanceOf(address(this)));
                     ERC20(tokens[0]).transfer(to, amounts[0]);
-            } 
-            for (i = 1; i < 4; i++) {
-                inDollars = FullMath.min(amounts[i],
-                        ERC20(tokens[i]).balanceOf(
-                                address(this)));
-                ERC20(tokens[i]).transfer(to, 
-                              inDollars);
-                amounts[i] -= inDollars;
-                      sent += inDollars;
-                if (amounts[i] > 0) {
-                    // reuse inDollars...
-                    // represents "shares"
-                    vault = vaults[tokens[i]];
-                    inDollars = FullMath.min(
-                    ERC20(vault).balanceOf(
-                        address(this)), FullMath.mulDiv(
-                                        amounts[i], WAD, 
-                                        _getPrice(vault)));
-                    ERC20(vault).transfer(to, inDollars);
-                    sent += FullMath.mulDiv(inDollars,
-                                _getPrice(vault), WAD);
-                }   
-            }
-            /* TODO uncomment
+            }       for (i = 1; i < 4; i++) {
+                        inDollars = FullMath.min(amounts[i],
+                                ERC20(tokens[i]).balanceOf(
+                                        address(this)));
+                        ERC20(tokens[i]).transfer(to, 
+                                    inDollars);
+                        amounts[i] -= inDollars;
+                            sent += inDollars;
+                        if (amounts[i] > 0) {
+                            // reuse inDollars...
+                            // represents "shares"
+                            vault = vaults[tokens[i]];
+                            inDollars = FullMath.min(
+                            ERC20(vault).balanceOf(
+                                address(this)), FullMath.mulDiv(
+                                                amounts[i], WAD, 
+                                                _getPrice(vault)));
+                            ERC20(vault).transfer(to, inDollars);
+                            sent += FullMath.mulDiv(inDollars,
+                                        _getPrice(vault), WAD);
+                        }   
+            } /* TODO uncomment
             if (amounts[4] > 0) { sent = FullMath.min(amounts[4],
                 ERC20(tokens[4]).balanceOf(address(this)));
                 ERC20(tokens[4]).transfer(to, amounts[4]);
