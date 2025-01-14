@@ -22,7 +22,10 @@ Referee whistle make it official:
 
 ## Invariants
 
-"Squeezing water out of stones and eating bearer bonds," like  
+Placing rappers in endangerment, who's reckless?  
+With this food for thought sorta' like breakfast,  
+You could mark it off as wreck on a checklist:  
+"squeezing water outta stones and eating bearer bonds," like  
 Shahmen Mangroves, my 5 string serenade kicks off
 with 5  
  wagon and an all sixes `BACKEND` 24 times. 

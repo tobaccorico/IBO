@@ -30,6 +30,7 @@ interface IERC721Receiver {
     ) external returns (bytes4);
 } // in the windmills of my mind
 import "./Mindwill.sol";
+// he's bad, and she's
 contract Good is ERC20, // OFTOwnable2Step, 
     IERC721Receiver, ReentrancyGuard { 
     using SafeTransferLib for ERC20;
@@ -509,9 +510,13 @@ contract Good is ERC20, // OFTOwnable2Step,
                     // that all right-thinking persons would be persuaded
                     // that problems of the world can be solved," by true 
                     // dough, Pierre, not your usual money, version mint
-                } // new level, same rebel, hold the Base never trebble
+                } // new level, same rebel, hold the Base never trebble,
+                // I hop out the price drop, and the system be trembling
             } _batchUp(batch, from, backend); 
         } return this.onERC721Received.selector;
+        // they don't think that we're in a cent?
+        // GD floating like he got a pill in him,
+        // tear the roof off this бомба расклад
     } // lottery for L1 to incentivise governance
     
     // internal Morpho optimiser, highly customisable
