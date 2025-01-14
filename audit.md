@@ -33,7 +33,7 @@ a [basket](https://www.calamos.com/capabilities/structured-protection-etfs/) of 
 in the sense of no emphasis on them being a revenue source,  
 and in the sense that you don’t lose all your collateral at  
 once (so there is no catharsis). They are, empathic, rather:  
-having empathy for the  experience, saving others the same…  
+having empathy for the experience, saving others [the same](http://mirror.xyz/quid.eth)…  
 
 there should never be a state where assets can get permanently  
 stuck in the contract.

@@ -49,10 +49,8 @@ contract Good is ERC20, // OFTOwnable2Step,
     mapping(address => address) internal vaults;
     mapping (address => bool[24]) public hasVoted;
     // token-holders vote for deductibles, their
-    // GD balances are applied to  total weights
-    // for voted % (weights are the balances)...
-    // index 0 is the largest possible vote = 9%
-    // index 89 represents the smallest one = 1%
+    // GD balances are applied to total weights
+    // for voted % (weights are the balances)
     uint public deployed; uint internal K = 28;
     uint public SUM; uint[33] public WEIGHTS;
     mapping (address => uint) public feeVotes;
@@ -127,13 +125,21 @@ contract Good is ERC20, // OFTOwnable2Step,
             DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); // only Base
             CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
             // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
-            //  0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arb
-        }
+            //  0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
+        } // but when a prince briskly declares himself in favour of one side, 
+        // if the side you choose is the winner then you have a good friend
+        // who is indebted to you; it’s true that the winner may be powerful 
+        // enough to have
     } uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3 years
     uint constant BACKEND = 666666666666666666666666;
     mapping(address => uint[24]) public consideration;
     // https://www.law.cornell.edu/wex/consideration
+    // of legally sufficient value, bargained-for in 
+    // an exchange agreement, for the breach of which
+    // Mindwill gives an equitable remedy, and whose 
+    // performance is recognised as reasonable duty
+    // or tender (an unconditional offer to perform)
     uint constant public MAX_PER_DAY = 777_777 * WAD;
     
     function get_total_deposits
@@ -224,10 +230,9 @@ contract Good is ERC20, // OFTOwnable2Step,
                 ERC4626(VAULT).withdraw(withdrawn, 
                     Mindwill, address(this)); 
             }
-        } else {
-            return 0;
-        }
-    } // TODO deploy Morpho vault on ARB
+        } else { return 0; }
+    } // TODO deploy Morpho 
+    // vault on Arbitrum...
 
     function gd_amt_to_dollar_amt(uint gd_amt) public
         view returns (uint amount) { uint in_days = (
@@ -241,7 +246,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         uint in_days = ( // used in frontend...
             (block.timestamp - START) / 1 days
         ) + 1; return in_days * MAX_PER_DAY -
-                Piscine[batch][42].credit;
+                 Piscine[batch][42].credit;
     }
     function batchUp()
         public nonReentrant {
@@ -258,7 +263,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         batch = FullMath.min(1, batch);
         require(batch < 25, "!"); // 25 to
         _mint(to, cut);  // lifetime value
-        START = block.timestamp; // less on L1
+        START = block.timestamp; // right now
         consideration[to][batch] += cut;
         Pod memory day = Piscine[batch - 1][42];
         // ROI aggregates all batches' days...
@@ -270,7 +275,9 @@ contract Good is ERC20, // OFTOwnable2Step,
     } function currentBatch() public view returns 
         (uint batch) { batch = (block.timestamp - 
                         deployed) / DAYS;
-    } // uint less discount sooner maturing
+    } 
+    
+    // uint less discount sooner maturing
     function matureBatches() // 0 is 1yr...
         public view returns (uint) { // in 3
         uint batch = currentBatch(); // 1-33
@@ -321,13 +328,12 @@ contract Good is ERC20, // OFTOwnable2Step,
     function _transferHelper(address from,
         address to, uint amount) internal {
         require(amount > WAD, "minimum 1 GD");
-        // int or tx reverts when we go below 0 in loop
+        // int or tx reverts when we go below 0 in loop...
         int i = to == address(0) ? int(matureBatches()) :
                                       int(currentBatch());
         while (amount > 0 && i >= 0) { uint k = uint(i);
             uint amt = consideration[from][k]; // GD...
-            if (amt > 0) { 
-                amt = FullMath.min(amount, amt);
+            if (amt > 0) { amt = FullMath.min(amount, amt);
                 consideration[from][k] -= amt;
                 if (to != address(0)) {
                     consideration[to][k] += amt;
@@ -499,8 +505,11 @@ contract Good is ERC20, // OFTOwnable2Step,
                         count += 1; winners[winner] == true;
                         backend -= cut; _mint(winner, cut);
                         consideration[winner][batch] += cut;
-                    }
-                } 
+                    } // "they want their grievances aired on the assumption
+                    // that all right-thinking persons would be persuaded
+                    // that problems of the world can be solved," by true 
+                    // dough, Pierre, not your usual money, version mint
+                } // new level, same rebel, hold the Base never trebble
             } _batchUp(batch, from, backend); 
         } return this.onERC721Received.selector;
     } // lottery for L1 to incentivise governance
@@ -546,16 +555,15 @@ contract Good is ERC20, // OFTOwnable2Step,
                                  perVault[SUSDE].debit, WAD);
             collat = FullMath.min(delta + delta / 9, inDollars);
             collat = FullMath.mulDiv(WAD, collat, _getPrice(SUSDE));
-        }   
-        if (collat > 0 && delta > 0 && inDollars > delta) {
-            IMorpho(MORPHO).supplyCollateral(
-            params, collat, address(this), "");
-            perVault[SUSDE].credit += collat; 
-            perVault[SUSDE].debit -= collat;
-            (borrowed,) = IMorpho(MORPHO).borrow(params, collat, 0,
-                                    address(this), address(this));
-            perVault[repay].credit += ERC4626(repay).deposit( 
-                                    borrowed, address(this));
+        }   if (collat > 0 && delta > 0 && inDollars > delta) {
+                IMorpho(MORPHO).supplyCollateral(
+                params, collat, address(this), "");
+                perVault[SUSDE].credit += collat; 
+                perVault[SUSDE].debit -= collat;
+                (borrowed,) = IMorpho(MORPHO).borrow(params, collat, 0,
+                                        address(this), address(this));
+                perVault[repay].credit += ERC4626(repay).deposit( 
+                                        borrowed, address(this));
         }   else if (borrowed > 0 && cap == 100) { 
                 delta = delta > perVault[repay].credit ? 
                                 perVault[repay].credit : delta;
@@ -566,11 +574,9 @@ contract Good is ERC20, // OFTOwnable2Step,
                 perVault[repay].credit -= sharesWithdrawn;
                 inDollars = ERC4626(repay).convertToAssets(
                                             sharesWithdrawn);
-                if (!l2) { 
-                    collat = FullMath.min(collat, 
-                        FullMath.mulDiv(WAD, inDollars, 
-                        _getPrice(SUSDE)) 
-                    );
+                if (!l2) { collat = FullMath.min(collat, 
+                                    FullMath.mulDiv(WAD, 
+                                    inDollars, _getPrice(SUSDE)));
                 } else { collat = FullMath.min(collat, 
                     ERC4626(SUSDE).convertToShares(inDollars));
                 }   IMorpho(MORPHO).withdrawCollateral(params, 
@@ -594,7 +600,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                                                                     to, address(this)), "$m");
                             perVault[vault].debit -= sharesWithdrawn;
                             amounts[i] = ERC4626(vault).convertToAssets(
-                                sharesWithdrawn); sent += amounts[i];
+                                 sharesWithdrawn); sent += amounts[i];
                         } 
                     }
         } else { // TODO uncomment L1, commented to save bytecode
@@ -622,7 +628,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                             sent += FullMath.mulDiv(inDollars,
                                         _getPrice(vault), WAD);
                         }   
-            } /* TODO uncomment
+                    } /* TODO uncomment
             if (amounts[4] > 0) { sent = FullMath.min(amounts[4],
                 ERC20(tokens[4]).balanceOf(address(this)));
                 ERC20(tokens[4]).transfer(to, amounts[4]);

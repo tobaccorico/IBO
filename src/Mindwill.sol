@@ -283,7 +283,8 @@ contract MO is ReentrancyGuard {
                 amount0 += collected0; amount1 += collected1;
                 NFPM.burn(ID); 
             }
-        } if (liquidity > 0 || ID == 0) {
+        } if (liquidity > 0 
+            || ID == 0) { 
             if (ID != 0) {
                 if (token1isWETH) { (amount1, amount0) = _swap(
                                      amount1, amount0, price);
@@ -583,7 +584,7 @@ contract MO is ReentrancyGuard {
                 (amount0, amount1) = _withdrawAndCollect(liquidity);
                 delta = amount / 1e12 - amount1; amount = amount1;
                 (amount0, amount1) = _swap(amount0, 0, price);
-            }
+            } console.log("<!<!<!<!<!<!<!<!<!<!< USDC ?>?>?>?>?>?>?>?>>?>?>", amount + delta);
             if (delta > 0) { delta = GD.withdrawUSDC(delta * 1e12); }
             ERC20(USDC).transfer(msg.sender, amount + delta);
             // amount + delta is the liquid USDC in contract
@@ -824,8 +825,7 @@ contract MO is ReentrancyGuard {
             // liquidations, we reset metrics 
             // pro rata to the gap duration
             pledges[address(this)].carry.credit += pledge.last.credit;
-            pledge.last.credit = 0;
-            pledge.last.debit = 0;
+            pledge.last.credit = 0; pledge.last.debit = 0;
         }   pledges[beneficiary] = pledge;
     } // save ^^^^^^^^^^^^^^^^^^ to storage
 }
