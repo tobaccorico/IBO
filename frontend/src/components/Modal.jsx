@@ -57,7 +57,7 @@ export function Modal({ open = false, handleAgree, handleClose }) {
             resident of any country or jurisdiction under any form of
             international sanctions, black or grey-listing, that would forbid my
             activity on quid.io or require any form of licensing or
-            authorization to mint QD tokens or use any kind of blockchain
+            authorization to mint GD tokens or use any kind of blockchain
             and/or cryptocurrency platform, software, or interface. I
             acknowledge that interacting with quid.io cannot be construed as
             engagement in an investment contract with expectation of future

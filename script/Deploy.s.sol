@@ -1,7 +1,7 @@
 
 pragma solidity 0.8.25;
 import {Good} from "../src/GD.sol";
-import {MO} from "../src/mindwill.sol";
+import {MO} from "../src/Mindwill.sol";
 import "lib/forge-std/src/console.sol";
 import {Script} from "lib/forge-std/src/Script.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
@@ -20,7 +20,7 @@ import {INonfungiblePositionManager} from "../src/imports/INonfungiblePositionMa
 import {IMorphoChainlinkOracleV2Factory} from "../src/imports/morpho/IMorphoChainlinkOracleV2Factory.sol";
 contract Deploy is Script {
     Good public quid; 
-    MO public mindwill;
+    MO public Mindwill;
     
     ERC20 public USDC = ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); 
     // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48) TODO Ethereum L1
@@ -115,7 +115,6 @@ contract Deploy is Script {
         // USDC = new mockToken(6);
         // USDC.mint();
         // weth.deposit{value: 2 ether}();
-
         // DAI = new mockToken(18);
         // SDAI = new mockVault(DAI);
         // FRAX = new mockToken(18);
@@ -161,12 +160,11 @@ contract Deploy is Script {
         morpho.createMarket(params);
         */
 
-        mindwill = new MO(// mindwill 
+        Mindwill = new MO(// Mindwill 
             address(weth), address(USDC),
             address(nfpm), address(pool), 
             address(router) // newer interface on L1 and Arbitrum
-        );
-        // nfpm.mint(INonfungiblePositionManager.MintParams({ 
+        ); // nfpm.mint(INonfungiblePositionManager.MintParams({ 
         //     token0: address(USDC), token1: address(weth),
         //     fee: 500, tickLower: -887_200, tickUpper: 887_200,
         //     amount0Desired: 9000000000, amount1Desired: 2 ether,
@@ -174,30 +172,24 @@ contract Deploy is Script {
         //     recipient: 0xBE80666aA26710c2b2c3FD40c6663A013600D9b6,
         //     deadline: block.timestamp + 3600
         // }));
-       
-        quid = new Good(address(mindwill), // TODO deploy Morpho
+        quid = new Good(address(Mindwill), // TODO deploy Morpho
             address(USDC), address(VAULT), ID, // vault on ARB
             address(USDE), address(SUSDE),
             address(FRAX), address (SFRAX),
             address (SDAI), address(DAI), 
             address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)); 
-        
         // pool = IUniswapV3Pool(factory.createPool(
         //     address(quid), address(), 500));
-        
-        mindwill.setQuid( 
+        Mindwill.setQuid( 
             address(quid)); 
             // go hand in hand"
-            
-        // mindwill.set_price_eth(false, true); 
+        // Mindwill.set_price_eth(false, true); 
         // TODO remove this, only for testing!
-
         console.log("Quid address...", address(quid));
         // console.log("USDe address...", address(DAI));
         // console.log("sUSDe address...", address(SDAI));
-        console.log("mindwill address...", address(mindwill));
-    
+        console.log("Mindwill address...", address(Mindwill));
         vm.stopBroadcast();
     }
 }

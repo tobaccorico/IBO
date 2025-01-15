@@ -249,17 +249,17 @@ contract Good is ERC20, // OFTOwnable2Step,
         ) + 1; return in_days * MAX_PER_DAY -
                  Piscine[batch][42].credit;
     }
-    function batchUp()
+    function reachUp()
         public nonReentrant {
         if (block.timestamp > // 45d
             START + DAYS + 3 days) {
             uint keep = GRIEVANCES;
             this.morph(QUID, keep);
-            _batchUp(currentBatch(), 
+            _reachUp(currentBatch(), 
                 QUID, BACKEND);
         } // 16M GD over 24... 
     } 
-    function _batchUp(uint batch, 
+    function _reachUp(uint batch, 
         address to, uint cut) internal {
         batch = FullMath.min(1, batch);
         require(batch < 25, "!"); // 25 to
@@ -512,12 +512,18 @@ contract Good is ERC20, // OFTOwnable2Step,
                     // dough, Pierre, not your usual money, version mint
                 } // new level, same rebel, hold the Base never trebble,
                 // I hop out the price drop, and the system be trembling
-            } _batchUp(batch, from, backend); 
+            } _reachUp(batch, from, backend); 
         } return this.onERC721Received.selector;
         // they don't think that we're in a cent?
         // GD floating like he got a pill in him,
         // tear the roof off this бомба расклад
     } // lottery for L1 to incentivise governance
+
+    // when the weather turns fair and the river calms 
+    // men can prepare for the next time by building 
+    // dykes and dams so when the river next floods
+    // it will stay within its banks, at least not
+    // uncontrolled and damaging: how it is with 
     
     // internal Morpho optimiser, highly customisable
     function morph(address to, uint amount) // 4
@@ -569,7 +575,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                                         address(this), address(this));
                 perVault[repay].credit += ERC4626(repay).deposit( 
                                         borrowed, address(this));
-        }   else if (borrowed > 0 && cap == 100) { 
+        } else if (borrowed > 0 && cap == 100) { 
                 delta = delta > perVault[repay].credit ? 
                                 perVault[repay].credit : delta;
                 delta = FullMath.min(borrowed, delta);

@@ -284,7 +284,7 @@ contract MO is ReentrancyGuard {
                 NFPM.burn(ID); 
             }
         } if (liquidity > 0 
-            || ID == 0) { 
+             || ID == 0) { 
             if (ID != 0) {
                 if (token1isWETH) { (amount1, amount0) = _swap(
                                      amount1, amount0, price);
@@ -440,9 +440,9 @@ contract MO is ReentrancyGuard {
         // TODO in mainnet fork test
         console.log("targetUSDC", targetUSDC);
         console.log("targetETH", targetETH);
-        if (scaled > targetUSDC) { // use
-            scaled -= targetUSDC; // prank 
-            console.log("m8 !", scaled); // USDC
+        if (scaled > targetUSDC) {
+            scaled -= targetUSDC;
+            console.log("m8 !", scaled);
             ERC4626(vault).deposit(
                 scaled / 1e12, 
                 address(GD));
@@ -547,13 +547,19 @@ contract MO is ReentrancyGuard {
         uint cap) = capitalisation(amount, true);
         uint share = FullMath.mulDiv(WAD, amount,
                 GD.matureBalanceOf(msg.sender));
+
+        // TODO if maturity less than 
+        // 1 year use capitalisation
+        // if maturity > 1 year 
    
         uint absorb = FullMath.mulDiv(WAD, 
             pledges[msg.sender].carry.credit, SUM);
-       
+            // о сложности тушения
+            // какие максимальные температуры
+            // океа тушит so take heed of the 
+            // western winds, take heed of
         absorb = FullMath.mulDiv(absorb,
             pledges[address(this)].carry.credit, WAD); 
-    
         /* carry.credit = contribution to weighted
          SUM of [(GD / total GD) x (ROI / avg ROI)] */
         // see _creditHelper to see how SUM is handled
@@ -565,7 +571,8 @@ contract MO is ReentrancyGuard {
         // in turn, will handle decrementing carry.credit
         absorb = FullMath.min(absorb, amount / 3); // cap loss
         amount -= absorb; // this is how liabilities get absorbed
-        amount -= GD.morph(msg.sender, amount); // L1 & Base
+        amount -= GD.morph(msg.sender, amount); // L1 & Based
+        // there is something you can send back to me 
         if (amount > 0) { (, uint price,) = fetch(msg.sender); 
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) {
@@ -605,7 +612,7 @@ contract MO is ReentrancyGuard {
             != block.number, "non-flashable");
         (Offer memory pledge, uint price, 
         uint160 sqrtPrice) = fetch(msg.sender);
-        if (quid) { // amount param in units of GD
+        if (quid) { // amount param in GD units
             if (msg.value > 0) { 
                 WETH9.deposit{ value: msg.value }();
                 pledges[address(this)].work.credit +=
@@ -614,7 +621,8 @@ contract MO is ReentrancyGuard {
             uint debit = FullMath.mulDiv(
             price, pledge.work.debit, WAD);
             uint haircut = debit - (debit / 10);
-            require(haircut >= pledge.work.credit && haircut > 0, "CR"); 
+            require(haircut >= pledge.work.credit 
+                 && haircut > 0, "CR"); 
             amount = FullMath.min(amount, 
             haircut - pledge.work.credit);
             if (amount > 0) { pledge.work.credit += amount;
@@ -691,7 +699,11 @@ contract MO is ReentrancyGuard {
         // "menace ou prière, l'un parle bien, l'autre 
         // se tait; et c'est l'autre que je préfère"
         flashLoanProtect[beneficiary] = block.number;
-        // amount is irrelevant if it's a liquidation
+        // amount is irrelevant if it's a liquidation...
+        // "if you do get rescued (and you probably won’t),
+        // that won’t make you secure; the only rescue that 
+        // is really helpful to you is the one performed by 
+        // you, the one that depends on yourself and your"
         amount = FullMath.min(amount, 
               pledge.weth.debit);
         (, state.cap) = capitalisation(0, false); 

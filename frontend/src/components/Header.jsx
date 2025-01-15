@@ -73,7 +73,7 @@ export const Header = () => {
         </div>
       </div>
       <div className="header-summaryEl fade-in">
-        <div className="header-summaryElTitle">Minted QD</div>
+        <div className="header-summaryElTitle">Minted GD</div>
         <div className="header-summaryElValue">
           {numberWithCommas(Number(actualAmount).toFixed())}
         </div>

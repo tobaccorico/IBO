@@ -67,7 +67,7 @@ export const MintBar = () => {
         <div className="summary-value">{connected && days && account ? days : "⋈"}</div>
       </div>
       <div className="summary-section">
-        <div className="summary-title">QD price</div>
+        <div className="summary-title">GD price</div>
         <div className="summary-value">
           <span className="summary-value">{connected && account ? numberWithCommas(parseFloat(Number(price).toFixed(0))) : 0}</span>
           <span className="summary-cents"> Cents</span>
@@ -86,7 +86,7 @@ export const MintBar = () => {
         </div>
       </div>
       <div className="summary-section">
-        <div className="summary-title">QD (future $)</div>
+        <div className="summary-title">GD (future $)</div>
         <div className="summary-value">
           {connected && account ? numberWithCommas(parseFloat(Number(totalMinted).toFixed(0))) : 0}
         </div>

@@ -276,7 +276,7 @@ export const Mint = () => {
     try {
       if (button === "MINT") {
     
-        if (inputValue > totalSupplyCap) return setNotifications("error", "The amount should be less than the maximum mintable QD")
+        if (inputValue > totalSupplyCap) return setNotifications("error", "The amount should be less than the maximum mintable GD")
 
         if (inputValue > (await usdebalance())) return setNotifications("error", "Cost shouldn't be more than your USDC balance")
 
@@ -329,7 +329,7 @@ export const Mint = () => {
       if (button === "DEPOSIT") {
         const workUsdBalance = await getDepositInfo().then(depositInfo => {return depositInfo.work_usd_balance})
         
-        if (!chooseCurrency && inputValue > workUsdBalance) return setNotifications("error", "Cost shouldn't be more than your owed USDC balance. Use The QD's withdrow for top up your account.")
+        if (!chooseCurrency && inputValue > workUsdBalance) return setNotifications("error", "Cost shouldn't be more than your owed USDC balance. Use The GD's withdrow for top up your account.")
         if (chooseCurrency && balanceStatus) return setNotifications("error", "Cost shouldn't be more than your Etherum balance")
         if (chooseCurrency && insureStatus && inputValue*parseEthPrice > insurable) return setNotifications("error", "The amount shouldn't be more than insurable")
 
@@ -354,7 +354,7 @@ export const Mint = () => {
 
           if (inputValue <= maturebalance) await mo.methods.redeem(valueDepo).send({ from: account })
           else if (inputValue <= workUsdBalance) await quid.methods.transfer(addressMO, valueDepo).send({ from: account })
-        } // sending QD to MO will clear debt (denominated in $ internally) if there is any borrowed QD against the ETH 
+        } // sending GD to MO will clear debt (denominated in $ internally) if there is any borrowed GD against the ETH 
 
         setNotifications("success", "Your deposit has been pending completed!", true)
       }
@@ -387,7 +387,7 @@ export const Mint = () => {
       }
     } catch (err) {
       const er = "MO::mint: supply cap exceeded"
-      const msg = err.error?.message === er || err.message === er ? "Please wait for more QD to become mintable..." : err.error?.message || err.message
+      const msg = err.error?.message === er || err.message === er ? "Please wait for more GD to become mintable..." : err.error?.message || err.message
 
       setNotifications("error", msg)
     } finally {
@@ -465,12 +465,12 @@ export const Mint = () => {
     }
 
     if (chooseButton.current === "MINT" || chooseButton.current == null) {
-      setSign('QD')
+      setSign('GD')
       setPlaceHolder('Mint amount')
       setChooseCurrency(false)
       setCurrency("QUID")
     } else if (chooseButton.current === "DEPOSIT") {
-      if (!chooseCurrency) setSign('QD')
+      if (!chooseCurrency) setSign('GD')
       else {
         calculateEthTransaction()
         setSign('Ξ')
@@ -478,7 +478,7 @@ export const Mint = () => {
 
       setPlaceHolder('Deposit amount')
     } else if (chooseButton.current === "WITHDRAW" && !chooseCurrency) {
-      setSign('QD')
+      setSign('GD')
       setPlaceHolder('Withdraw amount')
     } else {
       setSign('Ξ')
@@ -499,7 +499,7 @@ export const Mint = () => {
                       {totalSupplyCap ? numberWithCommas(totalSupplyCap) : 0}
                       &nbsp;
                     </span>
-                    QD mintable
+                    GD mintable
                   </div>
                 ) : (
                   <div className="fade-in">

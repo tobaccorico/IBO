@@ -46,7 +46,7 @@ export const VoteButton = ({ minValue = 1, maxValue = 9 }) => {
       const er = "MO::mint: supply cap exceeded";
       const msg =
         err.error?.message === er || err.message === er
-          ? "Please wait for more QD to become mintable..."
+          ? "Please wait for more GD to become mintable..."
           : err.error?.message || err.message
       setNotifications("error", msg)
     }

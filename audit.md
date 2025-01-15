@@ -15,7 +15,7 @@ as are its sensors, observing temp.
 determines your ride quality  
 
 where water’s thirsty and bread loaf is like stone  
-in times of sacred wooing 💍 as today prepares  
+in times of sacred [wooing](https://x.com/clammyclams/status/1781831323356733946) 💍 as today prepares  
 tomorrow’s secret ruin...beyond the pines, trailing  
 pet rocks won't stop 'til it's yesterday.  
 Referee whistle make it official:
