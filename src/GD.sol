@@ -72,17 +72,15 @@ contract Good is ERC20, // OFTOwnable2Step,
     address public immutable SUSDE;
     address public immutable VAULT;
     // ^ Morpho curated USDC vault
-
     IDSROracle internal DSR;
     ISCRVOracle internal CRV;
     uint constant WAD = 1e18;
-    modifier onlyUs {
+    modifier onlyUs { // the good
+        // and the batter Mindwill
         address sender = msg.sender;
         require(sender == Mindwill ||
-                sender == address(this), "!?");
-        _;
-    }
-    constructor(address _mo, address _usdc, 
+                sender == address(this), "!?"); _;
+    } constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
         address _usde, address _susde, 
         address _frax, address _sfrax,
@@ -133,7 +131,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         // enough to have
     } uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3 years
-    uint constant BACKEND = 666666666666666666666666;
+    uint constant KICKBACK = 666666666666666666666666;
     mapping(address => uint[24]) public consideration;
     // https://www.law.cornell.edu/wex/consideration
     // of legally sufficient value, bargained-for in 
@@ -256,7 +254,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             uint keep = GRIEVANCES;
             this.morph(QUID, keep);
             _reachUp(currentBatch(), 
-                QUID, BACKEND);
+                QUID, KICKBACK);
         } // 16M GD over 24... 
     } 
     function _reachUp(uint batch, 
@@ -363,7 +361,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             from_vote, balance_from, from_vote); return result;
     }
 
-    function vote(uint new_vote) external {
+    function vote(uint new_vote/*, caps*/) external {
         uint batch = currentBatch(); // 0-24
         if (batch < 24 && !hasVoted[msg.sender][batch]) {
             (uint carry,) = MO(Mindwill).get_info(msg.sender);
@@ -440,6 +438,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             require(msg.sender == Mindwill, "authorisation");
         }   else if (block.timestamp <= START + DAYS 
             && batch < 24) { batch = currentBatch(/*when*/); // 0 - 24
+                
                 uint in_days = ((block.timestamp - START) / 1 days);
                 require(amount >= WAD * 10 && (in_days + 1) 
                     * MAX_PER_DAY >= Piscine[batch][42].credit 
@@ -493,7 +492,7 @@ contract Good is ERC20, // OFTOwnable2Step,
             ICollection(F8N).transferFrom( // return
                 address(this), QUID, LAMBO); // NFT...
                 // "I put my key, you put your key in"
-            uint backend = BACKEND; cut = backend / 12;
+            uint kickback = KICKBACK; cut = KICKBACK / 12;
             if (voters[batch - 1].length >= 10 && data.length >= 32) {
                 bytes32 _seed = abi.decode(data[:32], (bytes32));
                 for (uint i = 0; count < 10 && i < 30; i++) {
@@ -504,7 +503,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                         winner = voters[batch - 1][random];
                     if (!winners[winner]) {
                         count += 1; winners[winner] == true;
-                        backend -= cut; _mint(winner, cut);
+                        kickback -= cut; _mint(winner, cut);
                         consideration[winner][batch] += cut;
                     } // "they want their grievances aired on the assumption
                     // that all right-thinking persons would be persuaded
@@ -512,7 +511,7 @@ contract Good is ERC20, // OFTOwnable2Step,
                     // dough, Pierre, not your usual money, version mint
                 } // new level, same rebel, hold the Base never trebble,
                 // I hop out the price drop, and the system be trembling
-            } _reachUp(batch, from, backend); 
+            } _reachUp(batch, from, kickback); 
         } return this.onERC721Received.selector;
         // they don't think that we're in a cent?
         // GD floating like he got a pill in him,

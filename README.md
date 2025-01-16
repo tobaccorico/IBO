@@ -1,5 +1,5 @@
 
-## in short, good debt
+## good grievance
 you would be grateful for:    
 having 4 Pods IStrategy  
 `MO` has `ID` for [selling  
