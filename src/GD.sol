@@ -49,6 +49,7 @@ contract Good is ERC20, // OFTOwnable2Step,
     mapping(address => Pod) internal perVault;
     mapping(address => address) internal vaults;
     mapping (address => bool[24]) public hasVoted;
+    // voted for enum as what was voted on, and
     // token-holders vote for deductibles, their
     // GD balances are applied to total weights
     // for voted % (weights are the balances)
@@ -80,6 +81,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         address sender = msg.sender;
         require(sender == Mindwill ||
                 sender == address(this), "!?"); _;
+        // sweet she is us, don't sweat it Jesus
     } constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
         address _usde, address _susde, 
@@ -276,11 +278,11 @@ contract Good is ERC20, // OFTOwnable2Step,
                         deployed) / DAYS;
     } 
     
-    // uint less discount sooner maturing
+    // TODO uint less discount maturing
     function matureBatches() // 0 is 1yr...
         public view returns (uint) { // in 3
         uint batch = currentBatch(); // 1-33
-        if (batch < 8) { return 0; } // TODO
+        if (batch < 8) { return 0; } 
         else if (batch < 33) {
             return batch - 8;
         } else { return 24; }
@@ -514,16 +516,8 @@ contract Good is ERC20, // OFTOwnable2Step,
             } _reachUp(batch, from, kickback); 
         } return this.onERC721Received.selector;
         // they don't think that we're in a cent?
-        // GD floating like he got a pill in him,
-        // tear the roof off this бомба расклад
     } // lottery for L1 to incentivise governance
 
-    // when the weather turns fair and the river calms 
-    // men can prepare for the next time by building 
-    // dykes and dams so when the river next floods
-    // it will stay within its banks, at least not
-    // uncontrolled and damaging: how it is with 
-    
     // internal Morpho optimiser, highly customisable
     function morph(address to, uint amount) // 4
         public onlyUs returns (uint sent) {

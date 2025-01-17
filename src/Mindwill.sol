@@ -573,7 +573,8 @@ contract MO is ReentrancyGuard {
         amount -= absorb; // this is how liabilities get absorbed
         amount -= GD.morph(msg.sender, amount); // L1 & Based
         // there is something you can send back to me (in USDC)
-        if (amount > 0) { (, uint price,) = fetch(msg.sender); 
+        if (amount > 0) { (, uint price,) = fetch(msg.sender);
+        // i pay very close attention and then I pay my dues...
             uint amount0; uint amount1; uint128 liquidity;
             if (token1isWETH) {
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(

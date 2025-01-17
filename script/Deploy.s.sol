@@ -27,6 +27,7 @@ contract Deploy is Script {
     // Base : 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     // Arbitrum : 0xaf88d065e77c8cc2239327c5edb3a432268e5831;
     // BNB (tether) : 0x55d398326f99059ff775485246999027b3197955
+    // Polygon : 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
     
      // TODO no USDS on Arbitrum (nor SUSDS or SFRAX)
     ERC20 public USDS = ERC20(0x820C137fa70C8691f0e44Dc420a5e53c168921Dc);
@@ -63,7 +64,7 @@ contract Deploy is Script {
     ERC4626 public SFRAX; // = ERC4626(0xA663B02CF0a4b149d2aD41910CB81e23e1c41c32);
     ERC4626 public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
 
-    // LZ
+    // LZ TODO
     // Unichain : 0xb8815f3f882614048CbE201a67eF9c6F10fe5035
     // Sepolia : 0x6EDCE65403992e310A62460808c4b910D972f10f
     // Arbitrum : 
@@ -107,7 +108,7 @@ contract Deploy is Script {
     // Taiko : 0xE47a76e15a6F3976c8Dc070B3a54C7F7083D668B
     // BNB : 0x36696169c63e42cd08ce11f5deebbcebae652050
     WETH public weth = WETH(payable(0x4200000000000000000000000000000000000006));
-    // Polygon : 
+    // Polygon : 0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619
     // Arbitrum : 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
     // Unichain (and Base) : 0x4200000000000000000000000000000000000006
     // Sepolia : 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14
@@ -116,7 +117,6 @@ contract Deploy is Script {
 
     function run() public {
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-       
         // USDC = new mockToken(6);
         // USDC.mint();
         // weth.deposit{value: 2 ether}();
@@ -135,8 +135,8 @@ contract Deploy is Script {
 
         // TODO Arbitrum
         /* ==== Deploy a Morpho Oracle for SUSDE and market where that's collateral ==== 
-        uses the oracle factory contract, as well as a create market on the singleton */
-        /*
+        uses the oracle factory contract, as well as a create market on the singleton
+        
         IERC4626 baseVault = IERC4626(address(0)); // IERC4626(address(SUSDE));
         IERC4626 quoteVault = IERC4626(address(0)); // IERC4626(address(USDC));
         AggregatorV3Interface baseFeed1 = AggregatorV3Interface(
@@ -161,10 +161,8 @@ contract Deploy is Script {
             collateralToken: address(SUSDE),
             oracle: address(deployedOracle),
             irm: IRM, lltv: 915000000000000000 
-        });
-        morpho.createMarket(params);
+        }); morpho.createMarket(params);
         */
-
         Mindwill = new MO(// Mindwill 
             address(weth), address(USDC),
             address(nfpm), address(pool), 
@@ -179,21 +177,16 @@ contract Deploy is Script {
         // }));
         quid = new Good(address(Mindwill), // TODO deploy Morpho
             address(USDC), address(VAULT), ID, // vault on ARB
-            address(USDE), address(SUSDE),
-            address(FRAX), address (SFRAX),
+            address(USDE), address(SUSDE), // as well as Polygon
+            address(FRAX), address (SFRAX), // and BNB chain...
             address (SDAI), address(DAI), 
             address(USDS), address(SUSDS),
             address(CRVUSD), address(SCRVUSD)); 
         // pool = IUniswapV3Pool(factory.createPool(
         //     address(quid), address(), 500));
-        Mindwill.setQuid( 
-            address(quid)); 
-            // go hand in hand"
+        Mindwill.setQuid(address(quid)); 
         // Mindwill.set_price_eth(false, true); 
-        // TODO remove this, only for testing!
         console.log("Quid address...", address(quid));
-        // console.log("USDe address...", address(DAI));
-        // console.log("sUSDe address...", address(SDAI));
         console.log("Mindwill address...", address(Mindwill));
         vm.stopBroadcast();
     }
