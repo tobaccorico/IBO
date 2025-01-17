@@ -30,7 +30,6 @@ interface IERC721Receiver {
     ) external returns (bytes4);
 } // in the windmills of my mind
 import "./Mindwill.sol";
-// he's bad, and she's
 contract Good is ERC20, // OFTOwnable2Step, 
     IERC721Receiver, ReentrancyGuard { 
     using SafeTransferLib for ERC20;
@@ -81,7 +80,6 @@ contract Good is ERC20, // OFTOwnable2Step,
         address sender = msg.sender;
         require(sender == Mindwill ||
                 sender == address(this), "!?"); _;
-        // sweet she is us, don't sweat it Jesus
     } constructor(address _mo, address _usdc, 
         address _vault, bytes32 _morpho,
         address _usde, address _susde, 
@@ -107,7 +105,10 @@ contract Good is ERC20, // OFTOwnable2Step,
         vaults[CRVUSD] = SCRVUSD;
         Mindwill = payable(_mo);
         ERC20(USDC).approve(VAULT, type(uint).max);
-        if (address(MO(Mindwill).token0()) == USDC) {
+        /* if (address(MO(Mindwill)).token0() == USDT) {
+
+        }
+        else */ if (address(MO(Mindwill).token0()) == USDC) {
             require(address(MO(Mindwill).token1())
             == address(MO(Mindwill).WETH9()), "42");
             vaults[FRAX] = SFRAX; // TODO fip-420...
