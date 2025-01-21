@@ -1,7 +1,8 @@
 
-## good grievance
-you would be grateful for:    
-having 4 Pods IStrategy  
+## 
+
+Hedging can be [complicated](https://x.com/0xLouisT/status/1827953646304121228);
+could be a bite simpler... 
 `MO` has `ID` for [selling  
  puts](https://x.com/futurenomics/status/1766173245949014373) in a concentrated  
 liquidity [optimiser](https://x.com/guil_lambert/status/1772423853316219051) vault;  
