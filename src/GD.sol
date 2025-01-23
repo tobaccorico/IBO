@@ -477,7 +477,7 @@ contract Good is ERC20, // OFTOwnable2Step,
      *   by the recipient, the transfer will be reverted.
      */
     // QuidMint...foundation.app/@quid
-    function onERC721Received(address,
+    function onERC721Received(address operator,
         address from, // previous owner...
         uint tokenId, bytes calldata data)
         external override returns (bytes4) { 
@@ -490,8 +490,8 @@ contract Good is ERC20, // OFTOwnable2Step,
             // open fire...open mind...this time is a 
             // promise sounding like an oath...I wanna 
             // know true feeling, but you can't decide
-            // if you're hooked on...only the kick...
-            this.morph(QUID, cut); this.morph(from, cut);
+            // if you're hooked on...only the kick... TODO
+            // this.morph(QUID, cut); this.morph(from, cut);
             ICollection(F8N).transferFrom( // return
                 address(this), QUID, LAMBO); // NFT...
                 // "I put my key, you put your key in"
@@ -519,7 +519,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         // they don't think that we're in a cent?
     } // lottery for L1 to incentivise governance
 
-    // internal Morpho optimiser, highly customisable
+    // the infamous cranchmorphous transmorpher
     function morph(address to, uint amount) // 4
         public onlyUs returns (uint sent) {
         bool l2 = MO(Mindwill).token1isWETH();

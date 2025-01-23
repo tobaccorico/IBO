@@ -81,13 +81,8 @@ contract MO is ReentrancyGuard {
     function fetch(address beneficiary) public 
         returns (Offer memory, uint, uint160) { 
         Offer memory pledge = pledges[beneficiary];
-        console.log("66666666666666");
         (uint160 sqrtPrice, int24 tick,,,,,) = POOL.slot0();
-        console.log("8888888888888");
-        LAST_TICK = tick; 
-        console.log("77777777777");
-        uint price = getPrice(sqrtPrice);
-        console.log("33333333333");
+        LAST_TICK = tick; uint price = getPrice(sqrtPrice);
         return (pledge, price, sqrtPrice);
     } 
     function setQuid(address _quid) 
@@ -179,7 +174,6 @@ contract MO is ReentrancyGuard {
         
         (int24 tick_lower, 
          int24 tick_upper) = _adjustTicks(LAST_TICK);
-         
         if (token1isWETH) { // make sure LAST_TICK is not zero...
             (usdc, eth) = LiquidityAmounts.getAmountsForLiquidity(
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
@@ -192,22 +186,17 @@ contract MO is ReentrancyGuard {
                 TickMath.getSqrtPriceAtTick(LAST_TICK),
                 TickMath.getSqrtPriceAtTick(tick_lower),
                 TickMath.getSqrtPriceAtTick(tick_upper),
-                liquidityUnderManagement);
-               
+                liquidityUnderManagement);  
         }
-        
         // require(
         //     FullMath.mulDiv(eth, price, // total value of ETH in Uni LP
         //     WAD) + usdc * 1e12 >= // 
         //     assets + 
-            
+        // TODO what is the recycled asset?   
         //     FullMath.mulDiv(pledge.weth.credit, 
-        //          price, WAD), "oh"); // ^ hedged ETH
-        
+        //          price, WAD), "oh"); // ^ hedged ETH 
         assets += GD.get_total_deposits(true);
-       
-        uint total = GD.totalSupply(); 
-        
+        uint total = GD.totalSupply();      
         // ^ includes good debt, that
         // is backed by $ in basket,
         // carry.credit is "bad" debt
@@ -215,12 +204,10 @@ contract MO is ReentrancyGuard {
         // over backing by burning...
             total = (burn) ? 
             total - quid : total + quid;
-
         }   if (assets >= total) 
             { return (assets - total, 100); }
             else { return ((total - assets),
-            FullMath.mulDiv(100, assets, total));
-         
+            FullMath.mulDiv(100, assets, total));       
         } // returns delta from being 100% backed
     }
 
@@ -341,18 +328,14 @@ contract MO is ReentrancyGuard {
         if (_ETH_PRICE > 0) { // TODO
             return _ETH_PRICE; // remove
         } 
-        console.log("check check");
         uint casted = uint(sqrtRatioX96);
         uint ratioX128 = FullMath.mulDiv(
                  casted, casted, 1 << 64);
-        console.log("99999999999");
         if (token1isWETH) {
-            console.log("on deck");
             price = FullMath.mulDiv(
                 1 << 128, WAD * 1e12, 
                 ratioX128);
         } else { // token1 is not WETH
-            console.log("next wreck");
             price = FullMath.mulDiv(
                 ratioX128, WAD * 1e12, 
                 1 << 128
@@ -427,10 +410,7 @@ contract MO is ReentrancyGuard {
     }
     function _swap(uint eth, uint usdc, 
         uint price) internal returns (uint, uint) {
-        console.log("###########      USDC      ###########", usdc);
-        console.log("###########      eth      ###########", eth);
         uint usd = FullMath.mulDiv(eth, price, WAD);
-        console.log("###########      usd      ###########", usd);
         // if we assumed a 1:1 ratio of eth value
         // to usdc, then this is how'd we balance:
         // int delta = (int(usd) - int(scaled))
@@ -463,8 +443,6 @@ contract MO is ReentrancyGuard {
         } targetUSDC *= 1e12; // must also divide at the end for precision...
         address vault = GD.VAULT();
         // TODO in mainnet fork test
-        console.log("targetUSDC", targetUSDC);
-        console.log("targetETH", targetETH);
         if (scaled > targetUSDC) {
             scaled -= targetUSDC;
             console.log("m8 !", scaled);
@@ -681,18 +659,23 @@ contract MO is ReentrancyGuard {
                     pledges[address(this)].weth.debit += withdrawable; 
                     transfer = FullMath.min(amount, pledge.work.debit);
                     pledges[address(this)].carry.credit -= pledge.work.credit;
-                    pledge.work.debit -= transfer; pledge.work.credit = 0;
+                    pledge.work.debit -= transfer; 
+                    pledge.work.credit = 0;
                 }
             } require(transfer > 0, "nothing to withdraw");
+            transfer = FullMath.min(
+                pledges[address(this)].work.credit, transfer);
             pledges[address(this)].work.credit -= transfer;
             // for unwrapping from Uniswap to transfer ETH at the end...
             uint usdc = FullMath.mulDiv(price, transfer / 2, WAD * 1e12);
             if (token1isWETH) { amount1 = transfer / 2; amount0 = usdc; } 
             else { amount1 = usdc; amount0 = transfer / 2; } 
+            (int24 tick_lower, 
+             int24 tick_upper) = _adjustTicks(LAST_TICK);
             (amount0, amount1) = _withdrawAndCollect(
                 LiquidityAmounts.getLiquidityForAmounts(sqrtPrice,
-                    TickMath.getSqrtPriceAtTick(LOWER_TICK),
-                    TickMath.getSqrtPriceAtTick(UPPER_TICK),
+                    TickMath.getSqrtPriceAtTick(tick_lower),
+                    TickMath.getSqrtPriceAtTick(tick_upper),
                     amount0, amount1));      
             if (!token1isWETH) { // increase amount0 (eth) by amount1 sold
                 amount0 += ROUTER.exactInput(ISwapRouter.ExactInputParams(
@@ -734,9 +717,7 @@ contract MO is ReentrancyGuard {
               pledge.weth.debit);
         (, state.cap) = capitalisation(0, false); 
         // gzip у джинсы, зупинившись
-      
         if (pledge.work.credit > 0) {
-           
             state.collat = FullMath.mulDiv(
                 price, pledge.work.debit, WAD
             ); // lookin' too hot...simmer down, бомба клад...
@@ -744,23 +725,19 @@ contract MO is ReentrancyGuard {
                 state.repay = pledge.work.credit - state.collat;
                 state.repay += state.collat / 10; // you'll get
                 state.liquidate = true; // dropped (reversible)
-               
             } else { // repay is $ needed to reach healthy CR
                 // the necessity of this feature is from the 
                 // invariant that eventually all work.credit 
                 // must reduce to 0, no matter how good CR
                 // even if a depositor never comes back to 
                 // pledge.work.credit += 
-                
                 state.delta = state.collat - pledge.work.credit;
                 if (state.collat / 10 > state.delta) { // must get
                 // back to minimum CR of 1.1 (safety invariant)...
-                    state.repay = (state.collat / 10) - state.delta;
-                  
+                    state.repay = (state.collat / 10) - state.delta;  
                 } // ^ for using GD minted in order to payoff debt
             } // delta becomes remaining value after...^^^^^^^^^^^
         } if (amount > 0) { // TODO the script which calls fold()
-    
         // must pass in a sufficient amount param (with sell = true)
         // in such a situation where this would remedy a liquidation;
         // we could optimise that here, but function is already huge
@@ -772,14 +749,11 @@ contract MO is ReentrancyGuard {
             state.average_value = FullMath.mulDiv(
                 amount, state.average_price, WAD
             ); 
-       
             pledges[address(this)].work.credit += amount; pledge.work.debit += amount;
             // if price drop over 10% (average_value > 10% more than current value)...
             if (state.average_price >= FullMath.mulDiv(110, price, 100)) { // TODO guage
-       
                 state.delta = state.average_value - state.collat; // collat is amount...
                 if (!sell) { state.minting = state.delta;
-        
                     state.deductible = FullMath.mulDiv(WAD,
                         FullMath.mulDiv(state.collat,
                                 FEE, WAD), price
@@ -788,7 +762,6 @@ contract MO is ReentrancyGuard {
                     // so it's practical for the protocol
                     // to hold on to it (prices will rise)
                 } else if (!state.liquidate) { // sell true
-        
                 // a form of protection against liquidation
                     // if liquidate = true it
                     // will be a sale regardless
@@ -797,7 +770,6 @@ contract MO is ReentrancyGuard {
                         FullMath.mulDiv( // deducted
                             state.collat, FEE, WAD);
                 } if (state.repay > 0) { // capitalise into work credit
-          
                     state.cap = FullMath.min(state.minting, state.repay);
                     // ^^^^^^ variable re-used to conserve stack space...
                     pledge.work.credit -= state.cap; // enough to recap?
@@ -806,7 +778,6 @@ contract MO is ReentrancyGuard {
                 }   (, state.cap) = capitalisation(state.delta, false);
                 // new capitalisation including delta of minted supply
                 if (state.minting > state.delta || state.cap > 64) { // TODO guage
-            
                 // minting will equal delta unless it's a sell, and 
                 // if not, can't mint delta if under-capitalised...
                     state.minting = dollar_amt_to_gd_amt(
@@ -832,7 +803,6 @@ contract MO is ReentrancyGuard {
         }   // things have gotten closer to the sun, and I've done things
         // in small doses, so don't think that I'm pushing you away, when
         if (state.liquidate) { // ⚡️ strikes and the 🏀 court lights get
-        
             (, state.cap) = capitalisation(state.repay, true); // dim
             amount = FullMath.min(dollar_amt_to_gd_amt(state.cap, 
                 state.repay), GD.balanceOf(beneficiary));
