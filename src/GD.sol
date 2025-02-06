@@ -263,18 +263,19 @@ contract Good is ERC20, // OFTOwnable2Step,
     function _reachUp(uint batch, 
         address to, uint cut) internal {
         batch = FullMath.min(1, batch);
-        require(batch < 25, "!"); // 25 to
-        _mint(to, cut);  // lifetime value
+        require(batch < 25, "!");
+        _mint(to, cut);
         START = block.timestamp; // right now
         consideration[to][batch] += cut;
         Pod memory day = Piscine[batch - 1][42];
         // ROI aggregates all batches' days...
         ROI += FullMath.mulDiv(WAD, day.credit - 
                          day.debit, day.debit);
-        // ROI in MO is a snapshot (avg per day)
+        // ROI in MO is snapshot (avg. per day)
         MO(Mindwill).setMetrics(ROI / ((DAYS 
                      / 1 days) * batch)); 
-    } function currentBatch() public view returns 
+    } 
+    function currentBatch() public view returns
         (uint batch) { batch = (block.timestamp - 
                         deployed) / DAYS;
     } 
@@ -284,9 +285,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         public view returns (uint) { // in 3
         uint batch = currentBatch(); // 1-33
         if (batch < 8) { return 0; } 
-        else if (batch < 33) {
-            return batch - 8;
-        } else { return 24; }
+        else { return batch - 8; } 
     } 
     function matureBalanceOf(address account)
         public view returns (uint total) {
@@ -350,7 +349,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         uint from_vote = feeVotes[to]; bool result = true;
         if (to == Mindwill) {
             require(msg.sender == Mindwill, 
-            "403"); _burn(from, amount);
+                "403"); _burn(from, amount);
         } if (msg.sender != Mindwill) {
             uint to_vote = feeVotes[to];
             uint balance_to = this.balanceOf(to);
@@ -433,17 +432,21 @@ contract Good is ERC20, // OFTOwnable2Step,
     // dominate unsystematic. in my experience, the 
     // 2 tend to break according to pareto principle
     function mint(address pledge, uint amount, 
-        address token /*, uint when */) public 
+        address token, uint when) public 
         nonReentrant { uint batch;
         if (token == address(this)) {
             batch = currentBatch(); _mint(pledge, amount); // GD
             consideration[pledge][batch] += amount; // redeem ^
             require(msg.sender == Mindwill, "authorisation");
         }   else if (block.timestamp <= START + DAYS 
-            && batch < 24) { batch = currentBatch(/*when*/); // 0 - 24
-                
+                && batch < 24) { batch = currentBatch(); // 0 - 24
+                if (when != 0) { // by default 1 year maturity 
+                    require(when >= batch && 
+                        when <= 33, "now or in the future");
+                        batch = when;
+                }
                 uint in_days = ((block.timestamp - START) / 1 days);
-                require(amount >= WAD * 10 && (in_days + 1) 
+                require(amount >= WAD * 10 && (in_days + 1)
                     * MAX_PER_DAY >= Piscine[batch][42].credit 
                     + amount, "cap"); uint price = in_days * 
                                         PENNY + START_PRICE;
@@ -519,7 +522,7 @@ contract Good is ERC20, // OFTOwnable2Step,
         // they don't think that we're in a cent?
     } // lottery for L1 to incentivise governance
 
-    // the infamous cranchmorphous transmorpher
+    // the cranchmorphous transmorpher
     function morph(address to, uint amount) // 4
         public onlyUs returns (uint sent) {
         bool l2 = MO(Mindwill).token1isWETH();

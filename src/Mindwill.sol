@@ -472,7 +472,7 @@ contract MO is ReentrancyGuard {
             // x - ky = n + knp
             // x - ky = n(1 + kp)
             uint selling = FullMath.mulDiv(
-                    WAD, eth - ky,  denom);
+                    WAD, eth - ky, denom);
             // console.log("selling...", selling);
             // TODO maybe divide by WAD again
             eth -= selling; 
@@ -486,8 +486,6 @@ contract MO is ReentrancyGuard {
             require(FullMath.mulDiv(
                 1000, ky - k, k) < 68, 
                 "margin of error"); 
-                // (($10m x (0.0725 x 3/12)
-                // - 11000 / $10m)) x 4
         } return (eth, scaled / 1e12);
     }
 

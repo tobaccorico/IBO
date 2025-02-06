@@ -132,7 +132,8 @@ contract MainnetFork is Test {
         (work_debit, work_credit, 
          weth_debit, weth_credit) = mindwill.get_more_info(User01);
         quid.transfer(User02, grant);
-        vm.stopPrank(); // exit User1 context
+        vm.stopPrank(); 
+        // exit User1 context
 
         // transfer backward 
         vm.startPrank(User02); 
@@ -301,6 +302,10 @@ contract MainnetFork is Test {
         uint afterBatch = quid.currentBatch();
         assertNotEq(beforeBatch, afterBatch);
         assertNotEq(avg_roi_before, avg_roi_after);
+
+        vm.startPrank(User01);
+        // mindwill.redeem();
+        vm.stopPrank();
     }
     /*
         assertGt(amountOut, 0);
