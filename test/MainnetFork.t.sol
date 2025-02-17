@@ -2,12 +2,10 @@
 pragma solidity >=0.8.4 <0.9.0;
 import {Good} from "../src/GD.sol";
 import {MO} from "../src/Mindwill.sol";
-
 import {mockVault} from "../src/mockVault.sol";
 import {mockToken} from "../src/mockToken.sol";
 import "lib/forge-std/src/console.sol"; // TODO delete
 import {Test} from "lib/forge-std/src/Test.sol";
-
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
@@ -22,26 +20,28 @@ interface ICollection is IERC721 {
     function latestTokenId()
     external view returns (uint);
 } 
-contract MainnetFork is Test {
-    Good public quid;
-    MO public mindwill;
+contract MainnetFork is Test { Good public quid; MO public Mindwill;
+    WETH public weth = WETH(payable(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2));
+    mockToken public USDT; // = ERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+    mockToken public USDC; // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
     mockToken public DAI; // = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     mockVault public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
     mockToken public USDS; // = ERC20(0xdC035D45d973E3EC169d2276DDab16f1e407384F);
     mockVault public SUSDS; // = ERC4626(0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD);
+    mockToken public GHO; // = ERC20(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
+    mockVault public SGHO; // = ERC20(0x1a88Df1cFe15Af22B3c4c783D4e6F7F9e0C1885d);
     mockToken public FRAX; // = ERC20(0x853d955aCEf822Db058eb8505911ED77F175b99e);
     mockVault public SFRAX; // = ERC4626(0xA663B02CF0a4b149d2aD41910CB81e23e1c41c32);
     mockToken public USDE; // = ERC20(0x4c9EDD5852cd905f086C759E8383e09bff1E68B3);
     mockVault public SUSDE; // = ERC4626(0x9D39A5DE30e57443BfF2A8307A4256c8797A3497);
     mockToken public CRVUSD; // ERC20(0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E);
     mockVault public SCRVUSD; // ERC4626(0x0655977FEb2f289A4aB78af67BAB0d17aAb84367);
-
     ICollection public F8N = ICollection(0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405); 
     ISwapRouter public router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
     IUniswapV3Pool public pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
-    WETH public weth = WETH(payable(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2));    
-    ERC20 public usdc = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+    address public smokehouseUSDCvault = 0xBEeFFF209270748ddd194831b3fa287a5386f5bC;
+    address public smokehouseUSDTvault = 0xA0804346780b4c2e3bE118ac957D1DB82F9d7484;
     
     address public User01 = address(0x1);
     address public User02 = address(0x2);
@@ -65,12 +65,13 @@ contract MainnetFork is Test {
     uint public rack = 1000000000000000000000; // $1000
     uint public bill = 100000000000000000000; // $100
     uint public half_a_rack = 500000000000000000000; // $500
-    uint public grant = 50000000000000000000; // $50
-    uint public dub_dub_in_eth = 10000000000000000; // ~$40
     
+    uint public dub_dub_in_eth = 10000000000000000; // ~$40
+    uint public grant = 50000000000000000000; // $50
     function setUp() public {
-        uint256 mainnetFork = vm.createFork("https://rpc.ankr.com/eth", 21667316);
-        vm.selectFork(mainnetFork);
+        uint256 mainnetFork = vm.createFork(
+        "https://rpc.ankr.com/eth", 21667316);
+        vm.selectFork(mainnetFork); 
 
         vm.deal(User01, 1_000_000_000_000_000 ether);
         vm.deal(User02, 1_000_000_000_000_000 ether);
@@ -86,21 +87,21 @@ contract MainnetFork is Test {
         SUSDS = new mockVault(USDS);
         CRVUSD = new mockToken(18);
         SCRVUSD = new mockVault(CRVUSD);
-        mindwill = new MO(// mindwill 
-            address(weth), address(usdc), 
+        Mindwill = new MO( // Mindwill 
+            address(weth), address(USDC), 
             address(nfpm), address(pool), 
-            address(router)
+            address(router) 
         );
-        quid = new Good(address(mindwill), 
-        // app.morpho.org/vault?vault=0xd63070114470f685b75B74D60EEc7c1113d33a3D&network=mainnet
-            address(usdc), 0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458, // Guantlet Morpho Vault
+        quid = new Good(address(Mindwill), 
+            address(USDC), smokehouseUSDCvault,
+            address(USDT), smokehouseUSDTvault,
             0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
             address(USDE), address(SUSDE), address(FRAX), address (SFRAX),
             address (SDAI), address(DAI), address(USDS), address(SUSDS),
-            address(CRVUSD), address(SCRVUSD)
-        );  mindwill.setQuid(address(quid));
-        mindwill.set_price_eth(false, true);
-        (,uint price,) = mindwill.fetch(User01);
+            address(CRVUSD), address(SCRVUSD), address(GHO), address(SGHO)
+        );  Mindwill.setQuid(address(quid));
+        Mindwill.set_price_eth(false, true);
+        (,uint price,) = Mindwill.fetch(User01);
         console.log("?!?!?!?!? price ?!?!?!?!?", price);
         // TODO uncomment
     }
@@ -118,19 +119,19 @@ contract MainnetFork is Test {
         weth.deposit{value: 1_000_000 ether}();
 
         USDE.approve(address(quid), type(uint256).max);
-        quid.mint(User01, half_a_rack, address(USDE));
-        quid.mint(User01, half_a_rack, address(USDE));
+        quid.mint(User01, half_a_rack, address(USDE), 0);
+        quid.mint(User01, half_a_rack, address(USDE), 0);
 
-        uint minted = quid.balanceOf(User01);
+        uint minted = quid.balanceOf(User01, 0);
         assertEq(minted, rack);
 
         (quid_credit, 
-         quid_debit) = mindwill.get_info(User01);
+         quid_debit) = Mindwill.get_info(User01);
         console.log("User1...before transfer", quid_credit, quid_debit);
 
         uint a; uint b; uint c; uint d;
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = mindwill.get_more_info(User01);
+         weth_debit, weth_credit) = Mindwill.get_more_info(User01);
         quid.transfer(User02, grant);
         vm.stopPrank(); 
         // exit User1 context
@@ -140,7 +141,7 @@ contract MainnetFork is Test {
         quid.transfer(User01, grant);
         vm.stopPrank();
        
-        (a,b,c,d) = mindwill.get_more_info(User01);
+        (a,b,c,d) = Mindwill.get_more_info(User01);
         // and verify that carry.debit
         // before and after are the same
         assertEq(a, work_debit);
@@ -156,38 +157,38 @@ contract MainnetFork is Test {
         USDE.mint();
         weth.deposit{value: 1_000_000 ether}();
 
-        weth.approve(address(mindwill), type(uint256).max);
+        weth.approve(address(Mindwill), type(uint256).max);
         USDE.approve(address(quid), type(uint256).max);
-        quid.mint(User02, bill, address(USDE));
+        quid.mint(User02, bill, address(USDE), 0);
 
-        minted = quid.balanceOf(User02);
+        minted = quid.balanceOf(User02, 0);
 
         (quid_credit, 
-         quid_debit) = mindwill.get_info(User02); 
+         quid_debit) = Mindwill.get_info(User02); 
         console.log("User2...", quid_credit, quid_debit); 
 
         vm.stopPrank(); // exit User2 context
 
-        (quid_credit, quid_debit) = mindwill.get_info(User01);
+        (quid_credit, quid_debit) = Mindwill.get_info(User01);
         console.log("User1...after transfer", quid_credit, quid_debit);
 
         console.log("<><><><><><><>  total        <><><><><><><><>", quid.get_total_deposits(true));
         
         vm.startPrank(User01);
         
-        weth.approve(address(mindwill), dub_dub_in_eth);
-        mindwill.deposit(User01, dub_dub_in_eth, false);
+        weth.approve(address(Mindwill), dub_dub_in_eth);
+        Mindwill.deposit(User01, dub_dub_in_eth, false);
         
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = mindwill.get_more_info(User01);
+         weth_debit, weth_credit) = Mindwill.get_more_info(User01);
 
         console.log("User1...more_info beforeFOLD", 
             work_debit, work_credit, weth_debit
         );
-        mindwill.fold(User01, dub_dub_in_eth, false);
+        Mindwill.fold(User01, dub_dub_in_eth, false);
 
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = mindwill.get_more_info(User01);
+         weth_debit, weth_credit) = Mindwill.get_more_info(User01);
 
         console.log("User1...more_info AFTERfold", 
             work_debit, work_credit, weth_debit
@@ -195,7 +196,7 @@ contract MainnetFork is Test {
         
         uint256 balanceBefore = User01.balance;
         console.log("user1BalanceBefore withdraw ETH...", balanceBefore);
-        mindwill.withdraw(dub_dub_in_eth, false);
+        Mindwill.withdraw(dub_dub_in_eth, false);
 
         uint256 balanceAfter = User01.balance;
         console.log("user1BalanceAFTER withdraw ETH...", balanceAfter);
@@ -204,25 +205,25 @@ contract MainnetFork is Test {
         vm.startPrank(User03);
 
         uint thirtyThree = 33000000000000000000;
-        mindwill.withdraw{value: dub_dub_in_eth}(thirtyThree, true);
+        Mindwill.withdraw{value: dub_dub_in_eth}(thirtyThree, true);
 
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = mindwill.get_more_info(User03);
+         weth_debit, weth_credit) = Mindwill.get_more_info(User03);
 
         console.log("User3...more_info AFTER borrow", 
             work_debit, work_credit, weth_debit
         );
-        console.log("QD that was minted for User3...", quid.balanceOf(User03));
+        console.log("QD that was minted for User3...", quid.balanceOf(User03, 0));
 
         vm.stopPrank();
-        console.log("price before drop", mindwill.getPrice(42));
-        // mindwill.set_price_eth(false, false); // TODO uncomment
-        // mindwill.set_price_eth(false, false);
-        console.log("price AFTER drop", mindwill.getPrice(42));
-        mindwill.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
+        console.log("price before drop", Mindwill.getPrice(42));
+        // Mindwill.set_price_eth(false, false); // TODO uncomment
+        // Mindwill.set_price_eth(false, false);
+        console.log("price AFTER drop", Mindwill.getPrice(42));
+        Mindwill.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
 
         (work_debit, work_credit, 
-         weth_debit, weth_credit) = mindwill.get_more_info(User03);
+         weth_debit, weth_credit) = Mindwill.get_more_info(User03);
 
         console.log("User3...more_info AFTER liquidation (1st)", 
             work_debit, work_credit, weth_debit
@@ -230,9 +231,9 @@ contract MainnetFork is Test {
 
         vm.warp(block.timestamp + 61 minutes);
 
-        mindwill.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
+        Mindwill.fold(User03, 1, false); // for a liquidation amount variable is irrelevant
          (work_debit, work_credit, 
-         weth_debit, weth_credit) = mindwill.get_more_info(User03);
+         weth_debit, weth_credit) = Mindwill.get_more_info(User03);
 
         console.log("User3...more_info AFTER liquidation (1 hour later)", 
             work_debit, work_credit, weth_debit
@@ -304,7 +305,7 @@ contract MainnetFork is Test {
         assertNotEq(avg_roi_before, avg_roi_after);
 
         vm.startPrank(User01);
-        // mindwill.redeem();
+        // Mindwill.redeem();
         vm.stopPrank();
     }
     /*

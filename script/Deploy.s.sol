@@ -1,7 +1,8 @@
 
 pragma solidity 0.8.25;
-import {Good} from "../src/GD.sol";
+// import {Good} from "../src/GD.sol";
 import {MO} from "../src/Mindwill.sol";
+import {L2Good as Good} from "../src/L2GD.sol";
 import "lib/forge-std/src/console.sol";
 import {Script} from "lib/forge-std/src/Script.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
@@ -22,6 +23,8 @@ contract Deploy is Script {
     Good public quid; 
     MO public Mindwill;
     
+    ERC20 public USDT = ERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7); // this is an L1 address
+    // 
     ERC20 public USDC = ERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); 
     // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48) TODO Ethereum L1
     // Base : 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
@@ -32,8 +35,10 @@ contract Deploy is Script {
      // TODO no USDS on Arbitrum (nor SUSDS or SFRAX)
     ERC20 public USDS = ERC20(0x820C137fa70C8691f0e44Dc420a5e53c168921Dc);
     // = ERC20(0xdC035D45d973E3EC169d2276DDab16f1e407384F);
+    // Arbitrum : 
     ERC20 public SUSDS = ERC20(0x5875eEE11Cf8398102FdAd704C9E96607675467a);
     // = ERC4626(0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD);
+    // Arbitrum : 
     
     ERC20 public DAI = ERC20(0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb);
     // = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
@@ -55,10 +60,12 @@ contract Deploy is Script {
     // Arbitrum : 0xEfB6601Df148677A338720156E2eFd3c5Ba8809d
     // Base : 0x646A737B9B6024e49f5908762B3fF73e65B5160c
 
-    // app.morpho.org/vault?vault=0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca&network=base
-    ERC4626 public VAULT = ERC4626(0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca);
-    // ERC4626(0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458); // TODO deploy L1
-   
+    // ERC20 public GHO = ERC20();
+    // Arbitrum : 0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33
+    // Base : N/A
+    // Polyhon : N/A
+    
+    ERC4626 public VAULT = ERC4626(0xbeeF010f9cb27031ad51e3333f9aF9C6B1228183);
     ERC20 public FRAX = ERC20(0x17FC002b466eEc40DaE837Fc4bE5c67993ddBd6F); // Arbitrum
     // = ERC20(0x853d955aCEf822Db058eb8505911ED77F175b99e);
     ERC4626 public SFRAX; // = ERC4626(0xA663B02CF0a4b149d2aD41910CB81e23e1c41c32);
@@ -176,12 +183,16 @@ contract Deploy is Script {
         //     deadline: block.timestamp + 3600
         // }));
         quid = new Good(address(Mindwill), // TODO deploy Morpho
-            address(USDC), address(VAULT), ID, // vault on ARB
+            address(USDC), address(VAULT),
+            address(USDT), address(0), ID, // vault on ARB
             address(USDE), address(SUSDE), // as well as Polygon
             address(FRAX), address (SFRAX), // and BNB chain...
             address (SDAI), address(DAI), 
             address(USDS), address(SUSDS),
-            address(CRVUSD), address(SCRVUSD)); 
+            address(CRVUSD), address(SCRVUSD),
+            address(0), address(0)); 
+        // NOTE on Base we don't currently have GHO 
+        // and there is Morpho vault for USDT as well
         // pool = IUniswapV3Pool(factory.createPool(
         //     address(quid), address(), 500));
         Mindwill.setQuid(address(quid)); 

@@ -27,10 +27,9 @@ well as deductibles do...
 Levering long while buying     
 protection (simultaneously)  
 hedges against liquidations  
-Deductible is initially 357bp;   
+
 APY is distributed relative to  
 one's ROI vs. `AVG_ROI`, by    
-
 absorbing liabilties upon  
 maturity, when any holder  
 may `redeem` 1 GD for $1.  

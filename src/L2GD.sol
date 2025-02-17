@@ -6,68 +6,40 @@ import {MorphoBalancesLib} from "./imports/morpho/libraries/MorphoBalancesLib.so
 import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
 import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 import {ReentrancyGuard} from "lib/solmate/src/utils/ReentrancyGuard.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMorpho, MarketParams} from "./imports/morpho/IMorpho.sol";
 
+interface ISCRVOracle { 
+    function pricePerShare(uint ts) 
+    external view returns (uint);
+} // these two Oracle contracts are only used on L2
+import {IDSROracle} from "./imports/IDSROracle.sol";
 import {FullMath} from "./imports/math/FullMath.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
 import {ERC6909} from "lib/solmate/src/tokens/ERC6909.sol";
-interface IStakeToken is IERC20 { // StkGHO (safety module)
-    function stake(address to, uint256 amount) external;
-    // here the amount is in underlying, not in shares...
-    function redeem(address to, uint256 amount) external;
-    // the amount param is in shares, not underlying...
-    function previewStake(uint256 assets) 
-             external view returns (uint256);
-    function previewRedeem(uint256 shares) 
-             external view returns (uint256);
-}
-/*
-interface ICollection is IERC721 {
-    function latestTokenId()
-    external view returns (uint);
-} // only used on Ethereum L1
-interface IERC721Receiver {
-    function onERC721Received(
-        address operator,
-        address from,
-        uint256 tokenId,
-        bytes calldata data
-    ) external returns (bytes4);
-} // in the windmills of my mind
-*/
-import {MO} from  "./Mindwill.sol"; 
+
+import {MO} from "./Mindwill.sol"; 
 // a service, and the token is a
 // good which powers the service
-contract Good is //IERC721Receiver, 
-    ERC6909, ReentrancyGuard { 
-    address payable public Mindwill;
+contract L2Good is ERC6909, ReentrancyGuard { 
     using SafeTransferLib for ERC20;
     using SafeTransferLib for ERC4626;
-    
     uint public ROI; uint public START;
     Pod[43][24] Piscine; // 24 batches
     
     uint constant PENNY = 1e16;
     uint constant LAMBO = 16508; // NFT
     bytes32 public immutable ID; // Morph
-    
     uint constant public DAYS = 42 days;
     uint public START_PRICE = 50 * PENNY;
-    
     struct Pod { uint credit; uint debit; }
-    
     mapping(address => Pod) public perVault;
     mapping(address => address) public vaults;
     /// @notice The total supply of each id...
-
     mapping(uint256 id => uint256 amount) public totalSupplies;
     mapping(address account => mapping(// legacy ERC20 version
             address spender => uint256)) private _allowances;
-    
-    mapping(address => bool[24]) public hasVoted;
+    mapping (address => bool[24]) public hasVoted;
     // voted for enum as what was voted on, and
     // token-holders vote for deductibles, their
     // GD balances are applied to total weights
@@ -75,37 +47,33 @@ contract Good is //IERC721Receiver,
     uint public deployed; uint internal K = 28;
     uint public SUM; uint[33] public WEIGHTS;
     mapping (address => uint) public feeVotes;
-    
     address[][24] public voters; // by batch
     mapping (address => bool) public winners;
     // ^ the mapping prevents duplicates...
-
+    address payable public Mindwill;
     address public immutable SCRVUSD;
     address public immutable CRVUSD;
-   
     address public immutable SFRAX;
-    address public immutable FRAX;
-
     address public immutable SUSDE;
-    address public immutable USDE;
-
     address public immutable SUSDS;
-    address public immutable USDS;
-    
     address public immutable SGHO;
-    address public immutable GHO;
-    
     address public immutable SDAI;
+    address public immutable USDS;
     address public immutable DAI;
-    
+    address public immutable GHO;
     address public immutable USDC;
     address public immutable USDT;
+    address public immutable USDE;
+    address public immutable FRAX;
     
+    IDSROracle internal DSR;
+    ISCRVOracle internal CRV;
     uint constant WAD = 1e18;
     uint private _totalSupply;
     string private _name = "QU!D";
     string private _symbol = "GD";
-    modifier onlyUs { 
+    modifier onlyUs { // the good,
+        // and the batter, Mindwill
         address sender = msg.sender;
         require(sender == Mindwill ||
                 sender == address(this), "!?"); _;
@@ -119,37 +87,31 @@ contract Good is //IERC721Receiver,
         address _usds, address _susds,
         address _crv, address _scrv,
         address _gho, address _sgho) {
-        ID = _morpho; Mindwill = payable(_mo); 
-        START = block.timestamp; deployed = START; 
-        require(address(MO(Mindwill).token0()) == USDC
-             && address(MO(Mindwill).token1()) == address(
-                        MO(Mindwill).WETH9()), "42");
-        
-        USDC = _usdc; vaults[USDC] = _vaultUSDC;
+        USDC = _usdc; USDT = _usdt;
+        SGHO = _sgho; GHO = _gho; 
+        SDAI = _sdai; DAI = _dai;
+        SUSDS = _susds; USDS = _usds;
+        SFRAX = _sfrax; FRAX = _frax; 
+        SUSDE = _susde; USDE = _usde; 
+        SCRVUSD = _scrv; CRVUSD = _crv;
+        vaults[USDC] = _vaultUSDC;
+        vaults[DAI] = SDAI;
+        vaults[USDS] = SUSDS;
+        vaults[USDE] = SUSDE;
+        vaults[CRVUSD] = SCRVUSD;
+        Mindwill = payable(_mo); deployed = START; 
+        ID = _morpho; START = block.timestamp;
         ERC20(USDC).approve(_vaultUSDC, type(uint).max);
-        
-        USDT = _usdt;vaults[USDT] = _vaultUSDT;
-        ERC20(USDT).approve(_vaultUSDT, type(uint).max);
-        
-        SGHO = _sgho; GHO = _gho; // vault isn't 4626
-        ERC20(GHO).approve(SGHO, type(uint).max);
-        
-        SDAI = _sdai; DAI = _dai; vaults[DAI] = SDAI;
-        ERC20(DAI).approve(MORPHO, type(uint).max);
-        ERC20(DAI).approve(SDAI, type(uint).max);
-        
-        SUSDS = _susds; USDS = _usds; vaults[USDS] = SUSDS;
-        ERC20(USDS).approve(SUSDS, type(uint).max);
-        
-        SFRAX = _sfrax; FRAX = _frax; vaults[FRAX] = SFRAX; 
-        ERC20(FRAX).approve(SFRAX,  type(uint).max);
-
-        SUSDE = _susde; USDE = _usde; vaults[USDE] = SUSDE;
-        ERC4626(SUSDE).approve(MORPHO, type(uint).max);
-        ERC20(USDE).approve(SUSDE, type(uint).max);
-        
-        SCRVUSD = _scrv; CRVUSD = _crv; vaults[CRVUSD] = SCRVUSD;
-        ERC20(CRVUSD).approve(SCRVUSD, type(uint).max);
+        require(address(MO(Mindwill).token1())
+            == USDC && address(MO(Mindwill).token0())
+            == address(MO(Mindwill).WETH9()), "42"); 
+            ERC20(SUSDE).approve(MORPHO, type(uint).max); // deployed 
+            ERC20(USDC).approve(MORPHO, type(uint).max); // on Base...
+            DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); // only Base
+            CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
+            // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
+            //  0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
+         
     } 
     uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3yr
@@ -162,77 +124,66 @@ contract Good is //IERC721Receiver,
         returns (uint total) { // handle USDC first
         total += usdc ? ERC4626(vaults[USDC]).maxWithdraw(
                                  address(this)) * 1e12 : 0;
-        // includes collateral deployed in Morpho,
-        // as Pod.credit, initially only for SUSDE;
-        // can be multiple markets just in case...
-        // TODO perhaps don't take .credit at face value
-        // because while in custody by Morpho it does not
-        // generate interest, thus shouldn't be valued as
-        // interest bearing, the way that .debit held by
-        // our contract is getting valued (covertToAssets)
-        total += ERC4626(vaults[USDT]).maxWithdraw(
-                        address(this)) * 1e12;
-        total += IStakeToken(SGHO).previewRedeem(
-                    IStakeToken(SGHO).balanceOf(address(this)));
-        total += FullMath.max(ERC4626(SUSDE).convertToAssets(
-                perVault[SUSDE].debit + perVault[SUSDE].credit), 
-                    ERC4626(SUSDE).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SUSDS).convertToAssets(
-                perVault[SUSDS].debit + perVault[SUSDS].credit), 
-                    ERC4626(SUSDS).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SDAI).convertToAssets(
-                perVault[SDAI].debit + perVault[SDAI].credit), 
-                    ERC4626(SDAI).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SFRAX).convertToAssets(
-                perVault[SFRAX].debit + perVault[SFRAX].credit), 
-                    ERC4626(SFRAX).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
-                perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
-                    ERC4626(SCRVUSD).maxWithdraw(address(this)));
+        // TODO on Arbitrum there is no Morpho vault yet...
+        if (!MO(Mindwill).token1isWETH()) { // L2 
+            // total += perVault[FRAX].debit; // ARB only
+            total += perVault[USDE].debit;
+            total += FullMath.mulDiv(_getPrice(SUSDE),
+                        perVault[SUSDE].debit, WAD);
+            total += FullMath.mulDiv(_getPrice(SUSDS),
+                        perVault[SUSDS].debit, WAD);
+            total += perVault[USDS].debit;
+            total += perVault[DAI].debit;
+            total += perVault[CRVUSD].debit;
+            total += FullMath.mulDiv(_getPrice(SCRVUSD),
+                        perVault[SCRVUSD].debit, WAD); 
+        } 
     }
     function _deposit(address from,
         address token, uint amount)
         internal returns (uint usd) {
-        bool isDollar = false; 
-        if (token == SCRVUSD || token == SFRAX || 
-            token == SUSDS || token == SDAI || 
+      
+        bool isDollar = false;
+        if (token == SCRVUSD ||
+            token == SUSDS ||  
             token == SUSDE) { isDollar = true;
-    
+            uint price = _getPrice(token); 
             amount = FullMath.min(
-                ERC4626(token).allowance(from, address(this)),
-                 ERC4626(token).convertToShares(amount));
-            usd = ERC4626(token).convertToAssets(amount);
-                   ERC4626(token).transferFrom(msg.sender,
-                                    address(this), amount);
-        
+                ERC20(token).balanceOf(from),
+                FullMath.mulDiv(amount, WAD, price)
+            ); 
+            usd = FullMath.mulDiv(amount, price, WAD);
             perVault[token].debit += amount;
-        }    
-        else if (token == DAI  || token == USDS ||
-                 token == USDC || token == FRAX ||
-                 token == USDT || token == GHO  ||
-                 token == USDE || token == SGHO ||
-                 token == CRVUSD ) { isDollar = true; 
-                 usd = FullMath.min(amount, 
-                    ERC20(token).allowance(
-                        from, address(this)));
-                    
-                    address vault = vaults[token];
-                    ERC20(token).transferFrom(
-                     from, address(this), usd);
-     
-                    if (token == GHO) {
-                        amount = IStakeToken(SGHO).previewStake(usd);
-                        IStakeToken(SGHO).stake(address(this), usd);
-                    } else if (token != SGHO) { 
-                        amount = ERC4626(vault).deposit(usd, 
-                                            address(this));
-                    } 
-                    perVault[vault].debit += amount;
         } 
-        require(isDollar && amount > 0, "$");
+        else if (token == DAI  || token == USDS ||
+                 token == USDC || token == USDE || 
+                 token == CRVUSD) { isDollar = true; 
+                 usd = FullMath.min(amount, 
+                        ERC20(token).allowance(
+                           from, address(this)));
+
+                        ERC20(token).transferFrom(from,
+                                 address(this), usd);
+
+                   if (token == USDC || token == USDT) {
+                        address vault = vaults[token];
+                        amount = ERC4626(vault).deposit(
+                                       usd, address(this));
+                        perVault[vault].debit += amount;
+                    } 
+                    else { perVault[token].debit += usd; }
+        }           require(isDollar && amount > 0, "$");
     }
 
-   
+    function _send(address to, address token, 
+        uint amount) internal returns (uint sent) {
+        if (amount > 0) { sent = FullMath.min(
+            amount, ERC20(token).balanceOf(
+                                address(this)));
+            ERC20(token).transfer(to, sent);
+            perVault[token].debit -= sent;
+        }
+    }
     // takes $ amount input in units of 1e18...
     function withdrawUSDC(uint amount) public
         onlyUs returns (uint withdrawn) {
@@ -245,7 +196,8 @@ contract Good is //IERC721Receiver,
                     Mindwill, address(this)); 
             }
         } else { return 0; }
-    }
+    } // TODO deploy Morpho 
+    // vault on Arbitrum...
 
     function gd_amt_to_dollar_amt(uint gd_amt) public
         view returns (uint amount) { uint in_days = (
@@ -261,7 +213,7 @@ contract Good is //IERC721Receiver,
         ) + 1; return in_days * MAX_PER_DAY -
                  Piscine[batch][42].credit;
     }
-   
+    /*
     function reachUp()
         public nonReentrant {
         if (block.timestamp > // 45d
@@ -286,8 +238,7 @@ contract Good is //IERC721Receiver,
         // ROI in MO is snapshot (avg. per day)
         MO(Mindwill).setMetrics(ROI / ((DAYS 
                      / 1 days) * batch)); 
-    }
-    
+    } */
     /**
      * @dev Returns the current reading of our internal clock.
      */
@@ -320,8 +271,7 @@ contract Good is //IERC721Receiver,
     /**
      * @dev See {IERC20-totalSupply}.
      */
-    function totalSupply() public 
-        view returns (uint) {
+    function totalSupply() public view virtual returns (uint) {
         return _totalSupply;
     }
 
@@ -344,7 +294,6 @@ contract Good is //IERC721Receiver,
         for (uint i = 0; i < batches; i++) 
             total += balanceOf[account][i]; 
     } // redeeming matured GD calls turn() from MO
-   
     function turn(address from, // whose balance
         uint value) public 
         onlyUs returns (uint) {
@@ -511,7 +460,26 @@ contract Good is //IERC721Receiver,
         } 
         MO(Mindwill).setFee(K);
     }
-    
+    function _getPrice(address token) internal 
+        view returns (uint price) { // L2 only
+        if (token == SUSDE) { // in absence of ERC4626 locally
+            (, int answer,, uint ts,) = AggregatorV3Interface(
+            0xdEd37FC1400B8022968441356f771639ad1B23aA).latestRoundData();
+            // 0xdEd37FC1400B8022968441356f771639ad1B23aA // Base
+            // 0x605EA726F0259a30db5b7c9ef39Df9fE78665C44 // ARB
+            price = uint(answer); require(ts > 0 
+                && ts <= block.timestamp, "link");
+            console.log("SUSDE obtained price", price);
+        } else if (token == SCRVUSD) { 
+            price = CRV.pricePerShare(block.timestamp);
+            console.log("SCRVUSD obtained price", price);
+        } else if (token == SUSDS) {
+            price = DSR.getConversionRateBinomialApprox() / 1e9;
+            console.log("SUSDS obtained price", price);
+        }
+        require(price >= WAD, "price");
+    } // function used only on Base...
+
     function _mint(address receiver,
         uint256 id, uint256 amount
     ) internal override {
@@ -556,51 +524,6 @@ contract Good is //IERC721Receiver,
         } address public constant F8N = 0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405;
         address public constant QUID = 0x42cc020Ef5e9681364ABB5aba26F39626F1874A4;
       address public constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
-    /** Whenever an {IERC721} `tokenId` token is transferred to this ERC20: ratcheting batch
-     * @dev Safe transfer `tokenId` token from `from` to `address(this)`, checking that the
-    recipient prevent tokens from being forever locked. An NFT is used as the _delegate is 
-    an attribution of character, 
-    * - `tokenId` token must exist and be owned by `from`
-     * - If the caller is not `from`, it must have been allowed
-     *   to move this token by either {approve} or {setApprovalForAll}.
-     * - {onERC721Received} is called after a safeTransferFrom...
-     * - It must return its Solidity selector to confirm the token transfer.
-     *   If any other value is returned or the interface is not implemented
-     *   by the recipient, the transfer will be reverted.
-     */
-    // QuidMint...foundation.app/@quid
-    /*
-    function onERC721Received(address operator,
-        address from, // previous owner...
-        uint tokenId, bytes calldata data)
-        external override returns (bytes4) { 
-        uint batch = currentBatch(); // 1 - 25 (3 years)
-        require(block.timestamp > START + DAYS, "early");
-        if (tokenId == LAMBO && ICollection(F8N).ownerOf(
-            LAMBO) == address(this)) { address winner;
-            uint cut = GRIEVANCES / 2; uint count = 0;
-            // this.morph(QUID, cut); this.morph(from, cut);
-            ICollection(F8N).transferFrom( // return
-                address(this), QUID, LAMBO); // NFT...
-                // "I put my key, you put your key in"
-            uint kickback = KICKBACK; cut = KICKBACK / 12;
-            if (voters[batch - 1].length >= 10 && data.length >= 32) {
-                bytes32 _seed = abi.decode(data[:32], (bytes32));
-                for (uint i = 0; count < 10 && i < 30; i++) {
-                    uint random = uint(keccak256(
-                        abi.encodePacked(_seed,
-                        block.prevrandao, i))) %
-                        voters[batch - 1].length;
-                        winner = voters[batch - 1][random];
-                    if (!winners[winner]) {
-                        count += 1; winners[winner] == true;
-                        kickback -= cut; _mint(winner, batch, cut);
-                        balanceOf[winner][batch] += cut;
-                    } 
-                }
-            } _reachUp(batch, from, kickback); 
-        } return this.onERC721Received.selector;
-    } */
    
     function morph(address to, uint amount) 
         public onlyUs returns (uint sent) {
@@ -623,38 +546,44 @@ contract Good is //IERC721Receiver,
         } require(amount > 0, "no thing");
         uint inDollars; address vault; uint i; // for loop
         uint[7] memory amounts; address[7] memory tokens; 
-        uint sharesWithdrawn; address repay = SDAI; // <- tokens borrowed 
+        uint sharesWithdrawn; address repay = l2 ? vaults[USDC] : SDAI; 
         MarketParams memory params = IMorpho(MORPHO).idToMarketParams(ID);
         (uint delta, uint cap) = MO(Mindwill).capitalisation(0, false);
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
                         // on L2 this is USDC, on L1 it's DAI...
                         IMorpho(MORPHO), params, address(this));  
-            tokens = [DAI, USDS, USDE, CRVUSD, USDT, FRAX, GHO];
-
+            tokens = [DAI, USDS, USDE, CRVUSD, USDT, FRAX, GHO]; 
         uint collat; // hardcoded ^^ to one, but it can be changed... 
         // because the following for loop is compatible with any token,
         // or even multiple, to pledge as collateral in morpho market
-        for (i = 0; i < 6; i++) { vault = vaults[tokens[i]];
-        // effectively, maxWithdraw() should give us the same as
-        // ERC4626(vault).convertToAssets(perVault[vault].debit)
-            amounts[i] = ERC4626(vault).maxWithdraw(address(this));
-        }   amounts[6] = IStakeToken(SGHO).previewRedeem(
-                IStakeToken(SGHO).balanceOf(address(this)));
+        
+        amounts[4] = perVault[USDT].debit; 
+        amounts[0] = perVault[DAI].debit; // no SDAI on Base
+        // amounts[5] = perVault[FRAX].debit; // TODO Arbitrum
+        // there is no GHO on Base, and no Morpho vault of USDT
+        for (i = 1; i < 4; i++) { vault = vaults[tokens[i]];
+            // can have combinations of (e.g.) USDS & SUSDS
+            amounts[i] = perVault[tokens[i]].debit +
+                FullMath.mulDiv(_getPrice(vault),
+                    perVault[vault].debit, WAD); 
+        } 
+        inDollars = FullMath.mulDiv(_getPrice(SUSDE), 
+                        perVault[SUSDE].debit, WAD);
 
-        inDollars = FullMath.min(delta + delta / 9, amounts[2]);
-        // ^ the most that we can pledge as collateral in Morpho
-        collat = ERC4626(SUSDE).convertToShares(inDollars); 
+        collat = FullMath.min(delta + delta / 9, inDollars);
+        collat = FullMath.mulDiv(WAD, collat, _getPrice(SUSDE));
+        
         if (collat > 0 && delta > 0 && inDollars > delta) {
             IMorpho(MORPHO).supplyCollateral(
             params, collat, address(this), "");
-            perVault[SUSDE].debit -= collat;
             perVault[SUSDE].credit += collat; 
+            perVault[SUSDE].debit -= collat;
             (borrowed,) = IMorpho(MORPHO).borrow(params, collat, 0,
                                     address(this), address(this));
 
             perVault[repay].credit += ERC4626(repay).deposit( 
                                      borrowed, address(this));
-        }
+        } 
         else if (borrowed > 0 && cap == 100) { 
             delta = delta > perVault[repay].credit ? 
                             perVault[repay].credit : delta;
@@ -667,48 +596,66 @@ contract Good is //IERC721Receiver,
             perVault[repay].credit -= sharesWithdrawn;
             inDollars = ERC4626(repay).convertToAssets(
                                         sharesWithdrawn);
-
-            collat = FullMath.min(collat,
-            ERC4626(SUSDE).convertToShares(inDollars));
-
+           
+            collat = FullMath.min(collat, FullMath.mulDiv(
+                         WAD, inDollars, _getPrice(SUSDE)));
+            
             IMorpho(MORPHO).withdrawCollateral(params, 
                 collat, address(this), address(this));
-
+                    
             perVault[SUSDE].credit -= collat;
             perVault[SUSDE].debit += collat;
-        }
+        } 
         else if (borrowed == 0 && perVault[SUSDE].credit > 0) {
-            IMorpho(MORPHO).withdrawCollateral(params,
+            IMorpho(MORPHO).withdrawCollateral(params, 
             perVault[SUSDE].credit, address(this), address(this));
             perVault[SUSDE].debit += perVault[SUSDE].credit;
             perVault[SUSDE].credit = 0;
-        }
-        for (i = 0; i < 6; i++) { 
+        }       
+        for (i = 1; i < 4; i++) { 
+            // first we try to exhaust the unstaked versions, as
+            // they are not yield-bearing (preferrable to keep)
             amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                    WAD, amounts[i], total), WAD);
-            if (amounts[i] > 0) { 
-                vault = vaults[tokens[i]]; // functionally equivalent to maxWithdraw()
-                sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),
-                                        ERC4626(vault).convertToShares(amounts[i]));
-                require(sharesWithdrawn == ERC4626(vault).withdraw(sharesWithdrawn, 
-                                                        to, address(this)), "$m");
-                                                        // ^ this sends tokens out
-                perVault[vault].debit -= sharesWithdrawn;
-                amounts[i] = ERC4626(vault).convertToAssets(
-                                            sharesWithdrawn);
-                sent += amounts[i];  
-            } 
-        } amounts[6] = FullMath.mulDiv(
-            amount, FullMath.mulDiv(
-                WAD, IStakeToken(SGHO).previewRedeem(
-                        IStakeToken(SGHO).balanceOf(
-                        address(this))), total), WAD);
+                                            WAD, amounts[i], total), WAD);
+            
+            inDollars = FullMath.min(amounts[i],
+                    ERC20(tokens[i]).balanceOf(
+                                  address(this)));
+            
+            ERC20(tokens[i]).transfer(to, inDollars);
+            sent += inDollars; amounts[i] -= inDollars;
+            perVault[tokens[i]].debit -= inDollars;
+            
+            if (amounts[i] > 0) {
+                // get the shares tokens
+                vault = vaults[tokens[i]];
+                // inDollars is not really
+                // ^^^^^^^^^ but in shares:
+                inDollars = FullMath.min(
+                    ERC20(vault).balanceOf(
+                        address(this)), FullMath.mulDiv(
+                                        amounts[i], WAD, 
+                                        _getPrice(vault)));
+                
+                perVault[vault].debit -= inDollars;
+                ERC20(vault).transfer(to, inDollars);
+                sent += FullMath.mulDiv(inDollars,
+                            _getPrice(vault), WAD);
+            }   
+        } 
+        sent += _send(to, tokens[4], FullMath.mulDiv( // USDT
+                                amount, FullMath.mulDiv(WAD, 
+                                    amounts[4], total), WAD));
 
-        if (amounts[6] > 0) {
-            amount = IStakeToken(SGHO).previewStake(amounts[6]);
-            require(IStakeToken(SGHO).previewRedeem(amount) == amounts[6], "sgho");
-            IStakeToken(SGHO).redeem(to, amount); sent += amounts[6];
-        }
+        sent += _send(to, tokens[0], FullMath.mulDiv( // DAI
+                                amount, FullMath.mulDiv(WAD, 
+                                    amounts[0], total), WAD));
+                                        
+        /* TODO only for Arbitrum, there is no FRAX on Base
+            sent += _send(to, tokens[5], FullMath.mulDiv(
+                        amount, FullMath.mulDiv(WAD, 
+                            amounts[5], total), WAD));
+        */
         // require(sent == amount, "morph");
         // this would be a nice invariant, but
         // in the case where we have borrowed
