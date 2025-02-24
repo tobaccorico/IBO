@@ -1,12 +1,16 @@
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.25; // EVM: london
+pragma solidity >=0.8.4 <0.9.0;
 import "lib/forge-std/src/console.sol"; // TODO delete logging before mainnet
 import {MorphoBalancesLib} from "./imports/morpho/libraries/MorphoBalancesLib.sol";
 import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
 import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 import {ReentrancyGuard} from "lib/solmate/src/utils/ReentrancyGuard.sol";
 import {IMorpho, MarketParams} from "./imports/morpho/IMorpho.sol";
+import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
+import {ERC6909} from "lib/solmate/src/tokens/ERC6909.sol";
+import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
+import {SortedSet} from "./imports/SortedSet.sol";
 
 interface ISCRVOracle { 
     function pricePerShare(uint ts) 
@@ -14,31 +18,33 @@ interface ISCRVOracle {
 } // these two Oracle contracts are only used on L2
 import {IDSROracle} from "./imports/IDSROracle.sol";
 import {FullMath} from "./imports/math/FullMath.sol";
-import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
-import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
-import {ERC6909} from "lib/solmate/src/tokens/ERC6909.sol";
 
 import {MO} from "./Mindwill.sol"; 
-// a service, and the token is a
-// good which powers the service
 contract L2Good is ERC6909, ReentrancyGuard { 
     using SafeTransferLib for ERC20;
     using SafeTransferLib for ERC4626;
+    
     uint public ROI; uint public START;
     Pod[43][24] Piscine; // 24 batches
     
     uint constant PENNY = 1e16;
-    uint constant LAMBO = 16508; // NFT
     bytes32 public immutable ID; // Morph
+    
     uint constant public DAYS = 42 days;
     uint public START_PRICE = 50 * PENNY;
+    
     struct Pod { uint credit; uint debit; }
+    
     mapping(address => Pod) public perVault;
     mapping(address => address) public vaults;
-    /// @notice The total supply of each id...
+
+    mapping(address => SortedSet) public perBatch;
+    mapping(address => uint) public totalBalances;
+    
     mapping(uint256 id => uint256 amount) public totalSupplies;
     mapping(address account => mapping(// legacy ERC20 version
             address spender => uint256)) private _allowances;
+    
     mapping (address => bool[24]) public hasVoted;
     // voted for enum as what was voted on, and
     // token-holders vote for deductibles, their
@@ -49,6 +55,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
     mapping (address => uint) public feeVotes;
     address[][24] public voters; // by batch
     mapping (address => bool) public winners;
+    
     // ^ the mapping prevents duplicates...
     address payable public Mindwill;
     address public immutable SCRVUSD;
@@ -78,7 +85,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
         require(sender == Mindwill ||
                 sender == address(this), "!?"); _;
     }
-    constructor(address _mo, address _usdc, 
+    constructor(address _mo,
         address _vaultUSDC, address _usdt,
         address _vaultUSDT, bytes32 _morpho,
         address _usde, address _susde, 
@@ -87,14 +94,16 @@ contract L2Good is ERC6909, ReentrancyGuard {
         address _usds, address _susds,
         address _crv, address _scrv,
         address _gho, address _sgho) {
-        USDC = _usdc; USDT = _usdt;
+        USDC = address(MO(Mindwill).token1());
+        vaults[USDC] = _vaultUSDC; USDT = _usdt;
+        
         SGHO = _sgho; GHO = _gho; 
         SDAI = _sdai; DAI = _dai;
         SUSDS = _susds; USDS = _usds;
         SFRAX = _sfrax; FRAX = _frax; 
         SUSDE = _susde; USDE = _usde; 
         SCRVUSD = _scrv; CRVUSD = _crv;
-        vaults[USDC] = _vaultUSDC;
+        
         vaults[DAI] = SDAI;
         vaults[USDS] = SUSDS;
         vaults[USDE] = SUSDE;
@@ -102,16 +111,12 @@ contract L2Good is ERC6909, ReentrancyGuard {
         Mindwill = payable(_mo); deployed = START; 
         ID = _morpho; START = block.timestamp;
         ERC20(USDC).approve(_vaultUSDC, type(uint).max);
-        require(address(MO(Mindwill).token1())
-            == USDC && address(MO(Mindwill).token0())
-            == address(MO(Mindwill).WETH9()), "42"); 
-            ERC20(SUSDE).approve(MORPHO, type(uint).max); // deployed 
-            ERC20(USDC).approve(MORPHO, type(uint).max); // on Base...
-            DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); // only Base
-            CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
-            // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
-            //  0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
-         
+        ERC20(SUSDE).approve(MORPHO, type(uint).max); // deployed 
+        ERC20(USDC).approve(MORPHO, type(uint).max); // on Base...
+        DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); // only Base
+        CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
+        // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
+        //  0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
     } 
     uint constant GRIEVANCES = 113310303333333333333333;
     uint constant CUT = 4920121799152111; // over 3yr
@@ -124,25 +129,23 @@ contract L2Good is ERC6909, ReentrancyGuard {
         returns (uint total) { // handle USDC first
         total += usdc ? ERC4626(vaults[USDC]).maxWithdraw(
                                  address(this)) * 1e12 : 0;
-        // TODO on Arbitrum there is no Morpho vault yet...
-        if (!MO(Mindwill).token1isWETH()) { // L2 
-            // total += perVault[FRAX].debit; // ARB only
-            total += perVault[USDE].debit;
-            total += FullMath.mulDiv(_getPrice(SUSDE),
-                        perVault[SUSDE].debit, WAD);
-            total += FullMath.mulDiv(_getPrice(SUSDS),
-                        perVault[SUSDS].debit, WAD);
-            total += perVault[USDS].debit;
-            total += perVault[DAI].debit;
-            total += perVault[CRVUSD].debit;
-            total += FullMath.mulDiv(_getPrice(SCRVUSD),
-                        perVault[SCRVUSD].debit, WAD); 
-        } 
+        // TODO on Arbitrum there's no Morpho vault yet...
+        // total += perVault[FRAX].debit; // ARB only
+        total += perVault[USDE].debit;
+        total += FullMath.mulDiv(_getPrice(SUSDE),
+                    perVault[SUSDE].debit, WAD);
+        total += FullMath.mulDiv(_getPrice(SUSDS),
+                    perVault[SUSDS].debit, WAD);
+        total += perVault[USDS].debit;
+        total += perVault[DAI].debit;
+        total += perVault[CRVUSD].debit;
+        total += FullMath.mulDiv(_getPrice(SCRVUSD),
+                    perVault[SCRVUSD].debit, WAD); 
     }
     function _deposit(address from,
         address token, uint amount)
         internal returns (uint usd) {
-      
+        
         bool isDollar = false;
         if (token == SCRVUSD ||
             token == SUSDS ||  
@@ -184,13 +187,24 @@ contract L2Good is ERC6909, ReentrancyGuard {
             perVault[token].debit -= sent;
         }
     }
+
+    function approve(address spender, 
+        uint256 value) public returns (bool) {
+        require(spender != address(0), "invalid spender");
+        _allowances[msg.sender][spender] = value;
+        return true;
+    }
+
     // takes $ amount input in units of 1e18...
     function withdrawUSDC(uint amount) public
         onlyUs returns (uint withdrawn) {
-        if (amount > 0) { address vault = vaults[USDC];
-             withdrawn = FullMath.min(amount / 1e12, 
+        if (amount > 0) { 
+            address vault = vaults[USDC];
+             withdrawn = FullMath.min(
+                amount / 1e12, 
                 ERC4626(vault).maxWithdraw(
                             address(this)));
+
             if (withdrawn > 0) {
                 ERC4626(vault).withdraw(withdrawn, 
                     Mindwill, address(this)); 
@@ -213,13 +227,13 @@ contract L2Good is ERC6909, ReentrancyGuard {
         ) + 1; return in_days * MAX_PER_DAY -
                  Piscine[batch][42].credit;
     }
-    /*
+    
     function reachUp()
         public nonReentrant {
         if (block.timestamp > // 45d
             START + DAYS + 3 days) {
             uint keep = GRIEVANCES;
-            this.morph(QUID, keep);
+            // this.morph(QUID, keep);
             _reachUp(currentBatch(), 
                 QUID, KICKBACK);
         } // 16M GD over 24... 
@@ -227,18 +241,20 @@ contract L2Good is ERC6909, ReentrancyGuard {
     function _reachUp(uint batch, 
         address to, uint cut) internal {
         batch = FullMath.min(1, batch);
-        require(batch < 25, "!");
+        
         _mint(to, batch, cut);
         START = block.timestamp; // right now
-        balanceOf[to][batch] += cut;
-        Pod memory day = Piscine[batch - 1][42];
+        
+        Pod memory day = Piscine[batch - 1][42]; 
         // ROI aggregates all batches' days...
+        console.log("debitsky", day.debit);
         ROI += FullMath.mulDiv(WAD, day.credit - 
                          day.debit, day.debit);
+        console.log("whats the issue");
         // ROI in MO is snapshot (avg. per day)
         MO(Mindwill).setMetrics(ROI / ((DAYS 
                      / 1 days) * batch)); 
-    } */
+    } 
     /**
      * @dev Returns the current reading of our internal clock.
      */
@@ -249,14 +265,16 @@ contract L2Good is ERC6909, ReentrancyGuard {
     /**
      * @dev Returns the name of our token.
      */
-    function name() public view virtual returns (string memory) {
+    function name() public view 
+        virtual returns (string memory) {
         return _name;
     }
 
     /**
      * @dev Returns the symbol of our token.
      */
-    function symbol() public view virtual returns (string memory) {
+    function symbol() public view 
+        virtual returns (string memory) {
         return _symbol;
     }
 
@@ -264,24 +282,44 @@ contract L2Good is ERC6909, ReentrancyGuard {
      * @dev Tokens usually opt for a value of 18, 
      * imitating the relationship between Ether and Wei. 
      */
-    function decimals() public view virtual returns (uint8) {
+    function decimals() public view 
+        virtual returns (uint8) {
         return 18;
     }
 
     /**
-     * @dev See {IERC20-totalSupply}.
+     * @dev See {ERC20-totalSupply}.
      */
-    function totalSupply() public view virtual returns (uint) {
+    function totalSupply() public view
+        virtual returns (uint) {
         return _totalSupply;
     }
 
-    function totalBalanceOf(address who) 
-        public view returns (uint total) {
-        for (uint i = 0; i <= currentBatch(); i++) {
-            total += balanceOf[who][i];
-        }
+    function _til(uint when) 
+        internal view returns (uint til) {
+        uint current = currentBatch();
+        if (when == 0) { 
+            til = current + 1;
+        } else { // cannot project 
+            // into the past, or...
+            til = FullMath.max(when,
+                        current + 1);
+            // any more than 4 years 
+            // "into the future...
+            til = FullMath.min(when, 
+                        current + 33);
+        } // time keeps on slippin'"
     }
-    
+
+    function matureBatches(uint[] memory batches)
+        public view returns (uint i) { 
+        for (i = batches.length; i > 0; --i) {
+            if (batches[i] <= currentBatch()) 
+                break;
+        }
+    } 
+
+    // TODO revise    
     function matureBatches() // 0 is 1yr...
         public view returns (uint) { // in 3
         uint batch = currentBatch(); // 1-33
@@ -297,8 +335,8 @@ contract L2Good is ERC6909, ReentrancyGuard {
     function turn(address from, // whose balance
         uint value) public 
         onlyUs returns (uint) {
-        (uint oldBalanceFrom,,
-        uint sent) = _transferHelper(
+        uint oldBalanceFrom = totalBalances[from];
+        uint sent = _transferHelper(
         from, address(0), value);
         // carry.debit will be untouched here...
         return MO(Mindwill).transferHelper(from,
@@ -311,27 +349,49 @@ contract L2Good is ERC6909, ReentrancyGuard {
     // no choice other than to use the 
     // more granular version of transfer
     function _transferHelper(address from, 
-        address to, uint amount) internal returns 
-        (uint balanceFrom, uint balanceTo, uint sent) {
-        // int or tx reverts when we go below 0 in loop
-        int i = to == address(0) ? int(matureBatches()) :
-                                      int(currentBatch());
-        while (amount > 0 && i >= 0) { uint k = uint(i);
+        address to, uint amount) 
+        internal returns (uint sent) {
+        // must be int or tx reverts when we go below 0 in loop
+        uint[] memory batches = perBatch[from].getSortedSet();
+        // if i = 0 then this will either give us one iteration,
+        // or exit with index out of bounds, both make sense...
+        if (address(perBatch[to]) == address(0)) {
+            SortedSet newSet = new SortedSet(address(this));
+            perBatch[to] = newSet;
+        }
+        bool toZero = to == address(0);
+        bool burning = toZero 
+        || to == Mindwill;
+        int i = toZero ? 
+            int(matureBatches(batches)) :
+            int(batches.length - 1);
+            // if length is zero this
+            // may cause error code 11
+            // which is totally legal
+        while (amount > 0 && i >= 0) { 
+            uint k = batches[uint(i)];
             uint amt = balanceOf[from][k];
-            if (amt > 0) { amt = FullMath.min(amount, amt);
-                               balanceOf[from][k] -= amt;
-                balanceFrom += balanceOf[from][k];
-                if (to == address(0) 
-                 || to == Mindwill) {
-                    totalSupplies[k] -= amt;
-                    _totalSupply -= amt;
-                } else {
-                    balanceTo += balanceOf[to][k];
+            if (amt > 0) { 
+                amt = FullMath.min(amount, amt);
+                balanceOf[from][k] -= amt;
+                if (!burning) {
+                    perBatch[to].insert(k);
                     balanceOf[to][k] += amt;
+                } else {
+                    totalSupplies[k] -= sent;
+                }
+                if (balanceOf[from][k] == 0) {
+                    perBatch[from].remove(k);
                 }
                 amount -= amt; 
                 sent += amt;
             }   i -= 1; 
+        } 
+        totalBalances[from] -= sent;
+        if (burning) {
+            _totalSupply -= sent;
+        } else {
+            totalBalances[to] += sent;
         }
     }
 
@@ -349,10 +409,10 @@ contract L2Good is ERC6909, ReentrancyGuard {
         // ^ this variable allows us to only
         // read from storage once to save gas
         
-        (uint oldBalanceFrom, 
-         uint oldBalanceTo,
-         uint value) = _transferHelper(
-                    from, to, amount);
+        uint oldBalanceFrom = totalBalances[from];
+        uint oldBalanceTo = totalBalances[to];
+        uint value = _transferHelper(
+                from, to, amount);
         
         uint sent = MO(Mindwill).transferHelper(
              from, to, value, oldBalanceFrom);
@@ -367,7 +427,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
             // value from various maturities, to 
             // undo this perfectly would be too much
             // work, so we just mint delta as current 
-            _mint(from, currentBatch(), value);
+            _mint(from, currentBatch() + 2, value);
             value = sent; // mint increases supply
         } 
         _calculateMedian(oldBalanceFrom, senderVote, 
@@ -402,7 +462,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
 
     function vote(uint new_vote/*, caps*/) external {
         uint batch = currentBatch(); // 0-24
-        if (batch < 24 && !hasVoted[msg.sender][batch]) {
+        if (!hasVoted[msg.sender][batch]) {
             (uint carry,) = MO(Mindwill).get_info(msg.sender);
             if (carry > GRIEVANCES / 10) { 
                 hasVoted[msg.sender][batch] = true;
@@ -412,7 +472,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
         old_vote = old_vote == 0 ? 28 : old_vote;
         require(new_vote != old_vote &&
                 new_vote < 33, "bad vote");
-        uint stake = totalBalanceOf(msg.sender);
+        uint stake = totalBalances[msg.sender];
         feeVotes[msg.sender] = new_vote;
         _calculateMedian(stake, old_vote,
                          stake, new_vote);
@@ -483,8 +543,19 @@ contract L2Good is ERC6909, ReentrancyGuard {
     function _mint(address receiver,
         uint256 id, uint256 amount
     ) internal override {
-        balanceOf[receiver][id] += amount; _totalSupply += amount;
-        emit Transfer(msg.sender, address(0), receiver, id, amount);
+        totalBalances[receiver] += amount;
+        balanceOf[receiver][id] += amount;
+        _totalSupply += amount; 
+        totalSupplies[id] += amount; SortedSet batches;
+        if (address(perBatch[receiver]) == address(0)) {
+            batches = new SortedSet(address(this));
+        } else {
+            batches = perBatch[receiver];
+        }   batches.insert(id);
+        perBatch[receiver] = batches;
+        emit Transfer(msg.sender, 
+            address(0), receiver,
+            id, amount);
     }
     
     // systematic uncertainty + unsystematic = total
@@ -492,39 +563,34 @@ contract L2Good is ERC6909, ReentrancyGuard {
     // dominate unsystematic. in my experience, the 
     // 2 tend to break according to pareto principle
     function mint(address pledge, uint amount, 
-        address token, uint when) public 
-        nonReentrant { 
-        uint batch = currentBatch(); 
-        if (token != address(this)) {
+        address token, uint when) 
+        public nonReentrant { 
+        uint batch = _til(when);
+        if (token == address(this)) {
             require(msg.sender == Mindwill, "403");
-        }   else if (block.timestamp <= START + DAYS 
-                && batch < 24) { 
-                if (when != 0) { 
-                    // by default 1yr maturity 
-                    require(when >= batch && 
-                        when <= 33, "now or in the future");
-                        batch = when;
-                }
+            _mint(pledge, batch, amount);
+        }   else if (block.timestamp <= START + DAYS) { 
                 uint in_days = ((block.timestamp - START) / 1 days);
                 require(amount >= WAD * 10 && (in_days + 1)
                     * MAX_PER_DAY >= Piscine[batch][42].credit 
                     + amount, "cap"); uint price = in_days * 
-                                        PENNY + START_PRICE;
+                                        PENNY + START_PRICE;  
                 uint cost = FullMath.mulDiv( // to mint GD
                         price, amount, WAD); _deposit(
                                 pledge, token, cost);
-                balanceOf[pledge][batch] += amount;
+                _mint(pledge, batch, amount);
                 MO(Mindwill).mint(pledge, cost, amount);
                 Piscine[batch][in_days].credit += amount;
                 Piscine[batch][in_days].debit += cost;
                 // 43rd row is the total for the batch
                 Piscine[batch][42].credit += amount;
                 Piscine[batch][42].debit += cost; 
-            }   _mint(pledge, batch, amount);
-        } address public constant F8N = 0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405;
+            }
+        } 
         address public constant QUID = 0x42cc020Ef5e9681364ABB5aba26F39626F1874A4;
       address public constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
-   
+      // Arbitrum: 0x6c247b1F6182318877311737BaC0844bAa518F5e
+      // Polygon: 0x1bF0c2541F820E775182832f06c0B7Fc27A25f67
     function morph(address to, uint amount) 
         public onlyUs returns (uint sent) {
         bool l2 = MO(Mindwill).token1isWETH();
@@ -552,7 +618,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
         uint borrowed = MorphoBalancesLib.expectedBorrowAssets(
                         // on L2 this is USDC, on L1 it's DAI...
                         IMorpho(MORPHO), params, address(this));  
-            tokens = [DAI, USDS, USDE, CRVUSD, USDT, FRAX, GHO]; 
+            tokens = [DAI, USDS, USDE, CRVUSD, FRAX, USDT, GHO]; 
         uint collat; // hardcoded ^^ to one, but it can be changed... 
         // because the following for loop is compatible with any token,
         // or even multiple, to pledge as collateral in morpho market
@@ -646,6 +712,7 @@ contract L2Good is ERC6909, ReentrancyGuard {
         sent += _send(to, tokens[4], FullMath.mulDiv( // USDT
                                 amount, FullMath.mulDiv(WAD, 
                                     amounts[4], total), WAD));
+                                    // TODO precision 6 digits
 
         sent += _send(to, tokens[0], FullMath.mulDiv( // DAI
                                 amount, FullMath.mulDiv(WAD, 

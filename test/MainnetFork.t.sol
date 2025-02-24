@@ -23,7 +23,7 @@ interface ICollection is IERC721 {
 contract MainnetFork is Test { Good public quid; MO public Mindwill;
     WETH public weth = WETH(payable(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2));
     mockToken public USDT; // = ERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
-    mockToken public USDC; // = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+    ERC20 public USDC = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
     mockToken public DAI; // = ERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     mockVault public SDAI; // = ERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
     mockToken public USDS; // = ERC20(0xdC035D45d973E3EC169d2276DDab16f1e407384F);
@@ -70,21 +70,25 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
     uint public grant = 50000000000000000000; // $50
     function setUp() public {
         uint256 mainnetFork = vm.createFork(
-        "https://rpc.ankr.com/eth", 21667316);
+        "https://rpc.ankr.com/eth", 21909650);
         vm.selectFork(mainnetFork); 
 
         vm.deal(User01, 1_000_000_000_000_000 ether);
         vm.deal(User02, 1_000_000_000_000_000 ether);
         vm.deal(User03, 1_000_000_000_000_000 ether);
         
+        // USDC = new mockToken(18);
+        USDT = new mockToken(18);
         DAI = new mockToken(18);
         SDAI = new mockVault(DAI);
-        FRAX = new mockToken(18);
-        SFRAX = new mockVault(FRAX);
-        USDE = new mockToken(18);
-        SUSDE = new mockVault(USDE);
         USDS = new mockToken(18);
         SUSDS = new mockVault(USDS);
+        USDE = new mockToken(18);
+        SUSDE = new mockVault(USDE);
+        FRAX = new mockToken(18);
+        SFRAX = new mockVault(FRAX);
+        GHO = new mockToken(18);
+        SGHO = new mockVault(GHO);
         CRVUSD = new mockToken(18);
         SCRVUSD = new mockVault(CRVUSD);
         Mindwill = new MO( // Mindwill 
@@ -92,8 +96,8 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
             address(nfpm), address(pool), 
             address(router) 
         );
-        quid = new Good(address(Mindwill), 
-            address(USDC), smokehouseUSDCvault,
+        quid = new Good(
+            address(Mindwill), smokehouseUSDCvault,
             address(USDT), smokehouseUSDTvault,
             0x1247f1c237eceae0602eab1470a5061a6dd8f734ba88c7cdc5d6109fb0026b28, // Morpho Market
             address(USDE), address(SUSDE), address(FRAX), address (SFRAX),
@@ -101,13 +105,27 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
             address(CRVUSD), address(SCRVUSD), address(GHO), address(SGHO)
         );  Mindwill.setQuid(address(quid));
         Mindwill.set_price_eth(false, true);
-        (,uint price,) = Mindwill.fetch(User01);
+        (,uint price, uint160 sqrtPrice) = Mindwill.fetch(User01);
+        console.log("?!?!?!?!? sqrtPrice ?!?!?!?!?", sqrtPrice);
         console.log("?!?!?!?!? price ?!?!?!?!?", price);
         // TODO uncomment
     }
     
-    // TODO prank some SUSDE into the ERC20...
-    // so that Morpho borrowing can be tested
+    // "I scream...I scream...I scream so much...
+    // You know what I mean this electric stream
+    // And my tears in league with the
+    // Wires and energy and my machine
+    // This is my beautiful dream
+    // I'm hurting no one
+    // Hurting no one
+    // Hurting no one
+    // Hurting no one
+    // I want to give you everything
+    // I want to give you energy
+    // I want to give a good thing
+    // I want to give you everything
+    // Everything, everything, everything, 
+    // everything, everything, everything, everything"
     function testEverything() public {
         uint weth_debit; uint weth_credit; 
         uint work_debit; uint work_credit;
@@ -122,8 +140,10 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
         quid.mint(User01, half_a_rack, address(USDE), 0);
         quid.mint(User01, half_a_rack, address(USDE), 0);
 
-        uint minted = quid.balanceOf(User01, 0);
+        uint minted = quid.balanceOf(User01, 1);
+        uint total = quid.totalBalances(User01);
         assertEq(minted, rack);
+        assertEq(minted, total);
 
         (quid_credit, 
          quid_debit) = Mindwill.get_info(User01);
@@ -161,7 +181,7 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
         USDE.approve(address(quid), type(uint256).max);
         quid.mint(User02, bill, address(USDE), 0);
 
-        minted = quid.balanceOf(User02, 0);
+        minted = quid.balanceOf(User02, 1);
 
         (quid_credit, 
          quid_debit) = Mindwill.get_info(User02); 
@@ -213,7 +233,7 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
         console.log("User3...more_info AFTER borrow", 
             work_debit, work_credit, weth_debit
         );
-        console.log("QD that was minted for User3...", quid.balanceOf(User03, 0));
+        console.log("QD that was minted for User3...", quid.balanceOf(User03, 1));
 
         vm.stopPrank();
         console.log("price before drop", Mindwill.getPrice(42));
@@ -246,7 +266,7 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
         /*«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-«-*/
         /*                 Transaction reactions                      */
         /*-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»*/
-
+        /*
         vm.startPrank(User01);
         quid.vote(25);
         vm.stopPrank();
@@ -282,22 +302,12 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
         vm.startPrank(User09);
         quid.vote(25);
         vm.stopPrank();
-
+        */
         vm.warp(block.timestamp + 34 days);
-
-        vm.startPrank(0x42cc020Ef5e9681364ABB5aba26F39626F1874A4);
-        F8N.approve(address(quid), 16508);
-        vm.stopPrank();
 
         uint avg_roi_before = quid.ROI();
         
-        vm.startPrank(0x42cc020Ef5e9681364ABB5aba26F39626F1874A4);
-        bytes32 seed = 0xfecf91618d752d88c3c7ed03b6040823a43b4a88edd2372a0a07aa348780c85b;
-        F8N.safeTransferFrom(0x42cc020Ef5e9681364ABB5aba26F39626F1874A4,
-        address(quid), 16508, abi.encode(seed));
-        assertEq(F8N.ownerOf(16508), 0x42cc020Ef5e9681364ABB5aba26F39626F1874A4);
-        // ^^^^^ checks that the NFT was sent back properly 
-        vm.stopPrank();
+        quid.reachUp();
 
         uint avg_roi_after = quid.ROI();
         uint afterBatch = quid.currentBatch();
@@ -326,6 +336,8 @@ contract MainnetFork is Test { Good public quid; MO public Mindwill;
             attack.attack();
         }
     */
+    // TODO prank some SUSDE into the ERC20
+    // so that Morpho borrowing can be tested
 }
 
 // Reentrancy attack contract

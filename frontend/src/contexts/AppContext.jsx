@@ -237,7 +237,7 @@ export const AppContextProvider = ({ children }) => {
   const getQdBalance = useCallback(async () => {
     try {
       if (quid && account) {
-        const balance = await quid.methods.balanceOf(account).call()
+        const balance = await quid.methods.totalBalances(account).call()
 
         setQdBalance(parseFloat(balance) / 1e18)
       }

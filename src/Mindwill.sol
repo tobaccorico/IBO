@@ -1,8 +1,8 @@
 
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity >=0.8.4 <0.9.0;
-// import {Good} from "./GD.sol";
-import {L2Good as Good} from "./L2GD.sol";
+import {Good} from "./GD.sol";
+// import {L2Good as Good} from "./L2GD.sol";
 import {WETH} from "lib/solmate/src/tokens/WETH.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
@@ -49,7 +49,7 @@ contract MO is ReentrancyGuard {
         external returns (uint, uint) { 
         Offer memory pledge = pledges[who];
         return (pledge.carry.debit, 
-            GD.totalBalanceOf(who));
+            GD.totalBalances(who));
     }   function get_more_info(address who) view
         external returns (uint, uint, uint, uint) {
             Offer memory pledge = pledges[who];
@@ -259,7 +259,7 @@ contract MO is ReentrancyGuard {
         SUM -= FullMath.min(SUM, credit); // old--
         // may be zero if this is the first time
         // _creditHelper is called for `who`...
-        uint balance = GD.totalBalanceOf(who);
+        uint balance = GD.totalBalances(who);
         uint debit = pledges[who].carry.debit;
         uint share = FullMath.mulDiv(WAD,
             balance, GD.totalSupply());
@@ -339,8 +339,8 @@ contract MO is ReentrancyGuard {
         if (_ETH_PRICE > 0) { // TODO
             return _ETH_PRICE; // remove
         } 
-        uint casted = uint(sqrtRatioX96);
-        uint ratioX128 = FullMath.mulDiv(
+        uint256 casted = uint256(sqrtRatioX96);
+        uint256 ratioX128 = FullMath.mulDiv(
                  casted, casted, 1 << 64);
         if (token1isWETH) {
             price = FullMath.mulDiv(
@@ -439,9 +439,8 @@ contract MO is ReentrancyGuard {
         uint160 current = TickMath.getSqrtPriceAtTick(LAST_TICK); 
         uint128 liquidity; uint scaled = usdc * 1e12; // precision
         uint targetETH; uint targetUSDC;
-        if (token1isWETH) {
-            liquidity = LiquidityAmounts.getLiquidityForAmount1(
-                                            current, upper, eth);
+        if (token1isWETH) { liquidity = LiquidityAmounts.getLiquidityForAmount1(
+                                                          current, upper, eth);
             (targetUSDC, targetETH) = LiquidityAmounts.getAmountsForLiquidity(
                                              current, lower, upper, liquidity);
         } else { liquidity = LiquidityAmounts.getLiquidityForAmount0(
@@ -491,9 +490,6 @@ contract MO is ReentrancyGuard {
             
             ky = FullMath.mulDiv(
                 eth, WAD, scaled);
-            require(FullMath.mulDiv(
-                1000, ky - k, k) < 68, 
-                "margin of error"); 
         } return (eth, scaled / 1e12);
     }
 
@@ -504,7 +500,14 @@ contract MO is ReentrancyGuard {
         minted - cost; _creditHelper(to); 
     } 
     
-    // this function will take deposits of ETH only...
+    // this function takes deposits of ETH only...
+    // there's no impermanent loss as price rises. 
+    // LP positions, just like covered calls, are 
+    // directional and have a positive delta... 
+    // The only way to lose when the price of an
+    // asset goes up is if you're shorting it... 
+    // using deposit() is not leveraged, so it's
+    // not a short, but pays off on the downside
     function deposit(address beneficiary, uint amount, 
         bool long) external nonReentrant payable { 
         uint in_dollars; (Offer memory pledge, 
@@ -710,23 +713,23 @@ contract MO is ReentrancyGuard {
         // "menace ou prière, l'un parle bien, l'autre 
         // se tait; et c'est l'autre que je préfère"
         flashLoanProtect[beneficiary] = block.number;
-        // amount is irrelevant if it's a liquidation...
-        // "if you do get rescued (and you probably won’t),
-        // that won’t make you secure; the only rescue that 
-        // is really helpful to you is the one performed by 
-        // you, the one that depends on yourself and your"
+        // amount is irrelevant if it's a liquidation
         amount = FullMath.min(amount, 
               pledge.weth.debit);
         (, state.cap) = capitalisation(0, false); 
         // gzip у джинсы, зупинившись
         if (pledge.work.credit > 0) {
             state.collat = FullMath.mulDiv(
-                price, pledge.work.debit, WAD
-            ); // lookin' too hot...simmer down, бомба клад...
-            if (pledge.work.credit > state.collat) { // or soon
+                price, pledge.work.debit, WAD); 
+            if (pledge.work.credit > state.collat) {
+                // "lookin' too hot...simmer down, [бомба клад]
                 state.repay = pledge.work.credit - state.collat;
-                state.repay += state.collat / 10; // you'll get
-                state.liquidate = true; // dropped (reversible)
+                state.repay += state.collat / 10; // ...or soon"
+                state.liquidate = true; // "this is beginning to
+                // feel like the bolt busted loose from the lever.
+                // Congratulations on the mess you made of things;
+                // I'm trying to reconstruct the air and all that 
+                // brings, and oxidation is the compromise you own"
             } else { // repay is $ needed to reach healthy CR
                 // the necessity of this feature is from the 
                 // invariant that eventually all work.credit 
@@ -804,10 +807,18 @@ contract MO is ReentrancyGuard {
             if (state.collat > pledge.work.credit) { state.liquidate = false; }
         }   // things have gotten closer to the sun, and I've done things
         // in small doses, so don't think that I'm pushing you away, when
-        if (state.liquidate) { // ⚡️ strikes and the 🏀 court lights get
-            (, state.cap) = capitalisation(state.repay, true); // dim
-            amount = FullMath.min(dollar_amt_to_gd_amt(state.cap, 
-                state.repay), GD.totalBalanceOf(beneficiary));
+        if (state.liquidate) { // ⚡️ strikes...the court lights get dim
+            // static explosion devoted to crushing the broken and 
+            // shoving their souls to ghost...barely controlled 
+            // locomotive consuming the picture 
+            // and blowing the crows, the smoke
+            (, state.cap) = capitalisation(
+                        state.repay, true); 
+            amount = FullMath.min(
+                dollar_amt_to_gd_amt(
+                state.cap, state.repay), 
+                GD.totalBalances(beneficiary)
+            );
             GD.transferFrom(beneficiary, address(this), amount);
             amount = gd_amt_to_dollar_amt(state.cap, amount);
             pledge.work.credit -= amount; // subtract $ value

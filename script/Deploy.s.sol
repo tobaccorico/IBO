@@ -53,6 +53,7 @@ contract Deploy is Script {
     
     ERC20 public CRVUSD = ERC20(0x417Ac0e078398C154EdFadD9Ef675d30Be60Af93);
     // ERC20(0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E);
+    // Polygon : 0xc4ce1d6f5d98d65ee25cf85e9f2e9dcfee6cb5d6
     // Arbitrum : 0x498bf2b1e120fed3ad3d42ea2165e9b73f99c1e5
     // Base : 0x417Ac0e078398C154EdFadD9Ef675d30Be60Af93
     ERC20 public SCRVUSD = ERC20(0x646A737B9B6024e49f5908762B3fF73e65B5160c);
@@ -82,6 +83,9 @@ contract Deploy is Script {
     // TODO re-deploy on Aribtrum after Morpho is deployed there
     IMorpho public morpho = IMorpho(0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb); // same address on L1 as well as Base
     // IMorphoChainlinkOracleV2Factory public morphoFactory = IMorphoChainlinkOracleV2Factory(0x2DC205F24BCb6B311E5cdf0745B0741648Aebd3d);
+    // Chainlink Oracle Factory on Arbitrum: 0x98Ce5D183DC0c176f54D37162F87e7eD7f2E41b5
+    // Chainlink Oracle Factory on Polygon: 0x1ff7895Eb842794c5d07C4c547b6730e61295215
+
     bytes32 public ID = 0xb1c74e62cbe3721a37040c248e481d175cffb45c686b5b423cd446a063261431; // TODO deploy market on Arbitrum
 
     IUniswapV3Factory public factory = IUniswapV3Factory(0x33128a8fC17869897dcE68Ed026d694621f6FDfD);
@@ -183,7 +187,7 @@ contract Deploy is Script {
         //     deadline: block.timestamp + 3600
         // }));
         quid = new Good(address(Mindwill), // TODO deploy Morpho
-            address(USDC), address(VAULT),
+            address(VAULT),
             address(USDT), address(0), ID, // vault on ARB
             address(USDE), address(SUSDE), // as well as Polygon
             address(FRAX), address (SFRAX), // and BNB chain...

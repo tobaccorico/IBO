@@ -1,19 +1,19 @@
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.25; // EVM: london
+pragma solidity >=0.8.4 <0.9.0;
 import "lib/forge-std/src/console.sol"; // TODO delete logging before mainnet
 import {MorphoBalancesLib} from "./imports/morpho/libraries/MorphoBalancesLib.sol";
 import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
 import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 import {ReentrancyGuard} from "lib/solmate/src/utils/ReentrancyGuard.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMorpho, MarketParams} from "./imports/morpho/IMorpho.sol";
-
-import {FullMath} from "./imports/math/FullMath.sol";
-import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
 import {ERC6909} from "lib/solmate/src/tokens/ERC6909.sol";
+import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
+import {FullMath} from "./imports/math/FullMath.sol";
+import {SortedSet} from "./imports/SortedSet.sol";
+
 interface IStakeToken is IERC20 { // StkGHO (safety module)
     function stake(address to, uint256 amount) external;
     // here the amount is in underlying, not in shares...
@@ -24,25 +24,9 @@ interface IStakeToken is IERC20 { // StkGHO (safety module)
     function previewRedeem(uint256 shares) 
              external view returns (uint256);
 }
-/*
-interface ICollection is IERC721 {
-    function latestTokenId()
-    external view returns (uint);
-} // only used on Ethereum L1
-interface IERC721Receiver {
-    function onERC721Received(
-        address operator,
-        address from,
-        uint256 tokenId,
-        bytes calldata data
-    ) external returns (bytes4);
-} // in the windmills of my mind
-*/
+
 import {MO} from  "./Mindwill.sol"; 
-// a service, and the token is a
-// good which powers the service
-contract Good is //IERC721Receiver, 
-    ERC6909, ReentrancyGuard { 
+contract Good is ERC6909, ReentrancyGuard { 
     address payable public Mindwill;
     using SafeTransferLib for ERC20;
     using SafeTransferLib for ERC4626;
@@ -51,7 +35,6 @@ contract Good is //IERC721Receiver,
     Pod[43][24] Piscine; // 24 batches
     
     uint constant PENNY = 1e16;
-    uint constant LAMBO = 16508; // NFT
     bytes32 public immutable ID; // Morph
     
     uint constant public DAYS = 42 days;
@@ -61,7 +44,9 @@ contract Good is //IERC721Receiver,
     
     mapping(address => Pod) public perVault;
     mapping(address => address) public vaults;
-    /// @notice The total supply of each id...
+    
+    mapping(address => SortedSet) public perBatch;
+    mapping(address => uint) public totalBalances;
 
     mapping(uint256 id => uint256 amount) public totalSupplies;
     mapping(address account => mapping(// legacy ERC20 version
@@ -110,7 +95,7 @@ contract Good is //IERC721Receiver,
         require(sender == Mindwill ||
                 sender == address(this), "!?"); _;
     }
-    constructor(address _mo, address _usdc, 
+    constructor(address _mo,  
         address _vaultUSDC, address _usdt,
         address _vaultUSDT, bytes32 _morpho,
         address _usde, address _susde, 
@@ -120,12 +105,9 @@ contract Good is //IERC721Receiver,
         address _crv, address _scrv,
         address _gho, address _sgho) {
         ID = _morpho; Mindwill = payable(_mo); 
-        START = block.timestamp; deployed = START; 
-        require(address(MO(Mindwill).token0()) == USDC
-             && address(MO(Mindwill).token1()) == address(
-                        MO(Mindwill).WETH9()), "42");
+        START = block.timestamp; deployed = START;
         
-        USDC = _usdc; vaults[USDC] = _vaultUSDC;
+        USDC = address(MO(Mindwill).token0()); vaults[USDC] = _vaultUSDC;
         ERC20(USDC).approve(_vaultUSDC, type(uint).max);
         
         USDT = _usdt;vaults[USDT] = _vaultUSDT;
@@ -143,7 +125,7 @@ contract Good is //IERC721Receiver,
         
         SFRAX = _sfrax; FRAX = _frax; vaults[FRAX] = SFRAX; 
         ERC20(FRAX).approve(SFRAX,  type(uint).max);
-
+        
         SUSDE = _susde; USDE = _usde; vaults[USDE] = SUSDE;
         ERC4626(SUSDE).approve(MORPHO, type(uint).max);
         ERC20(USDE).approve(SUSDE, type(uint).max);
@@ -160,8 +142,10 @@ contract Good is //IERC721Receiver,
         (bool usdc) public view
         // this is only *part* of the captalisation()
         returns (uint total) { // handle USDC first
+       
         total += usdc ? ERC4626(vaults[USDC]).maxWithdraw(
                                  address(this)) * 1e12 : 0;
+
         // includes collateral deployed in Morpho,
         // as Pod.credit, initially only for SUSDE;
         // can be multiple markets just in case...
@@ -170,25 +154,24 @@ contract Good is //IERC721Receiver,
         // generate interest, thus shouldn't be valued as
         // interest bearing, the way that .debit held by
         // our contract is getting valued (covertToAssets)
+       
         total += ERC4626(vaults[USDT]).maxWithdraw(
                         address(this)) * 1e12;
+   
         total += IStakeToken(SGHO).previewRedeem(
-                    IStakeToken(SGHO).balanceOf(address(this)));
-        total += FullMath.max(ERC4626(SUSDE).convertToAssets(
-                perVault[SUSDE].debit + perVault[SUSDE].credit), 
-                    ERC4626(SUSDE).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SUSDS).convertToAssets(
-                perVault[SUSDS].debit + perVault[SUSDS].credit), 
-                    ERC4626(SUSDS).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SDAI).convertToAssets(
-                perVault[SDAI].debit + perVault[SDAI].credit), 
-                    ERC4626(SDAI).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SFRAX).convertToAssets(
-                perVault[SFRAX].debit + perVault[SFRAX].credit), 
-                    ERC4626(SFRAX).maxWithdraw(address(this)));
-        total += FullMath.max(ERC4626(SCRVUSD).convertToAssets(
-                perVault[SCRVUSD].debit + perVault[SUSDS].credit), 
-                    ERC4626(SCRVUSD).maxWithdraw(address(this)));
+        IStakeToken(SGHO).balanceOf(address(this)));
+        address vault; uint shares;
+        address[5] memory tokens = [
+            DAI, USDS, USDE, CRVUSD, FRAX
+        ];  
+        for (uint i = 0; i < 5; i++) { 
+            vault = vaults[tokens[i]]; // credit means the assets are 
+            // encumbered as collateral in a Morpho market, or borrowed
+            shares = perVault[vault].debit + perVault[vault].credit;
+            if (shares > 0) {
+                total += ERC4626(vault).convertToAssets(shares);
+            }
+        }
     }
     function _deposit(address from,
         address token, uint amount)
@@ -232,14 +215,23 @@ contract Good is //IERC721Receiver,
         require(isDollar && amount > 0, "$");
     }
 
-   
+    function approve(address spender, 
+        uint256 value) public returns (bool) {
+        require(spender != address(0), "invalid spender");
+        _allowances[msg.sender][spender] = value;
+        return true;
+    }
+
     // takes $ amount input in units of 1e18...
     function withdrawUSDC(uint amount) public
         onlyUs returns (uint withdrawn) {
-        if (amount > 0) { address vault = vaults[USDC];
-             withdrawn = FullMath.min(amount / 1e12, 
+        if (amount > 0) { 
+            address vault = vaults[USDC];
+             withdrawn = FullMath.min(
+                amount / 1e12, 
                 ERC4626(vault).maxWithdraw(
                             address(this)));
+
             if (withdrawn > 0) {
                 ERC4626(vault).withdraw(withdrawn, 
                     Mindwill, address(this)); 
@@ -266,8 +258,8 @@ contract Good is //IERC721Receiver,
         public nonReentrant {
         if (block.timestamp > // 45d
             START + DAYS + 3 days) {
-            uint keep = GRIEVANCES;
-            this.morph(QUID, keep);
+            // uint keep = GRIEVANCES;
+            // this.morph(QUID, keep);
             _reachUp(currentBatch(), 
                 QUID, KICKBACK);
         } // 16M GD over 24... 
@@ -275,10 +267,10 @@ contract Good is //IERC721Receiver,
     function _reachUp(uint batch, 
         address to, uint cut) internal {
         batch = FullMath.min(1, batch);
-        require(batch < 25, "!");
+        
         _mint(to, batch, cut);
         START = block.timestamp; // right now
-        balanceOf[to][batch] += cut;
+        
         Pod memory day = Piscine[batch - 1][42];
         // ROI aggregates all batches' days...
         ROI += FullMath.mulDiv(WAD, day.credit - 
@@ -318,20 +310,38 @@ contract Good is //IERC721Receiver,
     }
 
     /**
-     * @dev See {IERC20-totalSupply}.
+     * @dev See {ERC20-totalSupply}.
      */
     function totalSupply() public 
         view returns (uint) {
         return _totalSupply;
     }
 
-    function totalBalanceOf(address who) 
-        public view returns (uint total) {
-        for (uint i = 0; i <= currentBatch(); i++) {
-            total += balanceOf[who][i];
-        }
+    function _til(uint when) 
+        internal view returns (uint til) {
+        uint current = currentBatch();
+        if (when == 0) { 
+            til = current + 1;
+        } else { // cannot project 
+            // into the past, or...
+            til = FullMath.max(when,
+                        current + 1);
+            // any more than 4 years 
+            // "into the future...
+            til = FullMath.min(when, 
+                        current + 33);
+        } // time keeps on slippin'"
     }
     
+    function matureBatches(uint[] memory batches)
+        public view returns (uint i) { 
+        for (i = batches.length; i > 0; --i) {
+            if (batches[i] <= currentBatch()) 
+                break;
+        }
+    } 
+
+    // TODO revise
     function matureBatches() // 0 is 1yr...
         public view returns (uint) { // in 3
         uint batch = currentBatch(); // 1-33
@@ -348,8 +358,8 @@ contract Good is //IERC721Receiver,
     function turn(address from, // whose balance
         uint value) public 
         onlyUs returns (uint) {
-        (uint oldBalanceFrom,,
-        uint sent) = _transferHelper(
+        uint oldBalanceFrom = totalBalances[from];
+        uint sent = _transferHelper(
         from, address(0), value);
         // carry.debit will be untouched here...
         return MO(Mindwill).transferHelper(from,
@@ -362,27 +372,49 @@ contract Good is //IERC721Receiver,
     // no choice other than to use the 
     // more granular version of transfer
     function _transferHelper(address from, 
-        address to, uint amount) internal returns 
-        (uint balanceFrom, uint balanceTo, uint sent) {
-        // int or tx reverts when we go below 0 in loop
-        int i = to == address(0) ? int(matureBatches()) :
-                                      int(currentBatch());
-        while (amount > 0 && i >= 0) { uint k = uint(i);
+        address to, uint amount) 
+        internal returns (uint sent) {
+        // must be int or tx reverts when we go below 0 in loop
+        uint[] memory batches = perBatch[from].getSortedSet();
+        // if i = 0 then this will either give us one iteration,
+        // or exit with index out of bounds, both make sense...
+        if (address(perBatch[to]) == address(0)) {
+            SortedSet newSet = new SortedSet(address(this));
+            perBatch[to] = newSet;
+        }
+        bool toZero = to == address(0);
+        bool burning = toZero 
+        || to == Mindwill;
+        int i = toZero ? 
+            int(matureBatches(batches)) :
+            int(batches.length - 1);
+            // if length is zero this
+            // may cause error code 11
+            // which is totally legal
+        while (amount > 0 && i >= 0) { 
+            uint k = batches[uint(i)];
             uint amt = balanceOf[from][k];
-            if (amt > 0) { amt = FullMath.min(amount, amt);
-                               balanceOf[from][k] -= amt;
-                balanceFrom += balanceOf[from][k];
-                if (to == address(0) 
-                 || to == Mindwill) {
-                    totalSupplies[k] -= amt;
-                    _totalSupply -= amt;
-                } else {
-                    balanceTo += balanceOf[to][k];
+            if (amt > 0) { 
+                amt = FullMath.min(amount, amt);
+                balanceOf[from][k] -= amt;
+                if (!burning) {
+                    perBatch[to].insert(k);
                     balanceOf[to][k] += amt;
+                } else {
+                    totalSupplies[k] -= sent;
+                }
+                if (balanceOf[from][k] == 0) {
+                    perBatch[from].remove(k);
                 }
                 amount -= amt; 
                 sent += amt;
             }   i -= 1; 
+        } 
+        totalBalances[from] -= sent;
+        if (burning) {
+            _totalSupply -= sent;
+        } else {
+            totalBalances[to] += sent;
         }
     }
 
@@ -399,11 +431,10 @@ contract Good is //IERC721Receiver,
         uint senderVote = feeVotes[from];
         // ^ this variable allows us to only
         // read from storage once to save gas
-        
-        (uint oldBalanceFrom, 
-         uint oldBalanceTo,
-         uint value) = _transferHelper(
-                    from, to, amount);
+        uint oldBalanceFrom = totalBalances[from];
+        uint oldBalanceTo = totalBalances[to];
+        uint value = _transferHelper(
+                from, to, amount);
         
         uint sent = MO(Mindwill).transferHelper(
              from, to, value, oldBalanceFrom);
@@ -418,7 +449,7 @@ contract Good is //IERC721Receiver,
             // value from various maturities, to 
             // undo this perfectly would be too much
             // work, so we just mint delta as current 
-            _mint(from, currentBatch(), value);
+            _mint(from, currentBatch() + 2, value);
             value = sent; // mint increases supply
         } 
         _calculateMedian(oldBalanceFrom, senderVote, 
@@ -463,7 +494,7 @@ contract Good is //IERC721Receiver,
         old_vote = old_vote == 0 ? 28 : old_vote;
         require(new_vote != old_vote &&
                 new_vote < 33, "bad vote");
-        uint stake = totalBalanceOf(msg.sender);
+        uint stake = totalBalances[msg.sender];
         feeVotes[msg.sender] = new_vote;
         _calculateMedian(stake, old_vote,
                          stake, new_vote);
@@ -515,8 +546,19 @@ contract Good is //IERC721Receiver,
     function _mint(address receiver,
         uint256 id, uint256 amount
     ) internal override {
-        balanceOf[receiver][id] += amount; _totalSupply += amount;
-        emit Transfer(msg.sender, address(0), receiver, id, amount);
+        totalBalances[receiver] += amount;
+        balanceOf[receiver][id] += amount;
+        _totalSupply += amount; 
+        totalSupplies[id] += amount; SortedSet batches;
+        if (address(perBatch[receiver]) == address(0)) {
+            batches = new SortedSet(address(this));
+        } else {
+            batches = perBatch[receiver];
+        }   batches.insert(id);
+        perBatch[receiver] = batches;
+        emit Transfer(msg.sender, 
+            address(0), receiver,
+            id, amount);
     }
     
     // systematic uncertainty + unsystematic = total
@@ -524,83 +566,32 @@ contract Good is //IERC721Receiver,
     // dominate unsystematic. in my experience, the 
     // 2 tend to break according to pareto principle
     function mint(address pledge, uint amount, 
-        address token, uint when) public 
-        nonReentrant { 
-        uint batch = currentBatch(); 
-        if (token != address(this)) {
+        address token, uint when) 
+        public nonReentrant { 
+        uint batch = _til(when);
+        if (token == address(this)) {
             require(msg.sender == Mindwill, "403");
-        }   else if (block.timestamp <= START + DAYS 
-                && batch < 24) { 
-                if (when != 0) { 
-                    // by default 1yr maturity 
-                    require(when >= batch && 
-                        when <= 33, "now or in the future");
-                        batch = when;
-                }
+            _mint(pledge, batch, amount);
+        }   else if (block.timestamp <= START + DAYS) { 
                 uint in_days = ((block.timestamp - START) / 1 days);
                 require(amount >= WAD * 10 && (in_days + 1)
                     * MAX_PER_DAY >= Piscine[batch][42].credit 
                     + amount, "cap"); uint price = in_days * 
-                                        PENNY + START_PRICE;
+                                        PENNY + START_PRICE;  
                 uint cost = FullMath.mulDiv( // to mint GD
                         price, amount, WAD); _deposit(
                                 pledge, token, cost);
-                balanceOf[pledge][batch] += amount;
+                _mint(pledge, batch, amount);
                 MO(Mindwill).mint(pledge, cost, amount);
                 Piscine[batch][in_days].credit += amount;
                 Piscine[batch][in_days].debit += cost;
                 // 43rd row is the total for the batch
                 Piscine[batch][42].credit += amount;
                 Piscine[batch][42].debit += cost; 
-            }   _mint(pledge, batch, amount);
-        } address public constant F8N = 0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405;
+            }
+        }
         address public constant QUID = 0x42cc020Ef5e9681364ABB5aba26F39626F1874A4;
       address public constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
-    /** Whenever an {IERC721} `tokenId` token is transferred to this ERC20: ratcheting batch
-     * @dev Safe transfer `tokenId` token from `from` to `address(this)`, checking that the
-    recipient prevent tokens from being forever locked. An NFT is used as the _delegate is 
-    an attribution of character, 
-    * - `tokenId` token must exist and be owned by `from`
-     * - If the caller is not `from`, it must have been allowed
-     *   to move this token by either {approve} or {setApprovalForAll}.
-     * - {onERC721Received} is called after a safeTransferFrom...
-     * - It must return its Solidity selector to confirm the token transfer.
-     *   If any other value is returned or the interface is not implemented
-     *   by the recipient, the transfer will be reverted.
-     */
-    // QuidMint...foundation.app/@quid
-    /*
-    function onERC721Received(address operator,
-        address from, // previous owner...
-        uint tokenId, bytes calldata data)
-        external override returns (bytes4) { 
-        uint batch = currentBatch(); // 1 - 25 (3 years)
-        require(block.timestamp > START + DAYS, "early");
-        if (tokenId == LAMBO && ICollection(F8N).ownerOf(
-            LAMBO) == address(this)) { address winner;
-            uint cut = GRIEVANCES / 2; uint count = 0;
-            // this.morph(QUID, cut); this.morph(from, cut);
-            ICollection(F8N).transferFrom( // return
-                address(this), QUID, LAMBO); // NFT...
-                // "I put my key, you put your key in"
-            uint kickback = KICKBACK; cut = KICKBACK / 12;
-            if (voters[batch - 1].length >= 10 && data.length >= 32) {
-                bytes32 _seed = abi.decode(data[:32], (bytes32));
-                for (uint i = 0; count < 10 && i < 30; i++) {
-                    uint random = uint(keccak256(
-                        abi.encodePacked(_seed,
-                        block.prevrandao, i))) %
-                        voters[batch - 1].length;
-                        winner = voters[batch - 1][random];
-                    if (!winners[winner]) {
-                        count += 1; winners[winner] == true;
-                        kickback -= cut; _mint(winner, batch, cut);
-                        balanceOf[winner][batch] += cut;
-                    } 
-                }
-            } _reachUp(batch, from, kickback); 
-        } return this.onERC721Received.selector;
-    } */
    
     function morph(address to, uint amount) 
         public onlyUs returns (uint sent) {
@@ -683,9 +674,12 @@ contract Good is //IERC721Receiver,
             perVault[SUSDE].debit += perVault[SUSDE].credit;
             perVault[SUSDE].credit = 0;
         }
-        for (i = 0; i < 6; i++) { 
+        for (i = 0; i < 5; i++) { 
             amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
                                     WAD, amounts[i], total), WAD);
+            if (tokens[i] == USDT) {
+                amounts[i] /= 1e12;
+            }
             if (amounts[i] > 0) { 
                 vault = vaults[tokens[i]]; // functionally equivalent to maxWithdraw()
                 sharesWithdrawn = FullMath.min(ERC4626(vault).balanceOf(address(this)),
