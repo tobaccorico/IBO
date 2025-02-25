@@ -12,7 +12,7 @@ import {ERC4626} from "lib/solmate/src/tokens/ERC4626.sol";
 import {ERC6909} from "lib/solmate/src/tokens/ERC6909.sol";
 import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
 import {FullMath} from "./imports/math/FullMath.sol";
-import {SortedSet} from "./imports/SortedSet.sol";
+import "./imports/SortedSet.sol";
 
 interface IStakeToken is IERC20 { // StkGHO (safety module)
     function stake(address to, uint256 amount) external;
@@ -30,6 +30,7 @@ contract Good is ERC6909, ReentrancyGuard {
     address payable public Mindwill;
     using SafeTransferLib for ERC20;
     using SafeTransferLib for ERC4626;
+    using SortedSetLib for SortedSetLib.Set;
     
     uint public ROI; uint public START;
     Pod[43][24] Piscine; // 24 batches
@@ -45,9 +46,9 @@ contract Good is ERC6909, ReentrancyGuard {
     mapping(address => Pod) public perVault;
     mapping(address => address) public vaults;
     
-    mapping(address => SortedSet) public perBatch;
     mapping(address => uint) public totalBalances;
-
+    mapping(address => SortedSetLib.Set) private perBatch;
+    
     mapping(uint256 id => uint256 amount) public totalSupplies;
     mapping(address account => mapping(// legacy ERC20 version
             address spender => uint256)) private _allowances;
@@ -378,13 +379,8 @@ contract Good is ERC6909, ReentrancyGuard {
         uint[] memory batches = perBatch[from].getSortedSet();
         // if i = 0 then this will either give us one iteration,
         // or exit with index out of bounds, both make sense...
-        if (address(perBatch[to]) == address(0)) {
-            SortedSet newSet = new SortedSet(address(this));
-            perBatch[to] = newSet;
-        }
         bool toZero = to == address(0);
-        bool burning = toZero 
-        || to == Mindwill;
+        bool burning = toZero || to == Mindwill;
         int i = toZero ? 
             int(matureBatches(batches)) :
             int(batches.length - 1);
@@ -546,16 +542,13 @@ contract Good is ERC6909, ReentrancyGuard {
     function _mint(address receiver,
         uint256 id, uint256 amount
     ) internal override {
+        _totalSupply += amount; 
+        totalSupplies[id] += amount; 
+        perBatch[receiver].insert(id);
+        
         totalBalances[receiver] += amount;
         balanceOf[receiver][id] += amount;
-        _totalSupply += amount; 
-        totalSupplies[id] += amount; SortedSet batches;
-        if (address(perBatch[receiver]) == address(0)) {
-            batches = new SortedSet(address(this));
-        } else {
-            batches = perBatch[receiver];
-        }   batches.insert(id);
-        perBatch[receiver] = batches;
+        
         emit Transfer(msg.sender, 
             address(0), receiver,
             id, amount);
@@ -581,7 +574,9 @@ contract Good is ERC6909, ReentrancyGuard {
                 uint cost = FullMath.mulDiv( // to mint GD
                         price, amount, WAD); _deposit(
                                 pledge, token, cost);
-                _mint(pledge, batch, amount);
+                _mint(pledge,
+                batch, amount);
+
                 MO(Mindwill).mint(pledge, cost, amount);
                 Piscine[batch][in_days].credit += amount;
                 Piscine[batch][in_days].debit += cost;
