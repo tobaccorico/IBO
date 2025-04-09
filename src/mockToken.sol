@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 pragma solidity >=0.8.4 <0.9.0;
 
-import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
+import {ERC20} from "solmate/src/tokens/ERC20.sol";
 
 contract mockToken is ERC20 {
-
-    uint public WAD;
-
-    constructor(uint8 decimals) ERC20("mock", "mock", decimals) {
-        WAD = 10 ** decimals;
+    address public router;
+    modifier onlyRouter {
+        require(msg.sender == address(router), "403"); _;
     }
-
-    function mint() external {
-        _mint(msg.sender, WAD * 10000);
+    constructor(address _router, uint8 _decimals) 
+        ERC20("mock", "mock", _decimals) {
+        router = _router;
     }
-
-    function mint(address who, uint much) external {
-        _mint(who, much);
+    function mint(uint amount) onlyRouter external {
+        _mint(msg.sender, amount);
     }
-
+    function burn(uint amount) onlyRouter external {
+        _burn(msg.sender, amount);   
+    }
 }
-

@@ -1,31 +1,26 @@
-
 [profile.default]
-evm_version = 'cancun'
-solc_version = '0.8.25'
-src = 'src'
-out = 'out'
-libs = ['lib']
+src = "src"
+out = "out"
+
+libs = ["lib"]
+ffi = true
+
+fs_permissions = [{ access = "read-write", path = ".forge-snapshots/"}]
+
+solc_version = "0.8.26"
+evm_version = "cancun"
+fuzz_runs = 500
 via_ir = true
-# fuzz_runs = 500
-# optimizer = true
-# optimizer_runs = 10_000_000
-
-# @see {@link https://github.com/foundry-rs/foundry/issues/4060}
-# [profile.default.optimizer_details]
-# constantOptimizer = true
-# yul = true
-
-# [profile.default.optimizer_details.yulDetails]
-# stackAllocation = true
+optimizer = true
+optimizer_runs = 10_000_000
 
 bytecode_hash = "none"
 deny_warnings = false
 cbor_metadata = false
 sparse_mode = false
 build_info = true
-verbosity = 4
 
 [profile.dependencies]
-solmate = { git = "https://github.com/Rari-Capital/solmate" }
-forge-std = { git = "https://github.com/foundry-rs/forge-std" }
-openzeppelin-contracts = { git = "https://github.com/OpenZeppelin/openzeppelin-contracts.git" }
+v4-core = { git = "https://github.com/uniswap/v4-core" }
+v4-periphery = { git = "https://github.com/uniswap/v4-periphery" }
+aave-v3-origin = { git = "https://github.com/aave-dao/aave-v3-origin" }

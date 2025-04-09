@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.8.4 <0.9.0;
+pragma solidity ^0.8.24;
 
 library SortedSetLib {
     struct Set {
@@ -20,7 +20,6 @@ library SortedSetLib {
         for (uint i = self.sortedArray.length - 1; i > index; i--) {
             self.sortedArray[i] = self.sortedArray[i - 1];
         }
-
         self.sortedArray[index] = value;
     }
 
@@ -29,7 +28,8 @@ library SortedSetLib {
         require(self.exists[value], "Value does not exist");
 
         (uint index, ) = binarySearch(self, value);
-        require(index < self.sortedArray.length && self.sortedArray[index] == value, "Value not found");
+        require(index < self.sortedArray.length
+         && self.sortedArray[index] == value, "Value not found");
 
         self.sortedArray[index] = 0; // Mark as deleted
         delete self.exists[value];
@@ -38,17 +38,19 @@ library SortedSetLib {
     }
 
     /// @notice Binary search to find index for insertion or lookup.
-    function binarySearch(Set storage self, uint value) internal view returns (uint, bool) {
-        uint left = 0;
-        uint right = self.sortedArray.length;
+    function binarySearch(Set storage self, 
+        uint value) internal view returns (uint, bool) {
+        uint left = 0; uint right = self.sortedArray.length;
 
         while (left < right) {
             uint mid = left + (right - left) / 2;
             if (self.sortedArray[mid] == value) {
                 return (mid, true); // Value found
-            } else if (self.sortedArray[mid] < value) {
+            } 
+            else if (self.sortedArray[mid] < value) {
                 left = mid + 1;
-            } else {
+            } 
+            else {
                 right = mid;
             }
         }
@@ -56,8 +58,9 @@ library SortedSetLib {
     }
 
     /// @notice Performs automatic cleanup by removing all `0`s.
-    function compactArray(Set storage self) internal {
-        uint newLength = 0;
+    function compactArray(Set storage self)
+        internal { uint newLength = 0;
+        
         uint[] memory newArray = new uint[](self.sortedArray.length);
 
         for (uint i = 0; i < self.sortedArray.length; i++) {
@@ -66,7 +69,6 @@ library SortedSetLib {
                 newLength++;
             }
         }
-
         // Resize the array
         self.sortedArray = new uint[](newLength);
         for (uint i = 0; i < newLength; i++) {
@@ -75,7 +77,8 @@ library SortedSetLib {
     }
 
     /// @notice Returns the sorted set.
-    function getSortedSet(Set storage self) internal view returns (uint[] memory) {
+    function getSortedSet(Set storage self) 
+        internal view returns (uint[] memory) {
         return self.sortedArray;
     }
 }
