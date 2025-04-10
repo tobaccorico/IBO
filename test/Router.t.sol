@@ -60,7 +60,7 @@ contract RouterTest is Test, Fixtures {
     
     address[] public VAULTS;
     IERC4626 public gantletWETHvault = IERC4626(0x4881Ef0BF6d2365D3dd6499ccd7532bcdBCE0658);
-    IERC4626 public gauntletUSDCvault = IERC4626(0x8eB67A509616cd6A7c1B3c8C21D48FF57df3d458);
+    IERC4626 public smokehouseUSDCvault = IERC4626(0xBEeFFF209270748ddd194831b3fa287a5386f5bC);
     IERC4626 public smokehouseUSDTvault = IERC4626(0xA0804346780b4c2e3bE118ac957D1DB82F9d7484);
 
     // unlike other vaults, SGHO has its own interface (similar to ERC4626)
@@ -84,7 +84,7 @@ contract RouterTest is Test, Fixtures {
             address(CRVUSD), address(GHO)
         ]; // ordering is very important!
         VAULTS = [
-            address(gauntletUSDCvault),
+            address(smokehouseUSDCvault),
             address(smokehouseUSDTvault),
             address(SDAI), address(SUSDS), 
             address(SFRAX), address(SUSDE), 
@@ -109,22 +109,23 @@ contract RouterTest is Test, Fixtures {
             address(AUX), STABLECOINS, VAULTS);
 
         vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
-        USDC.transfer(address(this), 1 * USDC_PRECISION);
+        USDC.transfer(address(AUX), 1 * USDC_PRECISION);
         USDC.transfer(User01, 1000000 * USDC_PRECISION); 
         vm.stopPrank();
         
-        // the following transfer is necessary for setQuid()
-        USDC.transfer(address(AUX), 1 * USDC_PRECISION);
         V4router.setup(address(QUID),
         address(AUX), address(V3pool));
+        
         AUX.setQuid{value: 1 wei}(address(QUID));   
-    }
 
-
-    function testBasics() public {    
         vm.startPrank(User01);
         USDC.approve(address(QUID), 5 * stack);
         QUID.mint(User01, 50000 * WAD, address(USDC), 0);
+        vm.stopPrank();
+    }
+
+    function testRegularSwaps() public {    
+        vm.startPrank(User01);
 
         AUX.deposit{value: 25 ether}(0); // ADD LIQUIDITY TO POOL
         uint balanceBefore = User01.balance; // USDC.balanceOf(User01);
@@ -144,11 +145,10 @@ contract RouterTest is Test, Fixtures {
         V4router.reclaim(id, 100);
 
         balanceAfter = User01.balance; // USDC.balanceOf(User01)
-        assertApproxEqAbs(balanceBefore, balanceAfter, 6 * 1e14);
+        assertApproxEqAbs(balanceBefore, balanceAfter, 108323224883144);
 
         uint price = AUX.getPrice(0, false);
         uint expectingToBuy = price / 1e12;
-        console.log("expectingToBuy", expectingToBuy);
         uint USDCbalanceBefore = USDC.balanceOf(User01);
 
         AUX.swap{value: 1 ether}(address(USDC), false, 0);
@@ -190,7 +190,7 @@ contract RouterTest is Test, Fixtures {
         USDCbalanceAfter = USDC.balanceOf(User01);
 
         assertApproxEqAbs(USDCbalanceAfter - USDCbalanceBefore,
-                            expectingToBuy, 491454069); // $491 fee
+                            expectingToBuy, 496504224); // $491 fee
                                                         // on a 75ETH sale
                                                         // is ~ 0.4%
         // TODO remove ETH
@@ -199,11 +199,15 @@ contract RouterTest is Test, Fixtures {
 
     // testing ability is limited because we can't
     // simulate a price drop inside the Univ3 pool
-    function testLeveragedSwaps() public {
+    function testWithdrawAndLeveragedSwaps() public {
         vm.startPrank(User01);
-        USDC.approve(address(QUID), 5 * stack);
-        QUID.mint(User01, 50000 * WAD, address(USDC), 0);
         AUX.deposit{value: 25 ether}(0);
+
+        uint balanceBefore = User01.balance;
+        AUX.withdraw(1 ether);
+        uint balanceAfter = User01.balance;
+
+        assertApproxEqAbs(balanceAfter - balanceBefore, 1 ether, 100000);
 
         address[] memory whose = new address[](1);
         whose[0] = User01;
@@ -213,26 +217,24 @@ contract RouterTest is Test, Fixtures {
         // expectingToBuy += expectingToBuy / 25;
         // ^ leveraged swaps give a boosted gain
 
-        AUX.leverOneForZero{value: 1 ether}(0);
+        AUX.leverOneForZero{value: 1 ether + 3524821}(0);
 
         // Simulate spike in price
-        // AUX.set_price_eth(true);
+        AUX.set_price_eth(true);
 
         // We will get "Too little received"
         // because the simulated price spike
         // will not correspond to pool price
-        // AUX.unwindOneForZero(whose);
+        AUX.unwindOneForZero(whose);
 
         USDC.approve(address(QUID), stack / 10);
-        AUX.leverZeroForOne(stack / 10,
+        AUX.leverZeroForOne{value : 3524821}(stack / 10,
                             address(USDC));
         vm.stopPrank();
     }
     
     function testRedeem() public {
         vm.startPrank(User01);
-        USDC.approve(address(QUID), 5 * stack);
-        QUID.mint(User01, 50000 * WAD, address(USDC), 0);
 
         uint USDCbalanceBefore = USDC.balanceOf(User01);
         // amount hasn't matured yet, min 1 month maturity

@@ -91,8 +91,8 @@ contract Router is SafeCallback, Ownable {
     }
     
     // must send $1 USDC to address(this) & attach msg.value 1 wei
-    function setup(address _quid, address _aux, 
-        address _pool) external payable onlyOwner {
+    function setup(address _quid, address _aux, address _pool)
+        external payable onlyOwner { renounceOwnership(); // ;)
         // these virtual balances represent assets inside the curve
         mockToken temporaryToken = new mockToken(address(this), 18);
         mockToken tokenTemporary = new mockToken(address(this), 6);
@@ -103,17 +103,20 @@ contract Router is SafeCallback, Ownable {
         }    
         require(mockUSD.decimals() == 6, "1e6");
         require(address(QUID) == address(0), "QUID");
-        QUID = Basket(_quid); VANILLA = PoolKey({
+        QUID = Basket(_quid); require(QUID.V4() == 
+                                address(this), "!");
+        VANILLA = PoolKey({
             currency0: Currency.wrap(address(mockUSD)),
             currency1: Currency.wrap(address(mockETH)),
             fee: 420, tickSpacing: 10,
             hooks: IHooks(address(0))}); 
-
-        renounceOwnership(); require(QUID.V4() == address(this), "!");
-        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(_pool).slot0();
-        poolManager.initialize(VANILLA, sqrtPriceX96);
+        AUX = Auxiliary(payable(_aux)); 
         
-        AUX = Auxiliary(payable(_aux));
+        (,int24 tick,,,,,) = IUniswapV3Pool(_pool).slot0();
+        tick *= AUX.token1isWETH() ? int24(1) : int24(-1);
+        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(tick);
+        poolManager.initialize(VANILLA, sqrtPriceX96);
+
         mockUSD.approve(address(poolManager),
                         type(uint256).max);
         mockETH.approve(address(poolManager),
@@ -210,20 +213,27 @@ contract Router is SafeCallback, Ownable {
     }
     
     function pushSwapZeroForOne(Types.Trade calldata trade) onlyAux public {
-        Types.Batch storage ourBatch = swapsZeroForOne[block.number];
-        Types.Batch memory otherBatch = swapsOneForZero[block.number];
-        if (ourBatch.swaps.length + otherBatch.swaps.length > 30) 
-            ourBatch = swapsZeroForOne[block.number + 1];
+        uint currentBlock = block.number;
+        Types.Batch storage ourBatch = swapsZeroForOne[currentBlock];
+        Types.Batch memory otherBatch = swapsOneForZero[currentBlock];
+        while (ourBatch.swaps.length + otherBatch.swaps.length > 30) {
+            currentBlock += 1;
+            ourBatch = swapsZeroForOne[currentBlock];
+            otherBatch = swapsOneForZero[currentBlock];
+        }
         ourBatch.swaps.push(trade); 
         ourBatch.total += trade.amount;
     }
 
     function pushSwapOneForZero(Types.Trade calldata trade) onlyAux public {
-        Types.Batch storage ourBatch = swapsOneForZero[block.number];
-        Types.Batch memory otherBatch = swapsZeroForOne[block.number];
-        if (ourBatch.swaps.length + otherBatch.swaps.length > 30) // TODO liable to overfill the following batch
-            ourBatch = swapsOneForZero[block.number + 1];
-        
+        uint currentBlock = block.number;
+        Types.Batch storage ourBatch = swapsOneForZero[currentBlock];
+        Types.Batch memory otherBatch = swapsZeroForOne[currentBlock];
+        while (ourBatch.swaps.length + otherBatch.swaps.length > 30) {
+            currentBlock += 1;
+            ourBatch = swapsOneForZero[currentBlock];
+            otherBatch = swapsZeroForOne[currentBlock];
+        }
         ourBatch.swaps.push(trade); 
         ourBatch.total += trade.amount;
     }
@@ -237,12 +247,10 @@ contract Router is SafeCallback, Ownable {
     function swap(uint160 sqrtPriceX96, uint lastBlock, 
         uint splitForZero, uint splitForOne, 
         uint gotForZero, uint gotForOne) 
-        onlyAux public returns (bytes memory) {
-        abi.decode(poolManager.unlock(abi.encode(Action.Swap, 
-            sqrtPriceX96, lastBlock, splitForZero, splitForOne, 
-            gotForZero, gotForOne)), (BalanceDelta));
-        
-        return abi.encode(gasleft());   
+        onlyAux public returns (BalanceDelta delta) {
+        delta = abi.decode(poolManager.unlock(abi.encode(Action.Swap, 
+                    sqrtPriceX96, lastBlock, splitForZero, splitForOne, 
+                    gotForZero, gotForOne)), (BalanceDelta));
     }
 
     function _unlockCallback(bytes calldata data)
@@ -326,8 +334,8 @@ contract Router is SafeCallback, Ownable {
             if (LAST_REPACK > 0) { // extrapolate (guestimate) an annual % yield... 
                 // based on the % fee yield of the last period (in between repacks)
                 YIELD = FullMath.mulDiv(365 days / (block.timestamp - LAST_REPACK),
-                    usd_fees * 1e12 + FullMath.mulDiv(price, eth_fees, WAD), 
-                        delta0 * 1e12 + FullMath.mulDiv(price, delta1, WAD));
+                           usd_fees * 1e12 + FullMath.mulDiv(price, eth_fees, WAD), 
+                               delta0 * 1e12 + FullMath.mulDiv(price, delta1, WAD));
             }
             LAST_REPACK = block.timestamp; 
             
@@ -363,8 +371,9 @@ contract Router is SafeCallback, Ownable {
 
             delta = _modLP(delta0, delta1, tickLower,
                             tickUpper, sqrtPriceX96);
-            
-            _handleDelta(delta, true, delta0 > 0, sender);
+        
+            _handleDelta(delta, true, 
+                delta0 == 0, sender);
         }
         return abi.encode(delta);
     }
@@ -413,7 +422,7 @@ contract Router is SafeCallback, Ownable {
     
     function _modLP(uint deltaZero, uint deltaOne, int24 tickLower,
         int24 tickUpper, uint160 sqrtPriceX96) internal returns
-        (BalanceDelta) {  int flip = deltaOne > 0 ? int(1) : int(-1);
+        (BalanceDelta) {  int flip = deltaZero > 0 ? int(1) : int(-1);
         (BalanceDelta totalDelta, // ^ this gets recalculated anyway
          BalanceDelta feesAccrued) = _modifyLiquidity(flip * int(uint(
                _calculateLiquidity(tickLower, sqrtPriceX96, deltaOne))),

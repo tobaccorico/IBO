@@ -9,7 +9,6 @@ import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-// import {wadLn, wadExp} from "solmate/src/utils/SignedWadMath.sol";
 import {SortedSetLib} from "./imports/SortedSet.sol";
 import {ERC6909} from "solmate/src/tokens/ERC6909.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
@@ -38,7 +37,7 @@ contract Basket is ERC6909 {
     uint private _totalSupply;
     uint constant WAD = 1e18;
     address[] public stables;
-    address public AUX; // TODO 
+    address public AUX; 
 
     Metrics private coreMetrics;
     string private _name = "QU!D";
@@ -56,7 +55,7 @@ contract Basket is ERC6909 {
     mapping(uint => uint) public totalSupplies;
     mapping(address => uint) public totalBalances;
     mapping(address => SortedSetLib.Set) private perMonth;
-    mapping(address => mapping(// legacy IERC20 version
+    mapping(address => mapping( // legacy IERC20 version
             address => uint256)) private _allowances;
 
     modifier onlyUs {
@@ -194,10 +193,6 @@ contract Basket is ERC6909 {
                 amount -= withdraw(who, vault,
                         perVault[vault].cash);
 
-                // TODO if USDC and needed for unwind 
-                // must sell
-                
-                //
                 uint scale = 18 - IERC20(token).decimals();
                 amount *= scale > 0 ? 10 ** scale : 1;
             }
@@ -227,9 +222,7 @@ contract Basket is ERC6909 {
         }
     }  // TODO bonds come with specific redemption features. For example, they can be callable,
     // whereby the issuer has the right to redeem, or call back the bond prior to its maturity,
-    // or puttable, where bondholders have the right to sell their bonds back to the issuer at
-    // a predetermined price.
-
+    // or puttable, where bondholders have the right to sell their bonds back to the issuer...
     function withdraw(address to, address vault, uint amount) internal returns (uint sent) {
         uint sharesWithdrawn = Math.min(IERC4626(vault).balanceOf(address(this)),
                                         IERC4626(vault).convertToShares(amount));
@@ -265,6 +258,8 @@ contract Basket is ERC6909 {
                 from, address(this), usd);
             require(usd >= 50 * (10 ** 
                 IERC20(token).decimals()), "grant");
+            
+            // TODO comment out for L2 deploy
             if (token == GHO) { vault = SGHO;
                 IERC20(token).approve(vault, usd);
                 amount = IStakeToken(vault).previewStake(usd);
@@ -318,6 +313,9 @@ contract Basket is ERC6909 {
 
             uint paid = deposit(pledge, token, depositing);
             (uint total, uint yield) = get_metrics(false);
+            // Note: this feature only really behaves as
+            // expected on L1 and Base, because (for now)
+            // the other venues don't have yield-bearing 
             amount += FullMath.mulDiv(amount * yield,
                     month - currentMonth(), WAD * 12);
 

@@ -21,8 +21,8 @@ uses batching and gas compensation.
 
 Depositors of dollars are able to get  
 their yield tokenised upfront; there's  
-a minimum 1-month lockup (12 mon.  
-gives them the entire APY upfront)...  
+a minimum 1-month lockup (supported by  
+our extension of ERC6909 for bonds)...  
 
 This way we ensure that ETH always  
 has dollars to be paired with in V4...  
