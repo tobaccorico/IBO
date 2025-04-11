@@ -25,11 +25,11 @@ import "lib/forge-std/src/console.sol"; // TODO remove
 
 contract Auxiliary is Ownable { 
     bool public token1isWETH;
-    IERC20 USDC; WETH9 WETH;
+    IERC20 USDC; WETH9 public WETH;
     IUniswapV3Pool v3Pool;
     Router V4; IPool AAVE;
     ISwapRouter v3Router; 
-    IERC4626 wethVault;
+    IERC4626 public wethVault;
     Basket QUID; // $QD
 
     uint internal _ETH_PRICE; // TODO remove
@@ -44,17 +44,8 @@ contract Auxiliary is Ownable {
     // ^ TODO measure the rate
     // of change of LEVER_YIELD
 
-    uint internal PENDING_ETH;
-    // ^ single-sided liqudity
-    // that is waiting for $
-    // before it's deposited
-    // into the VANILLA pool
-
     bytes4 immutable SWAP_SELECTOR;
     // ^ just for calling the Router
-
-    mapping(address => Types.Deposit) autoManaged;
-    // ^ price range is managed by our contracts
 
     mapping(address => Types.viaAAVE) pledgesOneForZero;
     mapping(address => Types.viaAAVE) pledgesZeroForOne;
@@ -344,128 +335,14 @@ contract Auxiliary is Ownable {
             QUID.take(msg.sender, amount, address(QUID), false);
         }
     }
-
-    function outOfRange(uint amount, address token,
-        int24 distance, uint range) public
-        payable returns (uint next) {
-        if (token == address(0)) {
-            amount = _depositETH(amount);
-            wethVault.deposit(amount, address(this));  
-        }
-        return V4.outOfRange(msg.sender, amount, 
-                        token, distance, range);
-    }
     
-    function withdraw(uint amount) external { 
-        Types.Deposit memory LP = autoManaged[msg.sender]; 
-        // the following snapshots will always be bigger than LP's
-        uint eth_fees = V4.ETH_FEES(); uint usd_fees = V4.USD_FEES();
-        // swap fee yield, which uses ^^^^^^^^^^ to buy into unwind
-        // instead of V3, which doesn't get more than half, future
-        uint pending = PENDING_ETH; uint pooled_eth = V4.POOLED_ETH();
-        uint fees_eth = FullMath.mulDiv((eth_fees - LP.fees_eth),
-                                      LP.pooled_eth, pooled_eth);
-
-        uint fees_usd = FullMath.mulDiv((usd_fees - LP.fees_usd),
-                                      LP.pooled_eth, pooled_eth);
-        LP.pooled_eth += fees_eth; 
-        fees_usd += LP.usd_owed;
-        
-        if (fees_usd > 0) { LP.usd_owed = 0; 
-            QUID.mint(msg.sender, fees_usd,
-                        address(QUID), 0); 
-        }
-        pooled_eth = Math.min(amount, 
-                      LP.pooled_eth);
-
-        if (pooled_eth > 0) {
-            uint pulled; uint pulling;
-            LP.pooled_eth -= pooled_eth;
-    
-            amount = LP.pooled_eth == 0 ? LP.eth_shares:
-                     wethVault.convertToShares(amount);
-            
-            LP.eth_shares -= amount;
-    
-            // +1 is needed to because convertToAssets gets rounded down
-            pulled = (wethVault.convertToAssets(amount) + 1) - pooled_eth;
-            if (pending > 0) { pulling = Math.min(pending, pooled_eth);
-                PENDING_ETH = pending - pulling;
-                pooled_eth -= pulling;
-                pulled += pulling;
-            }
-            if (pooled_eth > 0) {
-                (uint160 sqrtPriceX96, int24 tickLower, int24 tickUpper,) = V4.repack();
-                V4.modLP(sqrtPriceX96, pooled_eth, 0, tickLower, tickUpper, msg.sender);
-            } 
-            _sendETH(pulled, msg.sender); // from PENDING_ETH (not in the pool)
-        }
-        if (LP.eth_shares == 0) { delete autoManaged[msg.sender]; }
-        else { LP.fees_eth = eth_fees; LP.fees_usd = usd_fees; }
-    }
-
-    function deposit(uint amount) external payable {
-        Types.Deposit memory LP = autoManaged[msg.sender];
-        uint pooled_eth = V4.POOLED_ETH();
-        uint eth_fees = V4.ETH_FEES(); 
-        uint usd_fees = V4.USD_FEES();
-        amount = _depositETH(amount);
-        if (LP.fees_eth > 0 || LP.fees_usd > 0) {
-            LP.usd_owed += FullMath.mulDiv((usd_fees - LP.fees_usd),
-                                          LP.pooled_eth, pooled_eth);
-
-            LP.pooled_eth += FullMath.mulDiv((eth_fees - LP.fees_eth),
-                                            LP.pooled_eth, pooled_eth);
-        }
-        LP.fees_eth = eth_fees; LP.fees_usd = usd_fees;
-        LP.eth_shares += wethVault.deposit(amount,
-                                    address(this));
-        LP.pooled_eth += amount;
-        _addLiquidity(V4.POOLED_USD(), amount);
-        autoManaged[msg.sender] = LP;
-    }
-
-    function _addLiquidity(uint delta0, 
-        uint delta1) internal { (uint160 sqrtPriceX96,
-        int24 tickLower, int24 tickUpper,) = V4.repack();
-        uint price = getPrice(sqrtPriceX96, false);
-        (delta0, delta1) = _addLiquidityHelper(
-                         delta0, delta1, price);
-        if (delta0 > 0) { require(delta1 > 0, "+");
-            V4.modLP(sqrtPriceX96, delta1, delta0, 
-                tickLower, tickUpper, msg.sender);
-        }
-    }
-
-    function addLiquidityHelper(uint delta0, uint delta1, uint price) public 
-        onlyRouter returns (uint, uint) { return _addLiquidityHelper(
-                                               delta0, delta1, price); }
-
-    function _addLiquidityHelper(uint delta0, uint delta1, 
-        uint price) internal returns (uint, uint) {
-        uint pending = PENDING_ETH + delta1;
-      
-        (uint total, ) = QUID.get_metrics(false);
-        uint surplus = (total / 1e12) - delta0;
-       
-        delta1 = Math.min(pending,
-            FullMath.mulDiv(surplus *
-                    1e12, WAD, price));
-      
-        if (delta1 > 0) { pending -= delta1; 
-            delta0 = FullMath.mulDiv(delta1,
-                        price, WAD * 1e12);
-        } PENDING_ETH = pending;
-        return (delta0, delta1);
-    }
-
     // TODO remove (for testing purposes only)
     function set_price_eth(bool up) external {
         uint _price = getPrice(0, true);
         uint delta = _price / 20;
         _ETH_PRICE = up ? _price + delta:
                           _price - delta;
-    }
+    } 
 
     function _getUSDC(uint howMuch, uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
@@ -487,6 +364,11 @@ contract Auxiliary is Ownable {
 
     function sendETH(uint howMuch, address toWhom) 
         public onlyRouter { _sendETH(howMuch, toWhom); }
+
+    function putETH(uint howMuch) public onlyRouter returns (uint) {
+        WETH.transferFrom(address(V4), address(this), howMuch);
+        return wethVault.deposit(howMuch, address(this));
+    }
 
     function _sendETH(uint howMuch, address toWhom) internal {
         // any unused gas from clearSwaps() lands back in 
@@ -551,7 +433,8 @@ contract Auxiliary is Ownable {
                     } else { // the buffer will be saved in USDC, used to pivot later
                         buffer = _takeWETH(pledge.buffer);
                         layup = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
-                        layup = _getUSDC(buffer, 0 /* layup - layup / 200 */) + pledge.supplied;
+                        // TODO uncomment, commented out for testing purposes only
+                        layup = _getUSDC(buffer, 0/*layup - layup / 200*/) + pledge.supplied;
                         QUID.deposit(address(this), address(USDC), layup);
                         pledge.buffer = layup + FullMath.mulDiv(pledge.borrowed,
                                                 uint(pledge.price), WAD * 1e12);

@@ -169,7 +169,7 @@ contract Deploy is Script {
         V4router.setup(address(QUID),
         address(AUX), address(V3pool));
         
-        USDC.transfer(address(AUX), 1);
+        USDC.transfer(address(AUX), 1000000);
         AUX.setQuid{value: 1 wei}(address(QUID));   
 
         console.log("QUID", address(QUID));

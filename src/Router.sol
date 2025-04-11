@@ -29,9 +29,10 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {stdMath} from "forge-std/StdMath.sol";
 import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
+import {stdMath} from "forge-std/StdMath.sol";
 
 import "lib/forge-std/src/console.sol"; // TODO remove
 
@@ -43,14 +44,16 @@ contract Router is SafeCallback, Ownable {
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
 
-    PoolKey VANILLA;
-    IUniswapV3Pool v3Pool;
+    PoolKey VANILLA; WETH9 WETH;
+    IUniswapV3Pool v3Pool; 
     mockToken private mockETH; 
     mockToken private mockUSD;
     Basket QUID; Auxiliary AUX;
 
     mapping(uint => Types.Batch) swapsZeroForOne;
     mapping(uint => Types.Batch) swapsOneForZero;
+    mapping(address => Types.Deposit) autoManaged;
+    // ^ price range is managed by our contracts
 
     mapping(address => uint[]) positions;
     // ^ allows several selfManaged positions
@@ -63,6 +66,12 @@ contract Router is SafeCallback, Ownable {
         Repack, ModLP,
         OutsideRange
     } // from AUX...
+
+    uint internal PENDING_ETH;
+    // ^ single-sided liqudity
+    // that is waiting for $
+    // before it's deposited
+    // into the VANILLA pool
     
     uint public POOLED_USD;
     // ^ currently "in-range"
@@ -80,7 +89,7 @@ contract Router is SafeCallback, Ownable {
     // out the yield over a week
 
     uint constant WAD = 1e18;
-
+    
     bytes internal constant ZERO_BYTES = bytes("");
     constructor(IPoolManager _manager) 
         SafeCallback(_manager) 
@@ -111,30 +120,141 @@ contract Router is SafeCallback, Ownable {
             fee: 420, tickSpacing: 10,
             hooks: IHooks(address(0))}); 
         AUX = Auxiliary(payable(_aux)); 
-        
+        WETH = WETH9(payable(
+        address(AUX.WETH())));
+
         (,int24 tick,,,,,) = IUniswapV3Pool(_pool).slot0();
         tick *= AUX.token1isWETH() ? int24(1) : int24(-1);
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(tick);
         poolManager.initialize(VANILLA, sqrtPriceX96);
-
+        WETH.approve(address(AUX), type(uint256).max);
         mockUSD.approve(address(poolManager),
                         type(uint256).max);
         mockETH.approve(address(poolManager),
                         type(uint256).max);
     }
 
+    function withdraw(uint amount) external { 
+        Types.Deposit memory LP = autoManaged[msg.sender]; 
+        // the following snapshots will always be bigger than LP's
+        uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES;
+        // swap fee yield, which uses ^^^^^^^^^^ to buy into unwind
+        // instead of V3, which doesn't get more than half, future
+        uint pending = PENDING_ETH; uint pooled_eth = POOLED_ETH;
+        uint fees_eth = FullMath.mulDiv((eth_fees - LP.fees_eth),
+                                      LP.pooled_eth, pooled_eth);
+
+        uint fees_usd = FullMath.mulDiv((usd_fees - LP.fees_usd),
+                                      LP.pooled_eth, pooled_eth);
+        LP.pooled_eth += fees_eth; 
+        fees_usd += LP.usd_owed;
+        
+        if (fees_usd > 0) { LP.usd_owed = 0; 
+            QUID.mint(msg.sender, fees_usd,
+                        address(QUID), 0); 
+        }
+        pooled_eth = Math.min(amount, 
+                      LP.pooled_eth);
+
+        if (pooled_eth > 0) {
+            uint pulled; uint pulling;
+            LP.pooled_eth -= pooled_eth;
+    
+            amount = LP.pooled_eth == 0 ? LP.eth_shares:
+                     AUX.wethVault().convertToShares(amount);
+            
+            LP.eth_shares -= amount;
+    
+            // +1 is needed to because convertToAssets gets rounded down
+            pulled = (AUX.wethVault().convertToAssets(amount) + 1) - pooled_eth;
+            if (pending > 0) { pulling = Math.min(pending, pooled_eth);
+                PENDING_ETH = pending - pulling;
+                pooled_eth -= pulling;
+                pulled += pulling;
+            }
+            if (pooled_eth > 0) {
+                (uint160 sqrtPriceX96, 
+                int24 tickLower, int24 tickUpper,) = _repack();
+                 abi.decode(poolManager.unlock(abi.encode(
+                    Action.ModLP, sqrtPriceX96, pooled_eth, 0, 
+                    tickLower, tickUpper, msg.sender)), (BalanceDelta));
+            } 
+            AUX.sendETH(pulled, msg.sender); // from PENDING_ETH (not in the pool)
+        }
+        if (LP.eth_shares == 0) { delete autoManaged[msg.sender]; }
+        else { LP.fees_eth = eth_fees; LP.fees_usd = usd_fees; }
+    } 
+
+     
+    function _depositETH(uint amount) internal returns (uint) {
+        if (amount > 0) { WETH.transferFrom(msg.sender,
+                            address(this), amount);
+        } if (msg.value > 0) {
+            WETH.deposit{value: msg.value}();
+            amount += msg.value;
+        }
+        return amount;  
+    }
+
+    function deposit(uint amount) external payable {
+        Types.Deposit memory LP = autoManaged[msg.sender];
+        amount = _depositETH(amount);
+        LP.eth_shares += AUX.putETH(amount);
+        LP.pooled_eth += amount;
+        (uint160 sqrtPriceX96,
+        int24 tickLower, int24 tickUpper,) = _repack();
+        uint price = AUX.getPrice(sqrtPriceX96, false);
+        
+        uint pooled_eth = POOLED_ETH;
+        uint eth_fees = ETH_FEES; 
+        uint usd_fees = USD_FEES;
+        if (LP.fees_eth > 0 || LP.fees_usd > 0) {
+            LP.usd_owed += FullMath.mulDiv((usd_fees - LP.fees_usd),
+                                          LP.pooled_eth, pooled_eth);
+
+            LP.pooled_eth += FullMath.mulDiv((eth_fees - LP.fees_eth),
+                                            LP.pooled_eth, pooled_eth);
+        }
+        LP.fees_eth = eth_fees; LP.fees_usd = usd_fees;
+        (uint delta0, uint delta1) = _addLiquidityHelper(
+                                POOLED_USD, amount, price);
+        if (delta0 > 0) { 
+            require(delta1 > 0, "+");
+            abi.decode(poolManager.unlock(abi.encode(
+                Action.ModLP, sqrtPriceX96, delta1, delta0, 
+                tickLower, tickUpper, msg.sender)), (BalanceDelta));
+        } // TODO vulnerability if the LP tries to withdraw ETH 
+        autoManaged[msg.sender] = LP; // while it's still pending (not in pool yet)
+    }
+
+    function _addLiquidityHelper(uint delta0, uint delta1, 
+        uint price) internal returns (uint, uint) {
+        uint pending = PENDING_ETH + delta1;
+      
+        (uint total, ) = QUID.get_metrics(false);
+        uint surplus = (total / 1e12) - delta0;
+       
+        delta1 = Math.min(pending,
+            FullMath.mulDiv(surplus *
+                    1e12, WAD, price));
+      
+        if (delta1 > 0) { pending -= delta1; 
+            delta0 = FullMath.mulDiv(delta1,
+                        price, WAD * 1e12);
+        } PENDING_ETH = pending;
+        return (delta0, delta1);
+    }
+
     // "distance" is how far away from current price
     // measured in ticks (100 = 1%); negative = add
-    function outOfRange(address sender, uint amount, 
-        address token, int24 distance, uint range) 
-        public onlyAux returns (uint next) {
-
+    function outOfRange(uint amount, address token,
+        int24 distance, uint range) public payable returns (uint next) {
+        require(range >= 100 && range <= 1000 && range % 50 == 0, "width");
         require(distance % 200 == 0 && distance != 0
             && (distance >= -5000 || distance <= 5000), "distance");
-        require(range >= 100 && range <= 1000 && range % 50 == 0, "width");
-
+        
         (uint160 sqrtPriceX96,
-        int24 lowerTick, int24 upperTick,) = repack();
+        int24 lowerTick, int24 upperTick,) = _repack();
         sqrtPriceX96 = TickMath.getSqrtPriceAtTick(
             TickMath.getTickAtSqrtPrice(sqrtPriceX96)
             - int24(distance) // shift away from current
@@ -146,6 +266,8 @@ contract Router is SafeCallback, Ownable {
          int24 tickUpper, uint160 upper) = updateTicks(
                                       sqrtPriceX96, range);
         if (token == address(0)) {
+            amount = _depositETH(amount); 
+            AUX.putETH(amount);
             require(lowerTick > tickUpper, "right");
             liquidity = int(uint(
                 LiquidityAmounts.getLiquidityForAmount1(
@@ -153,7 +275,7 @@ contract Router is SafeCallback, Ownable {
                 )));
         } else {
             require(tickLower > upperTick, "left");
-            amount = QUID.deposit(sender, token, amount);
+            amount = QUID.deposit(msg.sender, token, amount);
             uint scale = IERC20(token).decimals() - 6;
             amount /= scale > 0 ? (10 ** scale) : 1;
             liquidity = int(uint(
@@ -162,15 +284,15 @@ contract Router is SafeCallback, Ownable {
                 )));
         }
         Types.SelfManaged memory newPosition = Types.SelfManaged({
-            owner: sender, lower: tickLower, 
+            owner: msg.sender, lower: tickLower, 
             upper: tickUpper, liq: liquidity
         });
         next = tokenId + 1;
         selfManaged[next] = newPosition;
-        positions[sender].push(next);
+        positions[msg.sender].push(next);
         tokenId = next;
-        _outOfRange(sender, liquidity, 
-                tickLower, tickUpper);
+        _outOfRange(msg.sender, liquidity, 
+                    tickLower, tickUpper);
     }
 
     function reclaim(uint id, int percent) external {
@@ -196,20 +318,11 @@ contract Router is SafeCallback, Ownable {
             position.lower, position.upper);
     } 
 
-
     function _outOfRange(address sender, int liquidity, int24 tickLower, 
         int24 tickUpper) internal returns (BalanceDelta delta) {
         delta = abi.decode(poolManager.unlock(abi.encode(
             Action.OutsideRange, sender, liquidity,
             tickLower, tickUpper)), (BalanceDelta));
-    }
-
-    function modLP(uint160 sqrtPriceX96, uint delta1, uint delta0, 
-        int24 tickLower, int24 tickUpper, address sender) // ^ USD
-        public onlyAux returns (BalanceDelta delta) {
-        delta = abi.decode(poolManager.unlock(abi.encode(
-                Action.ModLP, sqrtPriceX96, delta1, delta0, 
-                tickLower, tickUpper, sender)), (BalanceDelta));
     }
     
     function pushSwapZeroForOne(Types.Trade calldata trade) onlyAux public {
@@ -345,8 +458,8 @@ contract Router is SafeCallback, Ownable {
             UPPER_TICK = tickUpper; LOWER_TICK = tickLower;
             USD_FEES += usd_fees; ETH_FEES += eth_fees;
 
-            (delta0, delta1) = AUX.addLiquidityHelper(
-                                     0, delta1, price);
+            (delta0, delta1) = _addLiquidityHelper(
+                                  0, delta1, price);
 
             delta = _modLP(delta0, delta1, tickLower,
                             tickUpper, sqrtPriceX96);
@@ -462,7 +575,7 @@ contract Router is SafeCallback, Ownable {
                        FixedPointMathLib.sqrt(1e18)));
     }
 
-    function repack() public onlyAux returns (uint160 sqrtPriceX96,
+    function _repack() internal returns (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper, uint128 myLiquidity) { 
         int24 currentTick; PoolId id = VANILLA.toId();
         (sqrtPriceX96, currentTick,,) = poolManager.getSlot0(id);
@@ -480,5 +593,10 @@ contract Router is SafeCallback, Ownable {
                 UPPER_TICK = tickUpper; LOWER_TICK = tickLower;
             }            
         }
+    }
+
+    function repack() public onlyAux returns (uint160 sqrtPriceX96,
+        int24 tickLower, int24 tickUpper, uint128 myLiquidity) {
+        return _repack();
     }
 }

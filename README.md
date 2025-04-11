@@ -9,7 +9,7 @@ this provides optimal returns for LPs, except,
 unlike the canonical USDC<>WETH pool, the  
 dollar side is split between **multiple stables**.  
 
-There is no IL for **single-sided provision**,  
+There's zero-IL **single-sided provision**,  
 by virtue of a "queue" (`PENDING_ETH`).  
 If a swap can't be fulfilled by internal  
 liquidity entirely, it gets split between  

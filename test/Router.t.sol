@@ -127,15 +127,15 @@ contract RouterTest is Test, Fixtures {
     function testRegularSwaps() public {    
         vm.startPrank(User01);
 
-        AUX.deposit{value: 25 ether}(0); // ADD LIQUIDITY TO POOL
+        V4router.deposit{value: 25 ether}(0); // ADD LIQUIDITY TO POOL
         uint balanceBefore = User01.balance; // USDC.balanceOf(User01);
 
         // TEST OUT OF RANGE with ETH (above price)
-        uint id = AUX.outOfRange{value: 1 ether}(0,
+        uint id = V4router.outOfRange{value: 1 ether}(0,
                             address(0), 400, 100);
 
         // USDC.approve(address(QUID), stack / 10);
-        /* uint id = AUX.outOfRange(stack / 10,
+        /* uint id = V4router.outOfRange(stack / 10,
                         address(USDC), -4000, 100); */ // below price with USDC works!
 
         uint balanceAfter = User01.balance; // USDC.balanceOf(User01);
@@ -201,10 +201,10 @@ contract RouterTest is Test, Fixtures {
     // simulate a price drop inside the Univ3 pool
     function testWithdrawAndLeveragedSwaps() public {
         vm.startPrank(User01);
-        AUX.deposit{value: 25 ether}(0);
+        V4router.deposit{value: 25 ether}(0);
 
         uint balanceBefore = User01.balance;
-        AUX.withdraw(1 ether);
+        V4router.withdraw(1 ether);
         uint balanceAfter = User01.balance;
 
         assertApproxEqAbs(balanceAfter - balanceBefore, 1 ether, 100000);
@@ -252,5 +252,5 @@ contract RouterTest is Test, Fixtures {
             USDCbalanceBefore, stack / 10, 1);
 
         vm.stopPrank();
-    }
+    } 
 }
