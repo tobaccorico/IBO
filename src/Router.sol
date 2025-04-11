@@ -315,10 +315,11 @@ contract Router is SafeCallback, Ownable {
             require(position.liq > 0, "reclaim");
             selfManaged[id] = position;
         }
-        _outOfRange(msg.sender, -liquidity, 
-            position.lower, position.upper);
+        abi.decode(poolManager.unlock(abi.encode(
+            Action.OutsideRange, msg.sender, -liquidity,
+            position.lower, position.upper)), (BalanceDelta));
     }
-    
+
     function pushSwapZeroForOne(Types.Trade calldata trade) onlyAux public {
         uint currentBlock = block.number;
         Types.Batch storage ourBatch = swapsZeroForOne[currentBlock];
