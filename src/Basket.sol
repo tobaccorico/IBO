@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 
 
 import {Router} from  "./Router.sol";
+import {Auxiliary} from  "./Auxiliary.sol";
 
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
@@ -37,7 +38,7 @@ contract Basket is ERC6909 {
     uint private _totalSupply;
     uint constant WAD = 1e18;
     address[] public stables;
-    address public AUX; 
+    Auxiliary public AUX; 
 
     Metrics private coreMetrics;
     string private _name = "QU!D";
@@ -61,7 +62,7 @@ contract Basket is ERC6909 {
     modifier onlyUs {
         address sender = msg.sender;
         require(sender == V4 ||
-                sender == AUX, "403"); _;
+                sender == address(AUX), "403"); _;
     }
 
     /**
@@ -123,9 +124,11 @@ contract Basket is ERC6909 {
         }
     }
 
-    constructor(address _router, address _auxiliary,
-        address[] memory _stables, address[] memory _vaults) { 
-        _deployed = block.timestamp; AUX = _auxiliary;
+    constructor(address _router, address _aux,
+        address[] memory _stables, 
+        address[] memory _vaults) { 
+        _deployed = block.timestamp;
+        AUX = Auxiliary(payable(_aux));
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
         for (uint i = 0; i < _vaults.length; i++) {
@@ -163,12 +166,13 @@ contract Basket is ERC6909 {
         uint ghoIndex = stables.length - 1;
         for (uint i = 0; i < ghoIndex; i++) { 
             uint multiplier = i > 1 ? 1 : 1e12;
+            uint noTouching = i == 0 ? AUX.untouchable() : 0;
             // ^ scale precision for USDC/USDT
             // because the rest are all 1e18
             vault = vaults[stables[i]];
             shares = perVault[vault].shares;
             if (shares > 0) {
-                shares = IERC4626(vault).convertToAssets(shares) * multiplier;
+                shares = (IERC4626(vault).convertToAssets(shares) - noTouching) * multiplier;
                 amounts[i + 1] = shares; amounts[0] += shares; // track total;
                 amounts[9] += FullMath.mulDiv(shares, // < weighted sum of
                     IERC4626(vault).totalAssets() * multiplier, // APY 
@@ -183,18 +187,27 @@ contract Basket is ERC6909 {
     }
 
     function take(address who, // on whose behalf
-        uint amount, address token) public onlyUs
-        returns (uint sent) { address vault;
+        uint amount, address token, bool strict) 
+        public onlyUs returns (uint sent) { 
+        address vault;
         if (token != address(this)) {
             vault = vaults[token];
-            if (perVault[vault].cash >= amount) {
+            uint max = perVault[vault].cash;
+            max -= (token == stables[0] && !strict) ? 
+                 AUX.untouchable() : 0;
+
+            if (max >= amount) {
                 return withdraw(who, vault, amount);
             } else {
-                amount -= withdraw(who, vault,
-                        perVault[vault].cash);
-
-                uint scale = 18 - IERC20(token).decimals();
-                amount *= scale > 0 ? 10 ** scale : 1;
+                max = withdraw(who, vault, max);
+                amount -= max; 
+                if (!strict) {
+                    uint scale = 18 - IERC20(token).decimals();
+                    if (scale > 0) {
+                        amount *=  10 ** scale;
+                        max *= 10 ** scale;
+                    }   sent = max;
+                } else return max;
             }
         }
         uint[10] memory amounts = get_deposits();
@@ -304,7 +317,7 @@ contract Basket is ERC6909 {
         uint month = Math.max(when,
             currentMonth() + 1);
         if (token == address(this)) {
-            require(msg.sender == AUX, "403");
+            require(msg.sender == address(AUX), "403");
             _mint(pledge, month, amount);
         } else {
             uint scale = 18 - IERC20(token).decimals();

@@ -308,7 +308,7 @@ contract Router is SafeCallback, Ownable {
                     amount *= scale > 0 ? (10 ** scale) : 1;
                     
                     require(stdMath.delta(amount, QUID.take(
-                       forZero.swaps[i].sender, amount, out)) <= 5);
+                    forZero.swaps[i].sender, amount, out, false)) <= 5);
                 }
                 delete swapsOneForZero[lastBlock];
             }
@@ -390,7 +390,7 @@ contract Router is SafeCallback, Ownable {
             if (!keep && who != address(0)) {
                 delta0 *=  1e12;
                 require(stdMath.delta(delta0, QUID.take(
-                             who, delta0, address(QUID))) <= 5);
+                     who, delta0, address(QUID), false)) <= 5);
             } // keep is for preventing disbursal of $ 
             // when single-sided LPs withdraw their ETH 
         }
