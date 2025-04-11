@@ -264,7 +264,7 @@ contract Router is SafeCallback, Ownable {
          int liquidity; 
         (int24 tickLower, uint160 lower,
          int24 tickUpper, uint160 upper) = updateTicks(
-                                      sqrtPriceX96, range);
+                                   sqrtPriceX96, range);
         if (token == address(0)) {
             amount = _depositETH(amount); 
             AUX.putETH(amount);
@@ -291,8 +291,9 @@ contract Router is SafeCallback, Ownable {
         selfManaged[next] = newPosition;
         positions[msg.sender].push(next);
         tokenId = next;
-        _outOfRange(msg.sender, liquidity, 
-                    tickLower, tickUpper);
+        abi.decode(poolManager.unlock(abi.encode(
+            Action.OutsideRange, msg.sender, liquidity,
+            tickLower, tickUpper)), (BalanceDelta));
     }
 
     function reclaim(uint id, int percent) external {
@@ -316,13 +317,6 @@ contract Router is SafeCallback, Ownable {
         }
         _outOfRange(msg.sender, -liquidity, 
             position.lower, position.upper);
-    } 
-
-    function _outOfRange(address sender, int liquidity, int24 tickLower, 
-        int24 tickUpper) internal returns (BalanceDelta delta) {
-        delta = abi.decode(poolManager.unlock(abi.encode(
-            Action.OutsideRange, sender, liquidity,
-            tickLower, tickUpper)), (BalanceDelta));
     }
     
     function pushSwapZeroForOne(Types.Trade calldata trade) onlyAux public {

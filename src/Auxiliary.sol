@@ -239,9 +239,9 @@ contract Auxiliary is Ownable {
              splitForZero, splitForOne, 
              gotForZero, gotForOne);
 
-            uint forGas = _takeWETH(swapping); 
-            WETH.withdraw(forGas);
-            
+            uint forGas = _takeWETH(swapping); WETH.withdraw(forGas);
+            // because of the way we do this low-level call, our swap entrypoint
+            // has to be AUX (not the router, which would otherwise make sense)
             (bool success,) = address(V4).call{ gas: forGas + gasleft()}(payload);
         }
         lastBlock = block.number;
