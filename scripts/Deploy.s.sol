@@ -17,6 +17,24 @@ import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol"; // < L1 and Arbi
 
 contract Deploy is Script {
     address[] public STABLECOINS;
+
+    // IPoolAddressesProvider
+    address public aaveAddr = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
+    // Ethereum : 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e
+    // Polygon : 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb
+    // Unichain : 
+    // Arbi : 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb
+    // Base : 0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D
+
+    // IUiPoolDataProvider
+    address public aaveData = 0x68100bD5345eA474D93577127C11F39FF8463e93;
+    // Ethereum : 0x3F78BBD206e4D3c504Eb854232EdA7e47E9Fd8FC
+    // Polygon : 0x68100bD5345eA474D93577127C11F39FF8463e93
+    // Unichain :
+    // Arbi : 0x5c5228aC8BC1528482514aF3e27E692495148717
+    // Base : 0x68100bD5345eA474D93577127C11F39FF8463e93
+
+    // IPool
     address public aavePool = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
     // Ethereum : 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2
     // Polygon : 0x794a61358D6845594F94dc1DB02A252b5b4814aD

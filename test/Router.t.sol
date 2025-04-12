@@ -48,8 +48,12 @@ contract RouterTest is Test, Fixtures {
     IUniswapV3Pool public V3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
     
     address[] public STABLECOINS;
-    address public aavePool = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
+
+    address public aavePool = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2; // IPool
+    address public aaveData = 0x3F78BBD206e4D3c504Eb854232EdA7e47E9Fd8FC; // // IUiPoolDataProvider
+    address public aaveAddr = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e; // // IPoolAddressesProvider
     IERC20 public GHO = IERC20(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
+
     IERC20 public USDT = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
     IERC20 public USDC = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
     IERC20 public DAI = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
@@ -59,7 +63,7 @@ contract RouterTest is Test, Fixtures {
     IERC20 public FRAX = IERC20(0xCAcd6fd266aF91b8AeD52aCCc382b4e165586E29);
     
     address[] public VAULTS;
-    IERC4626 public gantletWETHvault = IERC4626(0x4881Ef0BF6d2365D3dd6499ccd7532bcdBCE0658);
+    IERC4626 public gauntletWETHvault = IERC4626(0x4881Ef0BF6d2365D3dd6499ccd7532bcdBCE0658);
     IERC4626 public smokehouseUSDCvault = IERC4626(0xBEeFFF209270748ddd194831b3fa287a5386f5bC);
     IERC4626 public smokehouseUSDTvault = IERC4626(0xA0804346780b4c2e3bE118ac957D1DB82F9d7484);
 
@@ -104,7 +108,8 @@ contract RouterTest is Test, Fixtures {
         V4router = new Router(manager);
         AUX = new Auxiliary(address(V4router),
             address(V3pool), address(V3router),
-            address(gantletWETHvault), aavePool);
+            address(gauntletWETHvault), 
+            aavePool, aaveData, aaveAddr);
         QUID = new Basket(address(V4router),
             address(AUX), STABLECOINS, VAULTS);
 
@@ -242,7 +247,7 @@ contract RouterTest is Test, Fixtures {
 
         uint USDCbalanceAfter = USDC.balanceOf(User01);
         assertApproxEqAbs(USDCbalanceAfter,
-                        USDCbalanceBefore, 1);
+                          USDCbalanceBefore, 1);
 
         vm.warp(vm.getBlockTimestamp() + 30 days);
         AUX.redeem(1000 * WAD);

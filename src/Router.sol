@@ -159,20 +159,23 @@ contract Router is SafeCallback, Ownable {
         if (pooled_eth > 0) {
             uint pulled; uint pulling;
             LP.pooled_eth -= pooled_eth;
-    
+            
+            // if we are withdrawing the whole amount,
+            // we want to burn all the shares, otherwise
+            // only burn enough shares to cover the amount
             amount = LP.pooled_eth == 0 ? LP.eth_shares:
                      AUX.wethVault().convertToShares(amount);
             
             LP.eth_shares -= amount;
     
-            // +1 is needed to because convertToAssets gets rounded down
+            // +1 is needed here because convertToAssets() does rounding down...
             pulled = (AUX.wethVault().convertToAssets(amount) + 1) - pooled_eth;
             if (pending > 0) { pulling = Math.min(pending, pooled_eth);
                 PENDING_ETH = pending - pulling;
                 pooled_eth -= pulling;
                 pulled += pulling;
             }
-            if (pooled_eth > 0) {
+            if (pooled_eth > 0) { // we withdraw from the pool only if needed
                 (uint160 sqrtPriceX96, 
                 int24 tickLower, int24 tickUpper,) = _repack();
                  abi.decode(poolManager.unlock(abi.encode(
@@ -223,8 +226,8 @@ contract Router is SafeCallback, Ownable {
             abi.decode(poolManager.unlock(abi.encode(
                 Action.ModLP, sqrtPriceX96, delta1, delta0, 
                 tickLower, tickUpper, msg.sender)), (BalanceDelta));
-        } // TODO vulnerability if the LP tries to withdraw ETH 
-        autoManaged[msg.sender] = LP; // while it's still pending (not in pool yet)
+        } 
+        autoManaged[msg.sender] = LP; 
     }
 
     function _addLiquidityHelper(uint delta0, uint delta1, 
