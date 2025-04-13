@@ -193,6 +193,27 @@ contract Basket is ERC6909 {
                     type(uint256).max);
     }
 
+    /* TODO L2 doesn't use 4626
+    function get_total_deposits
+        (bool usdc) public view
+        // this is only *part* of the captalisation()
+        returns (uint total) { // handle USDC first
+        total += usdc ? IERC4626(vaults[USDC]).maxWithdraw(
+                                 address(this)) * 1e12 : 0;
+        // TODO on Arbitrum there's no Morpho vault yet...
+        // total += perVault[FRAX].debit; // ARB only
+        total += perVault[USDE].debit;
+        total += FullMath.mulDiv(_getPrice(SUSDE),
+                    perVault[SUSDE].debit, WAD);
+        total += FullMath.mulDiv(_getPrice(SUSDS),
+                    perVault[SUSDS].debit, WAD);
+        total += perVault[USDS].debit;
+        total += perVault[DAI].debit;
+        total += perVault[CRVUSD].debit;
+        total += FullMath.mulDiv(_getPrice(SCRVUSD),
+                    perVault[SCRVUSD].debit, WAD); 
+    } */
+
     function get_deposits() public view
         returns (uint[10] memory amounts) {
         address vault; uint shares; // 4626
@@ -278,7 +299,7 @@ contract Basket is ERC6909 {
                                             address(this)), "take");
         perVault[vault].cash -= sent;
         perVault[vault].shares -= sharesWithdrawn;
-    }
+    } // TODO L2 doesn't use 4626
 
     function deposit(address from,
         address token, uint amount)
@@ -286,6 +307,13 @@ contract Basket is ERC6909 {
         address GHO = stables[stables.length - 1];
         address SGHO = vaults[GHO]; address vault;
         if (isVault[token] && token != SGHO) { 
+            // TODO uncomment for L2
+            // uint price = _getPrice(token); 
+            /* amount = FullMath.min(
+                IERC20(token).balanceOf(from),
+                FullMath.mulDiv(amount, WAD, price)
+            ); 
+            usd = FullMath.mulDiv(amount, price, WAD); */
             amount = Math.min(
                 IERC4626(token).allowance(from, address(this)),
                  IERC4626(token).convertToShares(amount));
@@ -294,7 +322,8 @@ contract Basket is ERC6909 {
                                     address(this), amount);
             require(usd >= 50 * 
             (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
-            perVault[token].shares += amount; perVault[token].cash += usd;
+            perVault[token].shares += amount; // comment out above for L2
+            perVault[token].cash += usd;
         }    
         else if (isStable[token] || token == SGHO) {
             usd = Math.min(amount, 
@@ -305,7 +334,7 @@ contract Basket is ERC6909 {
             require(usd >= 50 * (10 ** 
                 IERC20(token).decimals()), "grant");
             
-            // TODO comment out for L2 deploy
+            // TODO comment out safety module for L2
             if (token == GHO) { vault = SGHO;
                 IERC20(token).approve(vault, usd);
                 amount = IStakeToken(vault).previewStake(usd);
@@ -314,6 +343,7 @@ contract Basket is ERC6909 {
             else if (token != SGHO) { 
                 vault = vaults[token];
                 IERC20(token).approve(vault, usd);
+                // comment out for L2 (except USDC and USDT)
                 amount = IERC4626(vault).deposit(usd, 
                                     address(this));
             } perVault[vault].shares += amount;
