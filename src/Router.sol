@@ -168,13 +168,15 @@ contract Router is SafeCallback, Ownable {
             
             LP.eth_shares -= amount;
     
-            // +1 is needed here because convertToAssets() does rounding down...
+            // +1 is needed here because convertToAssets() does rounding down
             pulled = (AUX.wethVault().convertToAssets(amount) + 1) - pooled_eth;
+            // ^ variable needed as there may be a remainder due to share value
             if (pending > 0) { pulling = Math.min(pending, pooled_eth);
                 PENDING_ETH = pending - pulling;
                 pooled_eth -= pulling;
                 pulled += pulling;
-            }
+            } // there should always be enough ETH between PENDING and pooled
+            // to satisfy withdrawal (if it's not in the pool it's PENDING)
             if (pooled_eth > 0) { // we withdraw from the pool only if needed
                 (uint160 sqrtPriceX96, 
                 int24 tickLower, int24 tickUpper,) = _repack();
@@ -182,7 +184,7 @@ contract Router is SafeCallback, Ownable {
                     Action.ModLP, sqrtPriceX96, pooled_eth, 0, 
                     tickLower, tickUpper, msg.sender)), (BalanceDelta));
             } 
-            AUX.sendETH(pulled, msg.sender); // from PENDING_ETH (not in the pool)
+            AUX.sendETH(pulled, msg.sender); 
         }
         if (LP.eth_shares == 0) { delete autoManaged[msg.sender]; }
         else { LP.fees_eth = eth_fees; LP.fees_usd = usd_fees; }
@@ -353,6 +355,11 @@ contract Router is SafeCallback, Ownable {
         (Types.Batch memory, Types.Batch memory) {
         return (swapsOneForZero[whichBlock], 
                 swapsZeroForOne[whichBlock]);
+    }
+
+    function unpend(uint howMuch) public onlyAux returns (uint) {
+        uint subtracting = Math.min(PENDING_ETH, howMuch);
+        PENDING_ETH -= subtracting; return subtracting;
     }
     
     function swap(uint160 sqrtPriceX96, uint lastBlock, 

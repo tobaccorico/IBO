@@ -275,15 +275,15 @@ contract Auxiliary is Ownable {
             totalValue / 1e12, address(USDC), false); 
         if (totalValue / 1e12 > took + 1) {
             uint needed = totalValue / 1e12 - took;
-            uint selling = FullMath.mulDiv(needed, WAD * 1e12, price);
-            took += _getUSDC(selling, needed - needed / 200);
+            uint selling = FullMath.mulDiv(needed, 
+                                WAD * 1e12, price);
+            require(V4.unpend(selling) == selling);
+            took += _getUSDC(_takeWETH(selling), 
+                        needed - needed / 200);
             amount -= selling;
         }
         wethVault.deposit(amount + UNWIND_COST, address(this));
-        // amount variable later reused to mean somehing else
-        require(wethVault.maxWithdraw(address(this)) > borrowing);
-        // TODO ^ vulnerability, must integrate curve into basket
-
+        
         USDC.approve(address(AAVE), took);
         AAVE.supply(address(USDC), took, address(this), 0);
         AAVE.borrow(address(WETH), borrowing, 2, 0, address(this));
@@ -445,6 +445,7 @@ contract Auxiliary is Ownable {
                     require(stdMath.delta(USDC.balanceOf(address(this)),
                                                 pledge.supplied) <= 5);
                     if (delta <= -49) { // use all of the dollars we possibly can to buy the dip
+                        
                         buffer = FullMath.mulDiv(pledge.borrowed, uint(pledge.price), WAD * 1e12);
                         // recover USDC that we got from selling the borrowed ETH...
                         layup = QUID.take(address(this), buffer, address(USDC), true);
@@ -457,7 +458,7 @@ contract Auxiliary is Ownable {
                                                             address(this));
                         pledge.price = price; // < so we may know when to sell later
                     } else { // the buffer will be saved in USDC, used to pivot later
-                        buffer = _takeWETH(pledge.buffer); // 
+                        buffer = _takeWETH(pledge.buffer); 
                         require(stdMath.delta(buffer, pledge.buffer) <= 5);
                         layup = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
                         // TODO uncomment, commented out for testing purposes only
@@ -541,7 +542,7 @@ contract Auxiliary is Ownable {
                         untouchable += pledge.supplied; pledge.price = price;
                     } else { // buffer is is now in ETH
                         pledge.buffer = pledge.supplied;
-                        wethVault.deposit(pledge.supplied,
+                        wethVault.deposit(pledge.buffer,
                                           address(this));
 
                         pledge.supplied = 0;
