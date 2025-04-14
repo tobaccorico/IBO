@@ -180,7 +180,16 @@ contract Router is SafeCallback, Ownable {
             if (pooled_eth > 0) { // we withdraw from the pool only if needed
                 (uint160 sqrtPriceX96, 
                 int24 tickLower, int24 tickUpper,) = _repack();
-                 abi.decode(poolManager.unlock(abi.encode(
+                // this condition is an edge case in case there
+                // is an excessive amount of leverOneForZero...
+                if (pooled_eth > POOLED_ETH) {
+                    QUID.take(msg.sender,
+                    FullMath.mulDiv(pooled_eth - POOLED_ETH, 
+                    AUX.getPrice(sqrtPriceX96, false), WAD),
+                    address(QUID), false);
+                    pooled_eth = POOLED_ETH;
+                }
+                abi.decode(poolManager.unlock(abi.encode(
                     Action.ModLP, sqrtPriceX96, pooled_eth, 0, 
                     tickLower, tickUpper, msg.sender)), (BalanceDelta));
             } 
