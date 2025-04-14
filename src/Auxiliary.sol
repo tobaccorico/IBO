@@ -273,6 +273,11 @@ contract Auxiliary is Ownable {
         
         uint took = QUID.take(address(this),
             totalValue / 1e12, address(USDC), false); 
+        // TODO as part of take(), it's worthwhile 
+        // to integrate Curve's StableSwap as first
+        // order logic, and use the following only
+        // as a last resort (we don't want to unpend
+        // unless it's the only inevitable route)...
         if (totalValue / 1e12 > took + 1) {
             uint needed = totalValue / 1e12 - took;
             uint selling = FullMath.mulDiv(needed, 
