@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+
 import {Router} from  "./Router.sol";
 import {Auxiliary} from  "./Auxiliary.sol";
 
@@ -15,6 +16,7 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
+import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 
 interface IStakeToken is IERC20 { // StkGHO (safety module)
     function stake(address to, uint256 amount) external;
@@ -28,6 +30,12 @@ interface IStakeToken is IERC20 { // StkGHO (safety module)
              external view returns (uint256);
 }
 
+interface ISCRVOracle { 
+    function pricePerShare(uint ts) 
+    external view returns (uint);
+} // these two Oracle contracts are only used on L2
+import {IDSROracle} from "./imports/IDSROracle.sol";
+
 contract Basket is ERC6909 {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IERC4626;
@@ -40,6 +48,8 @@ contract Basket is ERC6909 {
     Auxiliary public AUX; 
 
     Metrics private coreMetrics;
+     IDSROracle internal DSR;
+    ISCRVOracle internal CRV;
     string private _name = "QU!D";
     string private _symbol = "QD";
     address payable public V4;
@@ -135,7 +145,31 @@ contract Basket is ERC6909 {
             isVault[vault] = true; vaults[stable] = vault;
             isStable[stable] = true;
         }   V4 = payable(_router);
+        // the following oracles are needed on L2 in absence of 4626
+        DSR = IDSROracle(0xEE2816c1E1eed14d444552654Ed3027abC033A36); 
+        // ^ 0x65d946e533748A998B1f0E430803e39A6388f7a1 // <----- Base
+        CRV = ISCRVOracle(0x3195A313F409714e1f173ca095Dba7BfBb5767F7);
+        // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
     }
+    
+    function _getPrice(address token) internal 
+        view returns (uint price) { // L2 only
+        if (token == vaults[stables[5]]) { // SUSDE
+            (, int answer,, uint ts,) = AggregatorV3Interface(
+            0x605EA726F0259a30db5b7c9ef39Df9fE78665C44).latestRoundData();
+            // 0xdEd37FC1400B8022968441356f771639ad1B23aA // Base
+            price = uint(answer); require(ts > 0 
+                && ts <= block.timestamp, "link");
+            // console.log("SUSDE obtained price", price);
+        } else if (token == vaults[stables[6]]) { // SCRVUSD
+            price = CRV.pricePerShare(block.timestamp);
+            // console.log("SCRVUSD obtained price", price);
+        } else if (token == vaults[stables[3]]) { // SUSDS
+            price = DSR.getConversionRateBinomialApprox() / 1e9;
+            // console.log("SUSDS obtained price", price);
+        }
+        require(price >= WAD, "price");
+    } // function used only on Base...
 
     function get_metrics(bool force)
         public returns (uint, uint) {
@@ -159,17 +193,38 @@ contract Basket is ERC6909 {
                     type(uint256).max);
     }
 
+    /*
+    function get_total_deposits
+        (bool usdc) public view
+        // this is only *part* of the captalisation()
+        returns (uint total) { // handle USDC first
+        total += usdc ? IERC4626(vaults[USDC]).maxWithdraw(
+                                 address(this)) * 1e12 : 0;
+        // TODO on Arbitrum there's no Morpho vault yet...
+        // total += perVault[FRAX].debit; // ARB only
+        total += perVault[USDE].debit;
+        total += FullMath.mulDiv(_getPrice(SUSDE),
+                    perVault[SUSDE].debit, WAD);
+        total += FullMath.mulDiv(_getPrice(SUSDS),
+                    perVault[SUSDS].debit, WAD);
+        total += perVault[USDS].debit;
+        total += perVault[DAI].debit;
+        total += perVault[CRVUSD].debit;
+        total += FullMath.mulDiv(_getPrice(SCRVUSD),
+                    perVault[SCRVUSD].debit, WAD); 
+    } */
+
     function get_deposits() public view
         returns (uint[10] memory amounts) {
         address vault; uint shares; // 4626
         uint ghoIndex = stables.length - 1;
         for (uint i = 0; i < ghoIndex; i++) { 
             uint multiplier = i > 1 ? 1 : 1e12;
-            uint noTouching = i == 0 ? 
+            uint noTouching = i == 0 ?
                AUX.untouchable() : 0;
             // ^ scale precision for USDC/USDT
             // because the rest are all 1e18
-            vault = vaults[stables[i]];
+            vaults[stables[i]];
             shares = perVault[vault].shares;
             if (shares > 0) {
                 shares = (IERC4626(vault).convertToAssets(shares) - noTouching) * multiplier;
@@ -253,15 +308,13 @@ contract Basket is ERC6909 {
         address GHO = stables[stables.length - 1];
         address SGHO = vaults[GHO]; address vault;
         if (isVault[token] && token != SGHO) { 
-            amount = Math.min(
-                IERC4626(token).allowance(from, address(this)),
-                 IERC4626(token).convertToShares(amount));
-            usd = IERC4626(token).convertToAssets(amount);
-                   IERC4626(token).transferFrom(msg.sender,
-                                    address(this), amount);
-            require(usd >= 50 * 
-            (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
-            perVault[token].shares += amount; // comment out above for L2
+            // TODO uncomment for L2
+            // uint price = _getPrice(token); 
+            /* amount = FullMath.min(
+                IERC20(token).balanceOf(from),
+                FullMath.mulDiv(amount, WAD, price)
+            ); 
+            usd = FullMath.mulDiv(amount, price, WAD); */
             perVault[token].cash += usd;
         }    
         else if (isStable[token] || token == SGHO) {
@@ -392,8 +445,8 @@ contract Basket is ERC6909 {
                 }
                 if (balanceOf[from][k] == 0) {
                     perMonth[from].remove(k);
-                } 
-                amount -= amt;
+                }
+                amount -= amt; 
                 sent += amt;
             }   i -= 1;
         }

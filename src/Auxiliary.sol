@@ -353,8 +353,8 @@ contract Auxiliary is Ownable {
                                         amount, total);
             LEVER_YIELD -= gains; amount += gains;
             QUID.take(msg.sender, amount, address(QUID), false);
-        }
-    }
+        } // TODO extremely unlikely edge case, distribute ETH if
+    } // there is not suffcient dollars in the basket to cover...
     
     // TODO remove (for testing purposes only)
     function set_price_eth(bool up) external {
