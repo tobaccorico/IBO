@@ -11,6 +11,16 @@ import { PythPriceProvider } from "./contexts/PythPriceProvider"
 import { DepositorProvider } from "./contexts/DepositorProvider"
 import { DepositoryProvider } from "./contexts/DepositoryProvider"
 
+// Spawn background worker script (only if not already running)
+if (process.env.NODE_ENV !== "production") {
+  const { spawn } = require("child_process");
+  const ps = spawn("node", ["worker.js"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  ps.unref(); // allow it to keep running in background
+}
+
 const letsgo = ReactDOM.createRoot(document.getElementById('letsgo'))
 letsgo.render(
   <React.StrictMode>

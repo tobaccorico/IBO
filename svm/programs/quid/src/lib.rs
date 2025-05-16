@@ -5,8 +5,8 @@ use anchor_lang::prelude::*;
 use lieb::*; mod lieb;
 mod stay; mod etc;
 
-declare_id!("QDgHUZjtccRjKZ63MBvW8uzKR7qcqjpRfGhNSEGfDu9"); // < devnet
-// declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet
+// declare_id!("QDgHUZjtccRjKZ63MBvW8uzKR7qcqjpRfGhNSEGfDu9"); // < devnet
+declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet
 
 #[program]
 pub mod quid {

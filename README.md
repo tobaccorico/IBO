@@ -1,6 +1,6 @@
 # exposure closure
 
-Preobra**zhenskiĭ** offfered me a test 🧐     
+Preobra**zhenskiĭ** offered me a test 🧐     
 started with a question, "how can you  
 know for whom to open the door," and   
 ended in her ghosting (`viaAAVE` 👻).  

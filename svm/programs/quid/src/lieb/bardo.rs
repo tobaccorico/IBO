@@ -63,7 +63,7 @@ pub struct Liquidate<'info> {
 //  in small doses...when things have gotten closer to the sun," she said, 
 // "don't think I'm pushing you away as ⚡️ strikes...court lights get dim"
 pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> { 
-    require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint); 
+    // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint); 
     // ^ only for deployment, comment out for anchor test --skip-local-validator
     let Banks = &mut ctx.accounts.bank;
     let customer = &mut ctx.accounts.customer_account;

@@ -55,7 +55,7 @@ pub struct Withdraw<'info> {
 pub fn handle_out(ctx: Context<Withdraw>, 
     mut amount: i64, ticker: String, exposure: bool
 ) -> Result<()> { let right_now = Clock::get()?.unix_timestamp;
-    require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
+    // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
     // ^ only for deployment, comment out for anchor test --skip-local-validator
     let Banks = &mut ctx.accounts.bank;
     let customer = &mut ctx.accounts.customer_account;

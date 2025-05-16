@@ -97,6 +97,7 @@ impl Depositor {
                         // extending how long depositor can ride uptrend
                         self.deposited_usd_star -= delta;
                         pod.pledged += delta - delta / 250;
+                        pod.updated = current_time;
                         return Ok((delta as i64, accrued_interest));
                     } // need to burn ^ from depository's shares...
                     else if amount != 0 { // caller is not liquidator...
@@ -117,6 +118,7 @@ impl Depositor {
                         pod.exposure -= delta as i64; 
                         delta *= price; // to dollars;
                         pod.pledged -= delta; // deduct liquidated value...
+                        pod.updated = current_time;
                         return Ok(((delta as i64 * -1), accrued_interest));
                     } // ^ (-) indicates amount is (+) to Banks.total_deposits
                 // as it performs a credit (ditto for UniV4's PoolManager) and
@@ -132,6 +134,7 @@ impl Depositor {
                             self.deposited_usd_star -= delta;
                             pod.exposure += ((delta - delta / 250) as f32 
                                                             / price as f32) as i64;          
+                            pod.updated = current_time;
                             return Ok((delta as i64, 
                                 accrued_interest));
                         } 
@@ -140,6 +143,7 @@ impl Depositor {
                             delta = ((pod.exposure as f32 * // amortised over 4 days...
                                 (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
                             
+                            pod.updated = current_time;
                             pod.exposure -= delta as i64; 
                             delta *= price; // to dollars;
                             pod.pledged -= delta; // deduct liquidated value...
@@ -171,11 +175,13 @@ impl Depositor {
                             // in out.rs (accrued is interpreted as TP)
                             pod.pledged = 0; accrued_interest = exposure;
                         } // otherwise, it's only a partial TP, just in 
-                        // case the price  will increase even more later
+                        // case the price will increase even more later
                         else { accrued_interest = delta - accrued_interest;
                             pod.pledged -= delta; delta = 0; // < no need to 
-                        } // deduct from total_deposits, covered by pledged
+                        } 
+                        pod.updated = current_time; // reduces total_deposits
                         return Ok((((delta as i64) * -1), accrued_interest));
+
                     // interest represents amount to transfer...this includes 
                     // both what was pledged and remainder from total_deposits
                     } else { // amount is greater than zero...
@@ -197,6 +203,7 @@ impl Depositor {
                             delta = 0; // clear variable as it's returned
                         } // exposure is less than 10% above pledged...
                         // but not less than 10% below pledged (valid)
+                        pod.updated = current_time; // no burn shares
                         return Ok((delta as i64, accrued_interest));
                     } 
                 }
@@ -219,6 +226,7 @@ impl Depositor {
                         // decreases the impact of price drop
                         pod.exposure -= (((delta - delta / 250) as f32) 
                                                          / price as f32) as i64;
+                        pod.updated = current_time;
                         return Ok((delta as i64, 
                                 accrued_interest)); 
                     }
@@ -227,13 +235,14 @@ impl Depositor {
                     } 
                     else { // lookin' too hot, simmer down cadence,
                     // "menace ou prière, l'un parle bien, l'autre 
-                    // se tait; et c'est l'autre que je préfère"
+                    // se tait; et c'est l'autre que je préfère..."
                     // unlike with longs, we don't shrink exposure 
                     // as this increases position's profitability
                         require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
                         delta = ((pod.exposure.abs() as f32 * // amortised over 4 days
                             (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
                     
+                        pod.updated = current_time;
                         pod.exposure += delta as i64;
                         pod.pledged -= delta * price;
                         return Ok(((delta as i64 * -1), 
@@ -247,6 +256,7 @@ impl Depositor {
                         if self.deposited_usd_star >= delta {
                             self.deposited_usd_star -= delta;
                             pod.pledged += delta - delta / 250;
+                            pod.updated = current_time;
                             return Ok((delta as i64, 
                                     accrued_interest));
                         } 
@@ -257,6 +267,7 @@ impl Depositor {
                         
                             pod.exposure += delta as i64;
                             pod.pledged -= delta * price;
+                            pod.updated = current_time;
                             return Ok(((delta as i64 * -1), 
                                         accrued_interest));
                         }
@@ -282,6 +293,7 @@ impl Depositor {
                         // exposure and pledged widens more and more)...
                         amount = (pod.pledged as f32 * amt) as i64;
                         pod.pledged -= amount as u64;
+                        pod.updated = current_time;
                         return Ok(((delta as i64) * -1, 
                         (delta as i64 + amount) as u64));
                     } 
@@ -297,6 +309,7 @@ impl Depositor {
                                 self.deposited_usd_star -= delta;
                                 // subtract positive number to increase (-)exposure:
                                 pod.exposure -= (delta as f32 / price as f32) as i64;
+                                pod.updated = current_time;
                                 return Ok((delta as i64, accrued_interest));
                             } else {
                                 return Err(PithyQuip::UnderExposed.into());
@@ -309,11 +322,11 @@ impl Depositor {
                                 ((exposure - delta) as f32) 
                                     / price as f32) as i64;
                         } // why wouldn't a depositor just: 
-                    } return Ok((0, accrued_interest)); // select the smallest distance,
+                    } pod.updated = current_time; 
+                    return Ok((0, accrued_interest)); // select the smallest distance,
                    // (greater than pod.pledged) in order to maximise potential profit?
                 } // maybe they know a big drop is ahead, and they want to minimise the
             } // chance they might be liquidated; either way we want to maximise control
-            pod.updated = current_time; // for depositors while adhereing to constraints
         } else { return Err(PithyQuip::DepositFirst.into()); } // no pay? 
         Ok((0,0)) // маг не я; schonen bestia, когда не заснуть никак без 
         // тебя..."I want the pill and the preacher who's gonna bless with 
@@ -331,11 +344,10 @@ impl Depositor {
         if ticker.is_none() && amount < 0 { // removing collateral from every position
             // First, we must sort positions by descending amount (without reallocating)
             self.balances.sort_by(|a, b| b.pledged.cmp(&a.pledged));
-            // Bigger they come, harder they fall, brick by brick, brought down the wallet payment
-
+            // Bigger they come, harder they fall, brick by brick
             let mut deducting: u64 = amount as u64;
             for i in 0..self.balances.len() {
-                if deducting == 0 { break; } // amount cleared
+                if deducting == 0 { break; } 
                 let pod = &mut self.balances[i];
                 let price = prices.as_ref().unwrap()[i];
                 let max: u64 = if pod.exposure > 0 {
@@ -357,7 +369,7 @@ impl Depositor {
                 deducting -= deducted;
             }
             amount = deducting as i64; // < check remainder in out.rs
-        } else { // remove or add dollars to a specific position...
+        } else { // remove or add dollars to one specific position...
             let padded = Self::pad_ticker(ticker.unwrap());
             if let Some(pod) = self.balances.iter_mut().find(
                                  |pod| pod.ticker == padded) {
@@ -437,11 +449,11 @@ impl Depositor {
                 self.balances.push(Position { ticker: padded,
                     pledged: amount as u64, exposure: 0, 
                     updated : current_time 
-                });
-            }
-        }
-        // this last expression just for maintenance purposes (rm zeroed positions) 
-        self.balances.retain(|pod| pod.pledged > 0);
+                }); // ^ this is the only 
+            } // place where we update the
+        } // timestamp in renege, mostly it 
+        // is used in reposition, for maintenance purposes, as
+        self.balances.retain(|pod| pod.pledged > 0); // clear vacanties
         Ok(0) // < TODO return how much was actually added or withdrawn for info
     } 
 } 

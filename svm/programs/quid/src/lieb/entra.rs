@@ -59,7 +59,7 @@ pub struct Deposit<'info> {
 }
 
 pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<()> {
-    require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
+    // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
     // ^ only for deployment, comment out for anchor test --skip-local-validator
     require!(amount >= 100000000, PithyQuip::InvalidAmount); // $100; if too small,
     // then the liqudiator cut, which is also small, may not be enough of an 
