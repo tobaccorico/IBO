@@ -92,7 +92,7 @@ impl Depositor {
                 if exposure > delta { // must take profit
                     delta = exposure - delta; // unless:
                     delta += delta / 250; // liquidator's cut 
-                    if self.deposited_usd_star >= delta  { 
+                    if self.deposited_usd_star >= delta { 
                         // not buying more exposure (impacts P&L), just
                         // extending how long depositor can ride uptrend
                         self.deposited_usd_star -= delta;

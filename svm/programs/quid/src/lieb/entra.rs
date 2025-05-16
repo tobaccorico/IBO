@@ -79,24 +79,25 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
     let mut users_shares = amount;
     if Banks.total_deposits == 0 {
         Banks.interest_rate = 12;
-        Banks.total_deposits = amount;
-        Banks.total_deposit_shares = amount;
+    }
+    else { 
+        let deposit_ratio = amount.checked_div(Banks.total_deposits).unwrap();
+        users_shares = Banks.total_deposit_shares.checked_mul(deposit_ratio).unwrap();  
     } 
     if customer.owner == Pubkey::default() {
         customer.owner = ctx.accounts.signer.key();
     }
-    if ticker.is_empty() {
+    if ticker.is_empty() { 
+        Banks.total_deposits += amount; 
         customer.deposited_usd_star += amount;
         customer.deposited_usd_star_shares += users_shares;
+        Banks.total_deposit_shares += users_shares;
     } 
-    else if Banks.total_deposits > 0 { 
+    else { 
         let t: &str = ticker.as_str();
         if HEX_MAP.get(t).is_none() {
             return Err(PithyQuip::UnknownSymbol.into());
         }   customer.renege(Some(t), amount as i64, 
         None, Clock::get()?.unix_timestamp)?;
-        let deposit_ratio = amount.checked_div(Banks.total_deposits).unwrap();
-        users_shares = Banks.total_deposit_shares.checked_mul(deposit_ratio).unwrap();
-        Banks.total_deposits += amount; Banks.total_deposit_shares += users_shares;
     } Ok(())
 }

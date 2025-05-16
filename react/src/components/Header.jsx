@@ -22,7 +22,8 @@ export const Header = () => {
   
   const updatedTotalInfo = useCallback(async () => {
     try {
-      var force = (!totalLongs && !totalShorts && !totalDeposited && !totalPledged)
+      var force = (!totalLongs && !totalShorts 
+        && !totalDeposited && !totalPledged)
       if (connected && force) {
           await getTotals(force).then(() => {
             getWalletBalance(false)
