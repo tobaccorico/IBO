@@ -8,12 +8,12 @@ import {Auxiliary} from  "./Auxiliary.sol";
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
 
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SortedSetLib} from "./imports/SortedSet.sol";
 import {ERC6909} from "solmate/src/tokens/ERC6909.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
 
 interface IStakeToken is IERC20 { // StkGHO (safety module)
@@ -28,7 +28,9 @@ interface IStakeToken is IERC20 { // StkGHO (safety module)
              external view returns (uint256);
 }
 
-contract Basket is ERC6909 {
+contract Basket is ERC6909 { // extended
+// for full ERC20 compatibility, batch
+// transferring through helper function
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IERC4626;
     using SortedSetLib for SortedSetLib.Set;
@@ -124,7 +126,7 @@ contract Basket is ERC6909 {
     }
 
     constructor(address _router, address _aux,
-        address[] memory _stables, 
+        address[] memory _stables,
         address[] memory _vaults) { 
         _deployed = block.timestamp;
         AUX = Auxiliary(payable(_aux));

@@ -112,52 +112,19 @@ b
 
   const getTotals = useCallback(async (force) => {
     try {
-      await fetchAllDepositorAccounts(force).then(() => {
-        const totals = allDepositorAccounts.reduce(
-          (acc, account) => {
-            if (account.account.balances != null) {
-              if (account.account.balances.length > 0) {
-                if (account.account.balances[0] != null) { // TODO support multi-ticker
-                  let exposure = account.account.balances[0].exposure
-                  if (exposure > 0) {
-                      acc.longs += exposure;
-                  } else if (exposure < 0) {
-                      acc.shorts += exposure;
-                  }
-                  acc.pledged += account.account.balances[0].pledged
-                }
-              }
-            }
-            acc.deposited += account.account.depositedUsdStar;
-            return acc;
-          },
-          { shorts: 0, longs: 0, pledged: 0, deposited: 0 } // initial accumulator
-        );
-        if (totals.pledged == 0) {
-          setTotalPledged(1) 
-        } 
-        else if (totals.pledged != 0) {
-          setTotalPledged(totals.pledged / 1000000)  
-        }
-        if (totals.deposited == 0) {
-          setTotalDeposited(1)
-        }
-        else if (totals.deposited != 0) {
-          setTotalDeposited(totals.deposited / 1000000)
-        }
-        if (totals.shorts == 0) {
-          setTotalShorts(1)
-        } 
-        else if (totals.shorts != 0) {
-          setTotalShorts(totals.shorts / 1000000)
-        }
-        if (totals.longs == 0) {
-          setTotalLongs(1)
-        }
-        else if (totals.longs != 0) {
-          setTotalLongs(totals.longs / 1000000)
-        }
-      })
+      const depositorAccounts = await fetchAllDepositorAccounts(force);
+      const totals = depositorAccounts.reduce((acc, account) => {
+          const b = account.account?.balances?.[0]; if (b) {
+            if (b.exposure > 0) acc.longs += b.exposure;
+            else if (b.exposure < 0) acc.shorts += b.exposure;
+            acc.pledged += b.pledged;
+          } acc.deposited += account.account.depositedUsdStar || 0;
+          return acc;
+        }, { shorts: 0, longs: 0, pledged: 0, deposited: 0 });
+        setTotalDeposited(totals.deposited / 1_000_000 || 1);
+        setTotalPledged(totals.pledged / 1_000_000 || 1);
+        setTotalShorts(totals.shorts / 1_000_000 || 1);
+        setTotalLongs(totals.longs / 1_000_000 || 1);
     } catch (error) {
       console.error("Some problem with getSupply: ", error)
       return null
@@ -186,8 +153,7 @@ b
     } catch (error) {
       console.error("Error in updateInfo: ", error)
     }
-  }, [account, connected, quid, usde])
-  */
+  }, [account, connected, quid, usde]) */
 
   const getDepositorInfo = useCallback(async () => {
     try {
@@ -295,7 +261,6 @@ b
   */
 
   const chooseButton = useRef(null)
-
   const choiseButton = useCallback((name) => {
       try {
           const newButton = name

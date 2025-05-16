@@ -112,7 +112,6 @@ pub fn handle_out(ctx: Context<Withdraw>,
             // amount gets passed into renege as a negative number, but if a remainder is returned it will be positive
             amount = customer.renege(None, amount as i64, Some(&prices), right_now)? as i64;
             amt -= amount as u64; // < amt is used to keep track of how much we know (so far) that we'll be transferring 
-            
         } 
         // whether we entered the exposure clause or not (amount gets reused in there)
         if amount.abs() > 0 { // if there was a remainder returned by renege, handle it:
@@ -153,7 +152,7 @@ pub fn handle_out(ctx: Context<Withdraw>,
             let (mut delta, mut interest) = customer.reposition(t,
                  amount, adjusted_price as u64, right_now, Banks.interest_rate)?;
             
-            if delta != 0 { // the depositor either took profits or they automatically protected themselves against liquidation...
+            if delta != 0 { // the depositor either took profits or they automatically protected themselves against liquidation
                 let shares_to_remove = (delta.abs() as f64 / Banks.total_deposits as f64) * Banks.total_deposit_shares as f64;
                 Banks.total_deposit_shares -= shares_to_remove as u64;
                 if delta < 0 { // the depositor is taking profits...

@@ -71,11 +71,9 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
         mint: ctx.accounts.mint.to_account_info(),
         to: ctx.accounts.bank_token_account.to_account_info(),
         authority: ctx.accounts.signer.to_account_info(),
-    };
+    };  let decimals = ctx.accounts.mint.decimals;
     let cpi_program = ctx.accounts.token_program.to_account_info();
     let cpi_ctx = CpiContext::new(cpi_program, transfer_cpi_accounts);
-    let decimals = ctx.accounts.mint.decimals;
-
     token_interface::transfer_checked(cpi_ctx, amount, decimals)?; 
     
     let mut users_shares = amount;
@@ -84,11 +82,6 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
         Banks.total_deposits = amount;
         Banks.total_deposit_shares = amount;
     } 
-    else { 
-        let deposit_ratio = amount.checked_div(Banks.total_deposits).unwrap();
-        users_shares = Banks.total_deposit_shares.checked_mul(deposit_ratio).unwrap();
-        Banks.total_deposits += amount; Banks.total_deposit_shares += users_shares;
-    } // TODO                     should ^ be incremented only if ticker.is_empty() ?
     if customer.owner == Pubkey::default() {
         customer.owner = ctx.accounts.signer.key();
     }
@@ -96,12 +89,14 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
         customer.deposited_usd_star += amount;
         customer.deposited_usd_star_shares += users_shares;
     } 
-    else { 
+    else if Banks.total_deposits > 0 { 
         let t: &str = ticker.as_str();
         if HEX_MAP.get(t).is_none() {
             return Err(PithyQuip::UnknownSymbol.into());
-        }
-        customer.renege(Some(t), amount as i64, None, Clock::get()?.unix_timestamp)?;
-    } 
-    Ok(())
+        }   customer.renege(Some(t), amount as i64, 
+        None, Clock::get()?.unix_timestamp)?;
+        let deposit_ratio = amount.checked_div(Banks.total_deposits).unwrap();
+        users_shares = Banks.total_deposit_shares.checked_mul(deposit_ratio).unwrap();
+        Banks.total_deposits += amount; Banks.total_deposit_shares += users_shares;
+    } Ok(())
 }

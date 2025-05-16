@@ -177,7 +177,8 @@ contract Auxiliary is Ownable {
             amount -= SWAP_COST; current.amount = amount;
             V4.pushSwapOneForZero(current);
         }
-        else { wethVault.deposit(_depositETH(0), address(this));
+        else { 
+            wethVault.deposit(_depositETH(0), address(this));
             amount = QUID.deposit(msg.sender, token, amount);
             uint scale = IERC20(token).decimals() - 6; // normalize
             amount /= scale > 0 ? 10 ** scale : 1;
@@ -267,10 +268,10 @@ contract Auxiliary is Ownable {
         uint buffer = amount - borrowing;
         (uint160 sqrtPriceX96,,,,,,) = v3Pool.slot0();
         uint price = getPrice(sqrtPriceX96, true);
-        
-        uint totalValue = FullMath.mulDiv(amount, price, WAD);
+        uint totalValue = FullMath.mulDiv(
+                        amount, price, WAD);
+
         require(totalValue > 50 * WAD);
-        
         uint took = QUID.take(address(this),
             totalValue / 1e12, address(USDC), false); 
         // TODO as part of take(), it's worthwhile 
@@ -286,10 +287,9 @@ contract Auxiliary is Ownable {
             took += _getUSDC(_takeWETH(selling), 
                         needed - needed / 200);
             amount -= selling;
-        }
-        wethVault.deposit(amount + UNWIND_COST, address(this));
-        
+        } 
         USDC.approve(address(AAVE), took);
+        wethVault.deposit(amount + UNWIND_COST, address(this));
         AAVE.supply(address(USDC), took, address(this), 0);
         AAVE.borrow(address(WETH), borrowing, 2, 0, address(this));
         totalBorrowed[address(WETH)] += borrowing;
@@ -329,7 +329,6 @@ contract Auxiliary is Ownable {
         inETH = _takeWETH(inETH);
         WETH.approve(address(AAVE), inETH);
         AAVE.supply(address(WETH), inETH, address(this), 0);
-        
         amount = FullMath.mulDiv(inETH * 7 / 10, price, WAD * 1e12);
         AAVE.borrow(address(USDC), amount, 2, 0, address(this));
         untouchable += amount; totalBorrowed[address(USDC)] += amount;
@@ -398,7 +397,7 @@ contract Auxiliary is Ownable {
         howMuch = _takeWETH(howMuch); WETH.withdraw(howMuch);
         (bool _success, ) = payable(toWhom).call{ value: howMuch + 
                                                   alreadyInETH }("");
-        assert(_success);
+                                                    assert(_success);
     }
     
     function _depositETH(uint amount) internal returns (uint) {
@@ -407,8 +406,7 @@ contract Auxiliary is Ownable {
         } if (msg.value > 0) {
             WETH.deposit{value: msg.value}();
             amount += msg.value;
-        }
-        return amount;  
+        }   return amount;  
     } 
 
     function _unwind(address repay, address out,
@@ -432,7 +430,7 @@ contract Auxiliary is Ownable {
 
     function unwindOneForZero(address[] calldata whose) // TODO untouchables
         external { Types.viaAAVE memory pledge; 
-        uint buffer; uint rebound; uint touched;
+        uint buffer; uint pivot; uint touched;
         (uint160 sqrtPriceX96,,,,,,) = v3Pool.slot0();
         int price = int(getPrice(sqrtPriceX96, true)); 
         // we always take profits (fully exit) in USDC
@@ -444,32 +442,31 @@ contract Auxiliary is Ownable {
             if (delta <= -49 || delta >= 49) { 
                 touched += 1;
                 // supplied is in USDC
-                if (pledge.borrowed > 0) { rebound = _takeWETH(pledge.borrowed);
-                    require(stdMath.delta(pledge.borrowed, rebound) <= 5);
-                    _unwind(address(WETH), address(USDC), rebound, pledge.supplied);
+                if (pledge.borrowed > 0) { pivot = _takeWETH(pledge.borrowed);
+                    require(stdMath.delta(pledge.borrowed, pivot) <= 5);
+                    _unwind(address(WETH), address(USDC), pivot, pledge.supplied);
                     require(stdMath.delta(USDC.balanceOf(address(this)),
                                                 pledge.supplied) <= 5);
                     if (delta <= -49) { // use all of the dollars we possibly can to buy the dip
-                        
                         buffer = FullMath.mulDiv(pledge.borrowed, uint(pledge.price), WAD * 1e12);
                         // recover USDC that we got from selling the borrowed ETH...
-                        rebound = QUID.take(address(this), buffer, address(USDC), true);
-                        untouchable -= rebound; require(stdMath.delta(rebound, buffer) <= 5); 
+                        pivot = QUID.take(address(this), buffer, address(USDC), true);
+                        untouchable -= pivot; require(stdMath.delta(pivot, buffer) <= 5); 
                         
-                        buffer = rebound + pledge.supplied;
-                        rebound = FullMath.mulDiv(WAD, buffer * 1e12, uint(price));
-                        buffer = _getWETH(buffer, rebound - rebound / 200);
+                        buffer = pivot + pledge.supplied;
+                        pivot = FullMath.mulDiv(WAD, buffer * 1e12, uint(price));
+                        buffer = _getWETH(buffer, pivot - pivot / 200);
                         pledge.supplied = buffer; wethVault.deposit(buffer,
                                                             address(this));
                         pledge.price = price; // < so we may know when to sell later
                     } else { // the buffer will be saved in USDC, used to pivot later
                         buffer = _takeWETH(pledge.buffer); 
                         require(stdMath.delta(buffer, pledge.buffer) <= 5);
-                        rebound = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
+                        pivot = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
                         // TODO uncomment, commented out for testing purposes only
-                        rebound = _getUSDC(buffer, 0/*rebound - rebound / 200*/) + pledge.supplied;
-                        QUID.deposit(address(this), address(USDC), rebound); untouchable += rebound;
-                        pledge.buffer = rebound + FullMath.mulDiv(pledge.borrowed,
+                        pivot = _getUSDC(buffer, 0/*pivot - pivot / 200*/) + pledge.supplied;
+                        QUID.deposit(address(this), address(USDC), pivot); untouchable += pivot;
+                        pledge.buffer = pivot + FullMath.mulDiv(pledge.borrowed,
                                                 uint(pledge.price), WAD * 1e12);
                         pledge.supplied = 0;
                     }
@@ -483,8 +480,8 @@ contract Auxiliary is Ownable {
                         untouchable -= buffer; // < USDC that can't be sold
 
                     require(stdMath.delta(buffer, pledge.buffer) <= 5);
-                    rebound = FullMath.mulDiv(WAD, buffer * 1e12, uint(price));
-                    buffer = _getWETH(buffer, rebound - rebound / 200);
+                    pivot = FullMath.mulDiv(WAD, buffer * 1e12, uint(price));
+                    buffer = _getWETH(buffer, pivot - pivot / 200);
                     pledge.supplied = buffer; wethVault.deposit(buffer,
                                                          address(this));
                     pledge.price = price; // < so we know when to sell
@@ -495,31 +492,30 @@ contract Auxiliary is Ownable {
                     (uint repayWETH, 
                      uint repayUSDC) = _howMuchInterest();
                     if (repayWETH > 0) {
-                        rebound = Math.min(buffer, repayWETH);
-                        buffer -= rebound; 
-                        _unwind(address(WETH), address(0), rebound, 0);
+                        pivot = Math.min(buffer, repayWETH);
+                        buffer -= pivot; 
+                        _unwind(address(WETH), address(0), pivot, 0);
                         // ^ address "out" and "supplied" irrelevant
                     }
-                    rebound = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
-                    rebound = _getUSDC(buffer, rebound - rebound / 200);
+                    pivot = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
+                    pivot = _getUSDC(buffer, pivot - pivot / 200);
                     if (repayUSDC > 0) {
-                        buffer = Math.min(rebound, repayUSDC);
-                        rebound -= buffer;
+                        buffer = Math.min(pivot, repayUSDC);
+                        pivot -= buffer;
                         _unwind(address(USDC), address(0), buffer, 0);
                         // ^ address "out" and "supplied" irrelevant
                     }
-                    QUID.deposit(address(this), address(USDC), rebound);
+                    QUID.deposit(address(this), address(USDC), pivot);
                     delete pledgesOneForZero[who]; // completed cross-over 
-                    LEVER_YIELD += (rebound - pledge.breakeven / 1e12) * 1e12;
+                    LEVER_YIELD += (pivot - pledge.breakeven / 1e12) * 1e12;
                 }
             }
-        }
-        _sendETH(touched * UNWIND_COST, msg.sender); // caller's gas compensation
+        } _sendETH(touched * UNWIND_COST, msg.sender); // caller's gas compensation
     } // could repay, for instance, a contract's flash loan used to pay for gas... 
 
     function unwindZeroForOne(address[] calldata whose) 
         external { Types.viaAAVE memory pledge; 
-        uint buffer; uint rebound; uint touched;
+        uint buffer; uint pivot; uint touched;
         (uint160 sqrtPriceX96,,,,,,) = v3Pool.slot0();
         int price = int(getPrice(sqrtPriceX96, true));
         // we always take profits (fully exit) in USDC
@@ -531,18 +527,17 @@ contract Auxiliary is Ownable {
             if (delta <= -49 || delta >= 49) {
                 touched += 1;
                 if (pledge.borrowed > 0) {
-                    rebound = QUID.take(address(this), 
+                    pivot = QUID.take(address(this), 
                      pledge.borrowed, address(USDC), true);
-                    
-                    _unwind(address(USDC), address(WETH), rebound, 
-                        pledge.supplied); untouchable -= rebound;
+                    _unwind(address(USDC), address(WETH), pivot, 
+                        pledge.supplied); untouchable -= pivot;
 
                     require(stdMath.delta(WETH.balanceOf(address(this)),
                                                 pledge.supplied) <= 5);
                     
                     if (delta >= 49) { // after sell suppled WETH, "supplied" will store $
-                        rebound = FullMath.mulDiv(pledge.supplied, uint(price), WAD * 1e12);
-                        pledge.supplied = _getUSDC(pledge.supplied, rebound - rebound / 200);
+                        pivot = FullMath.mulDiv(pledge.supplied, uint(price), WAD * 1e12);
+                        pledge.supplied = _getUSDC(pledge.supplied, pivot - pivot / 200);
                         QUID.deposit(address(this), address(USDC), pledge.supplied);
                         untouchable += pledge.supplied; pledge.price = price;
                     } else { // buffer is is now in ETH
@@ -556,10 +551,10 @@ contract Auxiliary is Ownable {
                 }
                 // the following condition is our initial pivot
                 else if (delta <= -49 && pledge.supplied > 0) {
-                    rebound = QUID.take(address(this), pledge.supplied, address(USDC), true);
-                    require(stdMath.delta(pledge.supplied, rebound) <= 5); untouchable -= rebound;
-                    rebound = FullMath.mulDiv(WAD, pledge.supplied * 1e12, uint(price));
-                    pledge.buffer =_getWETH(pledge.supplied, rebound - rebound / 200);
+                    pivot = QUID.take(address(this), pledge.supplied, address(USDC), true);
+                    require(stdMath.delta(pledge.supplied, pivot) <= 5); untouchable -= pivot;
+                    pivot = FullMath.mulDiv(WAD, pledge.supplied * 1e12, uint(price));
+                    pledge.buffer =_getWETH(pledge.supplied, pivot - pivot / 200);
                     wethVault.deposit(pledge.buffer, address(this));
                     
                     pledge.supplied = 0;
@@ -571,21 +566,21 @@ contract Auxiliary is Ownable {
                     (uint repayWETH, 
                      uint repayUSDC) = _howMuchInterest();
                     if (repayWETH > 0) {
-                        rebound = Math.min(buffer, repayWETH);
-                        buffer -= rebound; 
-                        _unwind(address(WETH), address(0), rebound, 0);
+                        pivot = Math.min(buffer, repayWETH);
+                        buffer -= pivot; 
+                        _unwind(address(WETH), address(0), pivot, 0);
                         // ^ address "out" and "supplied" irrelevant
                     }
-                    rebound = FullMath.mulDiv(uint(price), buffer, 1e12 * WAD);
-                    rebound = _getUSDC(buffer, rebound - rebound / 200);
+                    pivot = FullMath.mulDiv(uint(price), buffer, 1e12 * WAD);
+                    pivot = _getUSDC(buffer, pivot - pivot / 200);
                     if (repayUSDC > 0) {
-                        buffer = Math.min(rebound, repayUSDC);
-                        rebound -= buffer;
+                        buffer = Math.min(pivot, repayUSDC);
+                        pivot -= buffer;
                         _unwind(address(USDC), address(0), buffer, 0);
                         // ^ address "out" and "supplied" irrelevant
                     }
-                    QUID.deposit(address(this), address(USDC), rebound);
-                    LEVER_YIELD += (rebound - pledge.breakeven / 1e12) * 1e12;
+                    QUID.deposit(address(this), address(USDC), pivot);
+                    LEVER_YIELD += (pivot - pledge.breakeven / 1e12) * 1e12;
                     delete pledgesZeroForOne[who];
                 }
             }

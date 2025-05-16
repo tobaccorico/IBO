@@ -90,7 +90,7 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
     let mut key: &str = ACCOUNT_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
     let mut hex: &str = HEX_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
     let first: &AccountInfo = &ctx.remaining_accounts[0];
-    let first_key = first.key.to_string(); // `AccountInfo` has the `.key` field for the public key
+    let first_key = first.key.to_string(); 
     if first_key != key {
         return Err(PithyQuip::UnknownSymbol.into());
     }
@@ -110,10 +110,10 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
     interest = (delta / 250) as u64;
     if delta < 0 { // take profit on behalf all depostors, at the expense of one... 
         delta *= -1; // < remove symbolic meaning, converting it to a usable number...
-        delta -= interest as i64;
-        Banks.total_deposits += delta as u64; // < we also enter the next if with delta
+        delta -= interest as i64; // < commission for the liquidator (just over 0.5%)
+        Banks.total_deposits += delta as u64;
     }
-    if delta > 0 {
+    else if delta > 0 {
         // before we try to deduct from depository
         // attemp to salvage amount from depositor
         let mut prices: Vec<u64> = Vec::new();
@@ -143,14 +143,14 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
             let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);
             prices.push(adjusted_price as u64);
         }
-        let remainder = customer.renege(None, delta as i64, Some(&prices), right_now)? as i64;
-        customer.deposited_usd_star += (delta - remainder) as u64; // < return amount taken in reposition, now taken from other source
+        let remainder = customer.renege(None, -delta as i64, Some(&prices), right_now)? as i64;
+        customer.deposited_usd_star += (delta - remainder) as u64; // < return amount taken in reposition, now taken from positions...
         let shares_to_remove = (remainder.abs() as f64 / Banks.total_deposits as f64) * Banks.total_deposit_shares as f64;
         customer.deposited_usd_star_shares -= shares_to_remove as u64;
         Banks.total_deposit_shares -= shares_to_remove as u64;
         Banks.total_deposits -= remainder as u64;
-    }
-    token_interface::transfer_checked(cpi_ctx, interest, decimals)?;
+    }   token_interface::transfer_checked(cpi_ctx,
+                interest, decimals)?;
     Ok(())
 }
          

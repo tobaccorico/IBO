@@ -6,8 +6,8 @@ pub static HEX_MAP: phf::Map<&'static str, &'static str> = phf_map! {
     "XAU" => "0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2", 
     "BTC" => "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
     // ...
-}; // "drain the whole sea...get somethin' shiny..."
-// Auuuuuuuuu....56709...淋しさに Ah... 気づいてた Ah...
+}; // "drain the whole sea...get somethin' shiny...
+// Auuuuuuuuu....56709...淋しさに Ah... 気づいてた Ah..."
 pub static ACCOUNT_MAP: phf::Map<&'static str, &'static str> = phf_map! {
     "XAU" => "2uPQGpm8X4ZkxMHxrAW1QuhXcse1AHEgPih6Xp9NuEWW", 
     "BTC" => "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo",

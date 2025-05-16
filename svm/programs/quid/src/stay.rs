@@ -181,7 +181,6 @@ impl Depositor {
                         } 
                         pod.updated = current_time; // reduces total_deposits
                         return Ok((((delta as i64) * -1), accrued_interest));
-
                     // interest represents amount to transfer...this includes 
                     // both what was pledged and remainder from total_deposits
                     } else { // amount is greater than zero...
@@ -344,7 +343,7 @@ impl Depositor {
         if ticker.is_none() && amount < 0 { // removing collateral from every position
             // First, we must sort positions by descending amount (without reallocating)
             self.balances.sort_by(|a, b| b.pledged.cmp(&a.pledged));
-            // Bigger they come, harder they fall, brick by brick
+            // Bigger they come, harder they fall
             let mut deducting: u64 = amount as u64;
             for i in 0..self.balances.len() {
                 if deducting == 0 { break; } 
@@ -363,12 +362,11 @@ impl Depositor {
                     (pod.pledged - pod.pledged / 10)
                 } 
                 else { pod.pledged };
-                if max == 0 { continue; } // click next
                 let deducted = max.min(deducting);
                 pod.pledged -= deducted;
                 deducting -= deducted;
             }
-            amount = deducting as i64; // < check remainder in out.rs
+            amount = deducting as i64; // < remainder in out & bardo
         } else { // remove or add dollars to one specific position...
             let padded = Self::pad_ticker(ticker.unwrap());
             if let Some(pod) = self.balances.iter_mut().find(

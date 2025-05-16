@@ -65,7 +65,7 @@ contract Router is SafeCallback, Ownable {
     enum Action { Swap,
         Repack, ModLP,
         OutsideRange
-    } // from AUX...
+    }
 
     uint internal PENDING_ETH;
     // ^ single-sided liqudity
@@ -136,8 +136,8 @@ contract Router is SafeCallback, Ownable {
 
     function withdraw(uint amount) external { 
         Types.Deposit memory LP = autoManaged[msg.sender]; 
-        // the following snapshots will always be bigger than LP's
         uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES;
+        // ^ the above snapshots will always be bigger than LP's...
         // swap fee yield, which uses ^^^^^^^^^^ to buy into unwind
         // instead of V3, which doesn't get more than half, future
         uint pending = PENDING_ETH; uint pooled_eth = POOLED_ETH;
@@ -146,9 +146,8 @@ contract Router is SafeCallback, Ownable {
 
         uint fees_usd = FullMath.mulDiv((usd_fees - LP.fees_usd),
                                       LP.pooled_eth, pooled_eth);
-        LP.pooled_eth += fees_eth; 
+        LP.pooled_eth += fees_eth;       
         fees_usd += LP.usd_owed;
-        
         if (fees_usd > 0) { LP.usd_owed = 0; 
             QUID.mint(msg.sender, fees_usd,
                         address(QUID), 0); 
@@ -183,17 +182,16 @@ contract Router is SafeCallback, Ownable {
                 // this condition is an edge case in case there
                 // is an excessive amount of leverOneForZero...
                 if (pooled_eth > POOLED_ETH) {
-                    QUID.take(msg.sender,
-                    FullMath.mulDiv(pooled_eth - POOLED_ETH, 
-                    AUX.getPrice(sqrtPriceX96, false), WAD),
-                    address(QUID), false);
+                    QUID.take(msg.sender, FullMath.mulDiv(
+                        pooled_eth - POOLED_ETH, AUX.getPrice(
+                                          sqrtPriceX96, false), WAD),
+                                               address(QUID), false); 
                     pooled_eth = POOLED_ETH;
                 }
                 abi.decode(poolManager.unlock(abi.encode(
                     Action.ModLP, sqrtPriceX96, pooled_eth, 0, 
                     tickLower, tickUpper, msg.sender)), (BalanceDelta));
-            } 
-            AUX.sendETH(pulled, msg.sender); 
+            }       AUX.sendETH(pulled, msg.sender); 
         }
         if (LP.eth_shares == 0) { delete autoManaged[msg.sender]; }
         else { LP.fees_eth = eth_fees; LP.fees_usd = usd_fees; }
@@ -214,14 +212,12 @@ contract Router is SafeCallback, Ownable {
         Types.Deposit memory LP = autoManaged[msg.sender];
         amount = _depositETH(amount);
         LP.eth_shares += AUX.putETH(amount);
+        uint pooled_eth = POOLED_ETH;
         LP.pooled_eth += amount;
         (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper,) = _repack();
         uint price = AUX.getPrice(sqrtPriceX96, false);
-        
-        uint pooled_eth = POOLED_ETH;
-        uint eth_fees = ETH_FEES; 
-        uint usd_fees = USD_FEES;
+        uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES;
         if (LP.fees_eth > 0 || LP.fees_usd > 0) {
             LP.usd_owed += FullMath.mulDiv((usd_fees - LP.fees_usd),
                                           LP.pooled_eth, pooled_eth);
@@ -244,7 +240,6 @@ contract Router is SafeCallback, Ownable {
     function _addLiquidityHelper(uint delta0, uint delta1, 
         uint price) internal returns (uint, uint) {
         uint pending = PENDING_ETH + delta1;
-      
         (uint total, ) = QUID.get_metrics(false);
         uint surplus = (total / 1e12) - delta0;
        
@@ -440,8 +435,7 @@ contract Router is SafeCallback, Ownable {
                 }
                 delete swapsOneForZero[lastBlock];
             }
-        } 
-        else if (discriminator == Action.Repack) {
+        } else if (discriminator == Action.Repack) {
             (uint128 myLiquidity, uint160 sqrtPriceX96,
             int24 tickLower, int24 tickUpper) = abi.decode(
                 data[32:], (uint128, uint160, int24, int24));
@@ -502,8 +496,7 @@ contract Router is SafeCallback, Ownable {
         
             _handleDelta(delta, true, 
                 delta0 == 0, sender);
-        }
-        return abi.encode(delta);
+        }   return abi.encode(delta);
     }
 
     function _handleDelta(BalanceDelta delta, 
@@ -526,12 +519,12 @@ contract Router is SafeCallback, Ownable {
             delta0 = uint(int(-delta.amount0())); mockUSD.mint(delta0);
             VANILLA.currency0.settle(poolManager, address(this), delta0, false);
             if (inRange) POOLED_USD += delta0;
-        }
+        } 
         if (delta.amount1() > 0) { delta1 = uint(int(delta.amount1()));
             VANILLA.currency1.take(poolManager, address(this), delta1, false);
             mockETH.burn(delta1); if (inRange) POOLED_ETH -= delta1;
             if (who != address(0)) AUX.sendETH(delta1, who);
-        }
+        } 
         else if (delta.amount1() < 0) {
             delta1 = uint(int(-delta.amount1())); mockETH.mint(delta1);
             VANILLA.currency1.settle(poolManager, address(this), delta1, false);
