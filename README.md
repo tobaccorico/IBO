@@ -1,46 +1,55 @@
-# BO: Bunni Over-loaded 
+# exposure closure
 
-In order to save gas, rather than writing a hook  
-we decided to build functionality into a router.  
-It supports depositing liquidity out-of-range, as  
-well as letting the **range** be **managed for you**:  
+Preobra**zhenskiĭ** offfered me a test 🧐     
+started with a question, "how can you  
+know for whom to open the door," and   
+ended in her ghosting (`viaAAVE` 👻).  
+In Latin, door is "Ostium"...oстрый ум  
+upgraded: ~~killing me softly~~ [*amórè ties*](https://github.com/QuidLabs/IMO/tree/main/src/svm/programs/quid/src/lieb/bardo.rs#L64)  
 
-this provides optimal returns for LPs, except,  
-unlike the canonical USDC<>WETH pool, the  
-dollar side is split between up to **8 stables**...  
+Whether depositing liquidity out-of-range, or  
+letting the contract auto-manage the range...  
+*B*unni *O*verloaded complements Perena with  
+a `Basket` boosted by a ~~basketballer cross  
+over~~ "[rider](https://www.lawinsider.com/dictionary/loan-agreement-rider) on the storm, actor out on loan."
 
-There's zero-IL **single-sided provision**,  
-by virtue of a "queue" (`PENDING_ETH`).  
-If a swap can't be fulfilled by internal  
-liquidity entirely, it gets split between  
+The primary export of both Madagascar and  
+our saving gas car is `VANILLA`: a UniswapV4  
+colloquialism for PoolKeys not using hooks...  
+Unlike a regular USDC<>WETH pool, "what  
+you got in the stable? This is hungry work:"     
 
-our router and the legacy V3 router...  
-**sandwich protection** is embedded in  
-a simple app-specific sequence that  
-uses batching and gas compensation.  
+there's zero-IL *single-sided provision*;  
+if a swap can't be fulfilled by internal  
+liquidity alone, it gets split between  
+our router and the legacy V3 router;  
 
-Depositors of dollars are able to get  
-their yield tokenised upfront; there's  
-a minimum 1-month lockup (supported   
-by our ERC6909 extension **for bonds**)...  
+*sandwich protection* is embedded as   
+batching (**A**pp-**S**pecific **S**equence)...  
+depositors of dollars are able to get  
+their yield tokenised upfront through    
+1-month+ bond (ERC**69**09 extension):  
 
-This incentivises always having dollars  
+*this incentivises always having dollars*  
 available to be paired with ETH in V4...  
-In being abstract, swaps are executed  
-using “virtual balances”; because ETH  
+in being abstract, swaps are executed  
+using “virtual balances”; this way ETH  
 
 gets deposited in Gauntlet's **Morpho vault**,  
 and not in the PoolManager, while various  
 dollars are either in Morpho vaults or their  
-native staking (e.g. GHO’s safety module).  
+native staking (e.g. GHO’s safety module).     
 
-“**levered swaps**” take extra time, but are  
-*guaranteed to be profitable* for both the  
-protocol, and the originators of the swaps  
-(for them, in annualised terms, ~30% yield)
-
-with almost negligible liquidation risk,  
 providing an incentivised way to move   
-liquidity from UniV3 to V4 `viaAAVE`  
-The protocol is **100% FAIR LAUNCH**,    
-except for retained AAVE rewards ;) 
+liquidity from UniV3 to V4 `viaAAVE`:    
+“**levered swaps**” take longer, but  
+are guaranteed to be profitable...  
+
+"*L'amour est un oiseau rebelle*,   
+a rare and radiant maiden..."  
+my ~~discriminator~~...*contadora*.  
+*J'adore*: "I got this feeling on   
+the day when you were gone."   
+
+~ *journée* quid  
+...ось тріумф

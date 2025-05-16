@@ -1,0 +1,25 @@
+
+[package]
+name = "quid"
+version = "0.1.0"
+description = ""
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "quid"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+phf = { version = "0.11", features = ["macros"] }
+anchor-lang = { version = "0.31.1", features=["init-if-needed"] }
+anchor-spl = "0.31.1"
+pyth-sdk-solana = "0.10.4"
+pyth-solana-receiver-sdk = "0.6.1"
