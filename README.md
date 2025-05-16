@@ -5,7 +5,7 @@ started with a question, "how can you
 know for whom to open the door," and   
 ended in her ghosting (`viaAAVE` 👻).  
 In Latin, door is "Ostium"...oстрый ум  
-upgraded: ~~killing me softly~~ [*amórè ties*](https://github.com/QuidLabs/IMO/tree/main/src/svm/programs/quid/src/lieb/bardo.rs#L64)  
+upgraded: ~~killing me softly~~ [*amórè ties*](https://github.com/QuidLabs/IMO/tree/main/svm/programs/quid/src/lieb/bardo.rs#L64)  
 
 Whether depositing liquidity out-of-range, or  
 letting the contract auto-manage the range...  
