@@ -31,15 +31,14 @@ export function useDepository() {
 }
 
 export function DepositoryProvider({ children }: { children: React.ReactNode }) {
-  const { connection } = useConnection();
   const wallet = useWallet()
-
-  const [program, setProgram] = useState<Program<Quid> | null>(null);
-  const [depository, setDepository] = useState<DepositoryAccount | null>(null);
-  const [depositoryAccountPDA, setDepositoryAccountPDA] =
-        useState<PublicKey | null>(null);
+  const { connection } = useConnection();
   const [depositoryIsLoading, setIsLoading] = useState(true);
   const [depositoryError, setError] = useState<string | null>(null);
+  const [program, setProgram] = useState<Program<Quid> | null>(null);
+  const [depository, setDepository] = useState<DepositoryAccount | null>(null);
+  const [depositoryAccountPDA, setDepositoryAccountPDA] = useState<PublicKey | null>(null);
+  
 
   /*
   const handleAccountChange = (accountInfo: AccountInfo<Buffer>) => {

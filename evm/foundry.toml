@@ -9,10 +9,11 @@ fs_permissions = [{ access = "read-write", path = ".forge-snapshots/"}]
 
 solc_version = "0.8.26"
 evm_version = "cancun"
-fuzz_runs = 500
+
 via_ir = true
-optimizer = true
-optimizer_runs = 10_000_000
+optimizer = false
+optimizer_runs = 0
+dynamic_test_linking = true
 
 bytecode_hash = "none"
 deny_warnings = false

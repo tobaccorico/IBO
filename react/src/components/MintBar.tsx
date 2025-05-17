@@ -43,16 +43,28 @@ export const MintBar = () => { // TODO Ethereum stuff commented out
       </div>
       <div className="summary-section">
         <div className="summary-title">Current profit in $</div>
+        <div className="summary-section">
+        <div className="summary-title">Current profit in $</div>
         <div className="summary-value">
-          { (connected && depositor && depositor.balances.length > 0 
-            && depositor.balances[0] != null
-             && depositor.balances[0].exposure != 0) ? 
-                  (depositor.balances[0].exposure > 0 ?
-                    (numberWithCommas((depositor.balances[0].exposure -
-                      depositor.balances[0].pledged) / 1000000)) : 
-                    (numberWithCommas((depositor.balances[0].pledged - 
-                      depositor.balances[0].exposure) / 1000000))) : 0 }
+          {connected && depositor && depositor.balances.length > 0 && depositor.balances[0] != null && depositor.balances[0].exposure !== 0 ? (
+            depositor.balances[0].exposure > 0 ? (
+              numberWithCommas(
+                (
+                  (depositor.balances[0].exposure * parseFloat(AuPrice.toString()) -
+                    depositor.balances[0].pledged) / 1000000
+                )
+              )
+            ) : (
+              numberWithCommas(
+                (
+                  (depositor.balances[0].pledged -
+                    (-1 * depositor.balances[0].exposure) * parseFloat(AuPrice.toString())) / 1000000
+                )
+              )
+            )
+          ) : 0}
         </div>
+      </div>
       </div>
       <div className="summary-section">
         <div className="summary-title">Collateral (pledged $)</div>

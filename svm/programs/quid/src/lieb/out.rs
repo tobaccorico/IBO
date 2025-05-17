@@ -157,9 +157,10 @@ pub fn handle_out(ctx: Context<Withdraw>,
                 Banks.total_deposit_shares -= shares_to_remove as u64;
                 if delta < 0 { // the depositor is taking profits...
                     delta *= -1; // < remove symbolic meaning, converting it to a usable number...
+                    // interest also includes (partially) the pod.pledged (not from total_deposits)
                     token_interface::transfer_checked(cpi_ctx, interest as u64, decimals)?;
                     Banks.total_deposits -= delta as u64; // < we also enter the next if with delta
-                    interest = 0; // < so we don't add it
+                    interest = 0; // < so we don't add it back to the total_deposits at the end...
                 }
                 if delta > 0 { // funds moved from savings to credit account; 
                     // there is no need to transfer, just internal accounting

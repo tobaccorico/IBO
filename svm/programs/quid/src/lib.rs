@@ -3,8 +3,8 @@ use anchor_lang::prelude::*;
 // зачем? je t'aime,
 // kennst du dich?!
 use lieb::*; mod lieb;
-mod stay; mod etc;
-
+mod stay; // что есть
+mod etc; // кто есть
 // declare_id!("QDgHUZjtccRjKZ63MBvW8uzKR7qcqjpRfGhNSEGfDu9"); // < devnet
 declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet
 
