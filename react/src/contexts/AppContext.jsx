@@ -77,7 +77,7 @@ b
   const { depository } = useDepository();
   const { AuPrice, fetchInitialPrice } = usePythPrice();
   const { depositor, allDepositorAccounts, 
-    refetchDepositorAccount, fetchAllDepositorAccounts } = useDepositor();
+    refetchDepositorAccount, /* fetchAllDepositorAccounts */ } = useDepositor();
   
   const [balanceUSD, setBalanceUSD] = useState(null)
 
@@ -103,6 +103,7 @@ b
     try { 
       if (!AuPrice) {
         fetchInitialPrice();
+        getTotals(false)
       }
     } catch (error) {
       console.error("Some problem with getPrice: ", error)
@@ -111,25 +112,29 @@ b
   }, [AuPrice, fetchInitialPrice])
 
   const getTotals = useCallback(async (force) => {
-    try {
-      const depositorAccounts = await fetchAllDepositorAccounts(force);
-      const totals = depositorAccounts.reduce((acc, account) => {
-          const b = account.account?.balances?.[0]; if (b) {
-            if (b.exposure > 0) acc.longs += b.exposure;
-            else if (b.exposure < 0) acc.shorts += b.exposure;
-            acc.pledged += b.pledged;
-          } acc.deposited += account.account.depositedUsdStar || 0;
-          return acc;
-        }, { shorts: 0, longs: 0, pledged: 0, deposited: 0 });
-        setTotalDeposited(totals.deposited / 1_000_000 || 1);
-        setTotalPledged(totals.pledged / 1_000_000 || 1);
-        setTotalShorts(totals.shorts / 1_000_000 || 1);
-        setTotalLongs(totals.longs / 1_000_000 || 1);
+    try { 
+      //await fetchAllDepositorAccounts(force).then(() => {
+        var acc = {
+          shorts: 0, longs: 0, pledged: 0, deposited: 0 
+        }
+        for (let i = 0; i < allDepositorAccounts.length; i++) {
+          const b = allDepositorAccounts[i].account.balances?.[0]; 
+          if (b) {
+            if (b.exposure.toNumber() > 0) acc.longs += b.exposure.toNumber();
+            else if (b.exposure.toNumber() < 0) acc.shorts += b.exposure.toNumber();
+            acc.pledged += b.pledged.toNumber() || 0;
+          } acc.deposited +=  allDepositorAccounts[i].depositedUsdStar.toNumber() || 0;  
+        } 
+          setTotalDeposited(acc.deposited / 1_000_000 || 1);
+          setTotalPledged(acc.pledged / 1_000_000 || 1);
+          setTotalShorts(acc.shorts / 1_000_000 || 1);
+          setTotalLongs(acc.longs / 1_000_000 || 1); 
+      //});
     } catch (error) {
       console.error("Some problem with getSupply: ", error)
       return null
     }
-  }, [fetchAllDepositorAccounts, allDepositorAccounts, 
+  }, [/* fetchAllDepositorAccounts*/ , allDepositorAccounts, 
     totalLongs, totalShorts, totalDeposited, totalPledged])
 
   /* TODO uncoment later to connect Ethereum...

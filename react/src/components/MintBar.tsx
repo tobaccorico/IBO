@@ -23,9 +23,9 @@ export const MintBar = () => { // TODO Ethereum stuff commented out
              depositor.balances[0].exposure == 0 ? "none" :
             (depositor.balances[0].exposure > 0 ? "long" : "short")) : "none" })
         </div>
-        <div className="summary-value">{ connected && depositor && depositor.balances.length > 0 
-          && depositor.balances[0] != null ?
-            numberWithCommas(depositor.balances[0].exposure / 1000000) : 0 }
+        <div className="summary-value">{ connected && depositor 
+          && depositor.balances.length > 0 && depositor.balances[0] != null ?
+              numberWithCommas(depositor.balances[0].exposure / 1000000) : 0 }
         </div>
       </div>
       <div className="summary-section">
@@ -59,7 +59,7 @@ export const MintBar = () => { // TODO Ethereum stuff commented out
         <div className="summary-value">
             { connected && depositor && depositor.balances 
             && depositor.balances.length > 0 && depositor.balances[0] != null  ? 
-            numberWithCommas(depositor.balances[0].pledged / 1000000) : 0 }
+              numberWithCommas(depositor.balances[0].pledged / 1000000) : 0 }
         </div>
       </div>
     </div>

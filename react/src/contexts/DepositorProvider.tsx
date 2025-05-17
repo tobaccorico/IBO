@@ -71,13 +71,12 @@ export function DepositorProvider({
 
   const fetchAllDepositorAccounts = async (force: boolean) => {
     try {
-      if (program != null && (
-        force || allDepositorAccounts == null)) {
+        if (program != null && (force || allDepositorAccounts.length == 0)) {
         await program.account.depositor.all().then((data: { publicKey: PublicKey; account: DepositorAccount }[]) => {
           setAllDepositorAccounts(data);
           setError(null);
         })
-      } 
+      }
     } catch (error) {
       console.error("Error fetching all deposit accounts:", error);
       setError("Failed to fetch all collateral accounts");
@@ -91,11 +90,13 @@ export function DepositorProvider({
       if (index !== -1 && program != null) {
         let key = allDepositorAccounts[index].publicKey;
         account = await program.account.depositor.fetch(key)
-        const newAccounts = [...allDepositorAccounts];
-        newAccounts[index] = { publicKey: key, account };
         console.log("PDA22", key)
         console.log("deposited22", account.depositedUsdStar.toString())
-        setAllDepositorAccounts(newAccounts);
+        if (allDepositorAccounts.length > 0) {
+          const newAccounts = [...allDepositorAccounts];
+          newAccounts[index] = { publicKey: key, account };
+          setAllDepositorAccounts(newAccounts);
+        } 
       } else if (program != null) {
         const [depositorPDA] = PublicKey.findProgramAddressSync(
           [pubkey.toBuffer()],

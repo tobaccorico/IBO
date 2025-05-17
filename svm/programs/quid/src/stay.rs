@@ -55,7 +55,7 @@ impl Depositor {
     // payments depend not only on time elapsed, but also on the value of debt at time of payment 
     fn calculate_accrued_interest(principal: u64, time_elapsed: f32, interest_rate: f32) -> f64 {
         return principal as f64 * E.powf(interest_rate / (100 as f32) * time_elapsed) as f64;
-    } // At she first seemed really interested, then she told me I should go see a shrink.
+    } // At first she seemed really interested, then she told me I should go see a shrink.
     // Position shrinking means "virtual sale": profitable synthetic redemption withdraws
     // Banks.total_deposits (more than pledged); similar to a collar (hedge wrapper), one
     // strategy for protecting against losses...though it limits large gains (under 10%).
@@ -90,7 +90,7 @@ impl Depositor {
                 // (contains solely a preventative intent)
                 // unless amount == 0 (liquidator caller)
                 if exposure > delta { // must take profit
-                    delta = exposure - delta; // unless:
+                    delta = exposure - delta; // unless...
                     delta += delta / 250; // liquidator's cut 
                     if self.deposited_usd_star >= delta { 
                         // not buying more exposure (impacts P&L), just

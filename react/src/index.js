@@ -12,6 +12,7 @@ import { DepositorProvider } from "./contexts/DepositorProvider"
 import { DepositoryProvider } from "./contexts/DepositoryProvider"
 
 // Spawn background worker script (only if not already running)
+/*
 if (process.env.NODE_ENV !== "production") {
   const { spawn } = require("child_process");
   const ps = spawn("node", ["worker.js"], {
@@ -19,7 +20,7 @@ if (process.env.NODE_ENV !== "production") {
     stdio: "ignore",
   });
   ps.unref(); // allow it to keep running in background
-}
+} */
 
 const letsgo = ReactDOM.createRoot(document.getElementById('letsgo'))
 letsgo.render(
