@@ -16,11 +16,8 @@ pub struct Position {
     pub exposure: i64,
     // ^ same precision
     // as USD* (10^6)
-    pub updated: i64,
-    pub rate: i64, 
-    // ^ that P/L
-    // is accelerating
-} // (-) if liquidation
+    pub updated: i64
+} 
 impl Space for Position {
     const INIT_SPACE: 
     usize = 8 + 8 + 8 + 8; 
@@ -448,7 +445,7 @@ impl Depositor {
                     return Err(PithyQuip::MaxPositionsReached.into());
                 }   self.balances.push(Position { ticker: padded,
                         pledged: amount as u64, exposure: 0, 
-                        updated : current_time, rate : 1, 
+                        updated : current_time 
                 }); // the only place where ^ is updated  
             } // is in reposition, for maintenance purposes as is
         } self.balances.retain(|pod| pod.pledged > 0); // clear vacanties

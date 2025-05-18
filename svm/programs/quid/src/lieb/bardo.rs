@@ -61,7 +61,16 @@ pub struct Liquidate<'info> {
 
 // "It's like inch by inch...step by step...closin' in on your position
 //  in small doses...when things have gotten closer to the sun," she said, 
-// "don't think I'm pushing you away as ⚡️ strikes...court lights get dim"
+// "don't think I'm pushing you away as ⚡️ strikes...court lights get dim..."
+// The file is called bardo in reference to Diotima’s idea of the in-between,
+// or metaxy: wasn’t limited just to ignorance and wisdom. She called into 
+// question all kinds of binary oppositions, including between good and evil,
+// beautiful and ugly, divine and mortal. Given how little we have to go on,
+// it is hard to fully reconstruct Diotima’s philosophy; but it seems that 
+// for her most of the interesting stuff happens in these in-between spaces,
+// insecurities perfection or perturbation theory in quantum securities... 
+// in the middle-ground...the kinds of distinctions that philosophers make 
+// between good and evil ignore how entangled these oppositions really are.
 pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> { 
     // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint); 
     // ^ only for deployment, comment out for anchor test --skip-local-validator
