@@ -135,6 +135,9 @@ export const Mint = () => {
   // -------------------------- STARTING TRANSFERS TERMINAL METHOD ---------------------------------
   //================================================================================================
 
+  // TODO add chain argument in addition to button
+  // withdraw will use reclaim and only accept a 
+  // positive id showing the text in red... 
   const terminalStarting = async (button) => {
     
     const hasAgreedToTerms = localStorage.getItem("hasAgreedToTerms") === "true"

@@ -1,6 +1,9 @@
 
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::associated_token::{
+    get_associated_token_address,
+    AssociatedToken
+};
 use anchor_spl::token_interface::{ 
     self, Mint, TokenAccount, 
     TokenInterface, TransferChecked 
@@ -33,7 +36,7 @@ pub struct Deposit<'info> {
         payer = signer,
         seeds = [b"vault", mint.key().as_ref()],
         bump, 
-    )]  
+    )]
     pub bank_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
@@ -58,13 +61,21 @@ pub struct Deposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// do you like DAGs? nah, I love fight club, every teardrop is a waterfall in it...
 pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<()> {
     // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
     // ^ only for deployment, comment out for anchor test --skip-local-validator
-    require!(amount >= 100000000, PithyQuip::InvalidAmount); // $100; if too small,
-    // then the liqudiator cut, which is also small, may not be enough of an 
-    // incentive to cover the gas cost of the performing the transaction...
+    let ata = get_associated_token_address(
+        &ctx.accounts.signer.key(),
+        &ctx.accounts.mint.key()
+    ); require!(amount >= 100000000, PithyQuip::InvalidAmount); // minimum deposit $100
+    // require in case malicious CPI into system/ATA program tried to overwrite ownership
+    // or ATA was reassigned between #[account] parsing and execution start (edge case):
+    require_keys_eq!(ctx.accounts.customer_token_account.key(),
+                     ata, PithyQuip::forOhfour); 
+
     let Banks = &mut ctx.accounts.bank;
+    let right_now = Clock::get()?.unix_timestamp;
     let customer = &mut ctx.accounts.customer_account;
     let transfer_cpi_accounts = TransferChecked {
         from: ctx.accounts.customer_token_account.to_account_info(),
@@ -76,28 +87,26 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
     let cpi_ctx = CpiContext::new(cpi_program, transfer_cpi_accounts);
     token_interface::transfer_checked(cpi_ctx, amount, decimals)?; 
     
-    let mut users_shares = amount;
-    if Banks.total_deposits == 0 {
-        Banks.interest_rate = 12;
-    }
-    else { 
-        let deposit_ratio = amount.checked_div(Banks.total_deposits).unwrap();
-        users_shares = Banks.total_deposit_shares.checked_mul(deposit_ratio).unwrap();  
-    } 
-    if customer.owner == Pubkey::default() {
+    if customer.owner == Pubkey::default() { // init
         customer.owner = ctx.accounts.signer.key();
+    } else { // modifying existing customer account
+        let mut delta = right_now - customer.last_updated;
+        customer.deposit_seconds += (customer.deposited_usd_star * delta as u64) as u128; 
+        
+        delta = right_now - Banks.last_updated;
+        Banks.total_deposit_seconds += (Banks.total_deposits * delta as u64) as u128;
     }
     if ticker.is_empty() { 
-        Banks.total_deposits += amount; 
         customer.deposited_usd_star += amount;
-        customer.deposited_usd_star_shares += users_shares;
-        Banks.total_deposit_shares += users_shares;
-    } 
-    else { 
+        Banks.total_deposits += amount; 
+    } else { 
         let t: &str = ticker.as_str();
         if HEX_MAP.get(t).is_none() {
             return Err(PithyQuip::UnknownSymbol.into());
         }   customer.renege(Some(t), amount as i64, 
-        None, Clock::get()?.unix_timestamp)?;
-    } Ok(())
+                            None, right_now)?;
+    }
+    customer.last_updated = right_now;
+    Banks.last_updated = right_now;
+    Ok(())
 }

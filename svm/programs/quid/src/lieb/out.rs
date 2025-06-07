@@ -14,7 +14,7 @@ use crate::etc::{
     PithyQuip
 };
 use pyth_solana_receiver_sdk::price_update::{
-    self, get_feed_id_from_hex, PriceUpdateV2};
+         get_feed_id_from_hex, PriceUpdateV2};
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
@@ -53,12 +53,16 @@ pub struct Withdraw<'info> {
 }
 
 pub fn handle_out(ctx: Context<Withdraw>, 
-    mut amount: i64, ticker: String, exposure: bool
-) -> Result<()> { let right_now = Clock::get()?.unix_timestamp;
+    mut amount: i64, ticker: String, exposure: bool) -> Result<()> { 
+    require!(amount != 0, PithyQuip::InvalidAmount);
+    
     // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
     // ^ only for deployment, comment out for anchor test --skip-local-validator
+
     let Banks = &mut ctx.accounts.bank;
     let customer = &mut ctx.accounts.customer_account;
+    require_keys_eq!(customer.owner, ctx.accounts.signer.key(), PithyQuip::InvalidUser);
+    
     let transfer_cpi_accounts = TransferChecked {
         from: ctx.accounts.bank_token_account.to_account_info(),
         mint: ctx.accounts.mint.to_account_info(),
@@ -72,14 +76,22 @@ pub fn handle_out(ctx: Context<Withdraw>,
             &[ctx.bumps.bank_token_account],
         ],
     ]; 
-    let cpi_ctx = CpiContext::new(
-    cpi_program, transfer_cpi_accounts).with_signer(signer_seeds);
+    let right_now = Clock::get()?.unix_timestamp;
     let decimals = ctx.accounts.mint.decimals;
-    require!(amount != 0, PithyQuip::InvalidAmount);
+    let cpi_ctx = CpiContext::new(cpi_program, 
+            transfer_cpi_accounts).with_signer(signer_seeds);
+    
+    let mut time_delta = right_now - Banks.last_updated;
+    Banks.total_deposit_seconds += (time_delta as u64 * Banks.total_deposits) as u128;
+    Banks.last_updated = right_now; 
+
     let mut amt: u64 = 0;
-    if ticker.is_empty() { // withdrawal of $ deposits
+    if ticker.is_empty() { // withdrawal of $ deposits...
+    // returns your pro-rata share of the pool, plus your 
+    // accrued yield — net of any losses for honoring TPs
         require!(amount < 0, PithyQuip::InvalidAmount);
-        if exposure { // first empty credit accounts
+        if exposure { // first empty credit accounts,
+        // prior to withdrawing from Depository...
             let mut prices: Vec<u64> = Vec::new();
             let mut hex: &str; let mut key: &str;
             for i in 0..customer.balances.len() {
@@ -113,18 +125,20 @@ pub fn handle_out(ctx: Context<Withdraw>,
             amount = customer.renege(None, amount as i64, Some(&prices), right_now)? as i64;
             amt -= amount as u64; // < amt is used to keep track of how much we know (so far) that we'll be transferring 
         } 
-        // whether we entered the exposure clause or not (amount gets reused in there)
-        if amount.abs() > 0 { // if there was a remainder returned by renege, handle it:
-            let max_value = ((customer.deposited_usd_star_shares as f64 / Banks.total_deposit_shares as f64) * Banks.total_deposits as f64) as u64;
-            let value = max_value.min(amount.abs() as u64); // next we convert this dollar value back to shares...
-            let shares = ((value as f64 / Banks.total_deposits as f64) * Banks.total_deposit_shares as f64) as u64;
+        // whether we entered exposure's if clause or not (amount gets reused in there)...
+        if amount.abs() > 0 { // if there's a remainder (returned by renege), or otherwise:            
+            time_delta = right_now - customer.last_updated;
+            customer.deposit_seconds += (time_delta as u64 * 
+             customer.deposited_usd_star) as u128;
+
+            let max_value = customer.deposit_seconds.saturating_mul(Banks.total_deposits as u128)
+                    .checked_div(Banks.total_deposit_seconds).unwrap_or(0).min(u64::MAX as u128)  as u64;
+
+            let value = max_value.min(amount.abs() as u64); 
         
-            customer.deposited_usd_star_shares -= shares;
-            Banks.total_deposit_shares -= shares;
-            
             amt += value;
             Banks.total_deposits -= value;
-            customer.deposited_usd_star -= value;
+            customer.deposited_usd_star -= customer.deposited_usd_star.min(value);
         }
         token_interface::transfer_checked(cpi_ctx, amt, decimals)?;
     } else { // < ticker was not ""
@@ -147,29 +161,29 @@ pub fn handle_out(ctx: Context<Withdraw>,
             
             let feed_id = get_feed_id_from_hex(hex)?;
             let price = price_update.get_price_no_older_than(&Clock::get()?, MAX_AGE, &feed_id)?;
-            let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);
-            
-            let (mut delta, mut interest) = customer.reposition(t,
+            let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);     
+
+            let (mut delta, mut interest) = customer.repo(t,
                  amount, adjusted_price as u64, right_now, Banks.interest_rate)?;
-            
-            if delta != 0 { // the depositor either took profits or they automatically protected themselves against liquidation
-                let shares_to_remove = (delta.abs() as f64 / Banks.total_deposits as f64) * Banks.total_deposit_shares as f64;
-                Banks.total_deposit_shares -= shares_to_remove as u64;
-                if delta < 0 { // the depositor is taking profits...
+            // ^ call this through external try catch, catch an error, passthrough,
+            // try to borrow dollars against dollars on solend, passthrough again
+            // if succeed, which calls the external try catch again if zero delta? 
+            if delta != 0 { 
+                if delta < 0 { // TP
                     delta *= -1; // < remove symbolic meaning, converting it to a usable number...
-                    // interest also includes (partially) the pod.pledged (not from total_deposits)
+                    // interest includes (partially) the pod.pledged (delta is from total_deposits)
                     token_interface::transfer_checked(cpi_ctx, interest as u64, decimals)?;
-                    Banks.total_deposits -= delta as u64; // < we also enter the next if with delta
-                    interest = 0; // < so we don't add it back to the total_deposits at the end...
-                }
-                if delta > 0 { // funds moved from savings to credit account; 
-                    // there is no need to transfer, just internal accounting
-                    customer.deposited_usd_star_shares -= shares_to_remove as u64;
-                    // potentially increases the value of everyone's shares,
-                    // only in liquidation protection cases on the downside
-                    // (if a long dropped too much or a short grew too much)
-                }
-            } Banks.total_deposits += interest; 
-        }
+                    interest = 0; // < so we don't add it back to the total_deposits later
+                } else { // was auto-protected against liquidation
+                    time_delta = right_now - customer.last_updated;
+                    customer.deposit_seconds += (time_delta as u64 * 
+                       (customer.deposited_usd_star + delta as u64)) as u128;
+                    
+                    customer.last_updated = right_now;
+                }   
+                Banks.total_deposits -= delta as u64;
+            }   
+            Banks.total_deposits += interest;
+        }   
     } Ok(())    
 }

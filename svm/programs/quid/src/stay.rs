@@ -25,24 +25,34 @@ impl Space for Position {
 
 #[account]
 #[derive(InitSpace)]
-pub struct Depository { 
+pub struct Depository {
     pub total_deposits: u64, 
-    pub total_deposit_shares: u64, 
+    pub total_deposit_seconds: u128, 
+    // ^ the faster one enter & exit, 
+    // the less of an accrued yield
+    // one can take (slower, loyal
+    // depositors get more, pro rata)
     pub interest_rate: u64,
+    pub last_updated: i64
 } 
+
+// naive timestamping: it over-weights early dust deposits;
+// can be gamed by adding size later to inherit "old" age.
+// To prevent this, we use dollar-seconds, time-weighted 
+// deposit value, updated continuously to stay accurate.
 
 #[account]
 #[derive(InitSpace)]
 pub struct Depositor {
     pub owner: Pubkey,
     pub deposited_usd_star: u64,
-    pub deposited_usd_star_shares: u64, 
-    
+    pub deposit_seconds: u128,
+    pub last_updated: i64,
     #[max_len(MAX_LEN)]
-    pub balances: Vec<Position>, 
+    pub balances: Vec<Position>,
 }
 
-impl Depositor {
+impl Depositor {    
     fn pad_ticker(ticker: &str) -> [u8; 8] {
         let mut padded_ticker = [0u8; 8];
         let ticker_bytes = ticker.trim().as_bytes();
@@ -52,6 +62,7 @@ impl Depositor {
     }
 
     // payments depend not only on time elapsed, but also on the value of debt at time of payment 
+    // using a floating rate that is reflexive/adaptive with respect to inflow/outflow behavior...
     fn calculate_accrued_interest(principal: u64, time_elapsed: f32, interest_rate: f32) -> f64 {
         return principal as f64 * E.powf(interest_rate / (100 as f32) * time_elapsed) as f64;
     } // At she first seemed really interested, then she told me I should go see a shrink.
@@ -61,7 +72,7 @@ impl Depositor {
     // Some cynic wrote on Twitter that "Ostium is broken," reason being unbounded gains
     // for borrowers dilute depositors' yield; following solution is a game of playing
     // on the edge, always waiting for her next move, yearning for a slightest tingle.
-    pub fn reposition(&mut self, ticker: &str, 
+    pub fn repo(&mut self, ticker: &str, // reposition, or repossession (it depends)
         mut amount: i64, price: u64, current_time: i64,
         interest_rate: u64) -> Result<(i64, u64)> {
         let padded = Self::pad_ticker(ticker);
@@ -340,6 +351,8 @@ impl Depositor {
         Ok((0,0)) 
     } 
 
+    /* This function handles collateral adjustments (adding or removing pledged dollars
+     * or deposited); safety-first: ensures collateralisation constraints are respected. */
     pub fn renege(&mut self, ticker: Option<&str>, mut amount: i64, 
         prices: Option<&Vec<u64>>, current_time: i64) -> Result<i64> { // pod: подушка
         if ticker.is_none() && amount < 0 { // removing collateral from every position
@@ -353,7 +366,7 @@ impl Depositor {
                 let price = prices.as_ref().unwrap()[i];
                 let max: u64 = if pod.exposure > 0 {
                     (pod.pledged + pod.pledged / 10) - 
-                    pod.exposure as u64 * price 
+                     pod.exposure as u64 * price 
                 } 
                 else if pod.exposure < 0 {
                 // we don't have to worry about if 
@@ -365,11 +378,13 @@ impl Depositor {
                 } 
                 else { pod.pledged };
                 let deducted = max.min(deducting);
+        
                 pod.pledged -= deducted;
                 deducting -= deducted;
             }
-            amount = deducting as i64; // < remainder in out & bardo
-        } else { // remove or add dollars to one specific position...
+            amount = deducting as i64; // < remainder (out & clutch)
+        } 
+        else { // remove or add dollars to one specific position...
             let padded = Self::pad_ticker(ticker.unwrap());
             if let Some(pod) = self.balances.iter_mut().find(
                                  |pod| pod.ticker == padded) {
@@ -381,7 +396,7 @@ impl Depositor {
                     return Err(PithyQuip::NoPrice.into());    
                 }
                 let exposure = pod.exposure.abs() as u64 * price;
-                // deducting...we check the max, same as we did above...
+                // deducting...we check the max, same as we did above,
                 // with a slightly different approach (why not, right?) 
                 if amount < 0 { require!(pod.pledged >= -amount as u64, 
                                             PithyQuip::InvalidAmount);
@@ -421,9 +436,9 @@ impl Depositor {
                             amount = amount.min((exposure - pod.pledged) as i64);
                         }
                         else if pod.pledged > exposure {
-                            // short is in-the-money; this
-                            // would be like cheating (to add
-                            // collateral) as it would widen the
+                            // short is in-the-money; throw as
+                            // would be like cheating otherwise
+                            // as adding collateral widens the
                             // delta (i.e. profitability, what's
                             // deducted from bank.total_deposits)...
                             return Err(PithyQuip::TakeProfit.into());
@@ -439,16 +454,19 @@ impl Depositor {
                         }   amount = max.min(amount as u64) as i64;
                     }       pod.pledged += amount as u64;
                 } 
+                amount = 0; 
+                self.last_updated = current_time; 
+             
             } else { require!(amount > 0, 
                 PithyQuip::InvalidAmount);
                 if self.balances.len() >= MAX_LEN {
                     return Err(PithyQuip::MaxPositionsReached.into());
                 }   self.balances.push(Position { ticker: padded,
                         pledged: amount as u64, exposure: 0, 
-                        updated : current_time 
-                }); // the only place where ^ is updated  
+                        updated : current_time }); amount = 0;
             } // is in reposition, for maintenance purposes as is
-        } self.balances.retain(|pod| pod.pledged > 0); // clear vacanties
-        Ok(0) // < TODO return how much was actually added or withdrawn for info
-    } 
+        } self.balances.retain(|pod| pod.pledged > 10000000); 
+        // if there is exposure it will automatically shrink (charging %) 
+        Ok(amount) // < remainder must be returned if ticker was None...
+    }    
 } 

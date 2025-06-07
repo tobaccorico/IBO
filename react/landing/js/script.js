@@ -154,6 +154,6 @@ bg.addEventListener("mouseenter", function( event ) {
 
 function openLink()
 {
-  window.location.href = 'http://app.quid.io';
+  window.location.href = 'https://quid.io/mint';
   // window.alert("Launching on 12/12");
 }

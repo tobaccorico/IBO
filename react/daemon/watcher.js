@@ -1,4 +1,13 @@
-// worker.js
+// Neminem wrote the watcher for 
+// doctor Andrew Bryan (aka Dre)
+// "Bacha" means the all seeing
+// eye in Ukrainian, accurately
+// describes the Manifold Quid
+// joint operating agreement, 
+// as 1 entity (Quid Labs in
+// Cayman) cannot be the sole 
+// operator for decentralisation
+// purposes, failsafe regulatorily
 const express = require("express");
 const { ethers } = require("ethers");
 const {

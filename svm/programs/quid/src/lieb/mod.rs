@@ -2,8 +2,8 @@
 pub use entra::*;
 pub mod entra;
 
-pub use bardo::*;
-pub mod bardo;
+pub use clutch::*;
+pub mod clutch;
 
 pub use out::*;
 pub mod out;

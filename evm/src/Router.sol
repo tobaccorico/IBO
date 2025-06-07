@@ -9,8 +9,8 @@ import {Types} from "./imports/Types.sol";
 
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
-import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
-// import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol"; // base
+// import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
+import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol"; // base
 
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
@@ -329,6 +329,7 @@ contract Router is SafeCallback, Ownable {
             position.lower, position.upper)), (BalanceDelta));
     }
 
+    // TODO denial of service by filling with small amounts, min
     function pushSwapZeroForOne(Types.Trade calldata trade) onlyAux public {
         uint currentBlock = block.number;
         Types.Batch storage ourBatch = swapsZeroForOne[currentBlock];

@@ -1,0 +1,5 @@
+{
+	"devDependencies": {
+		"@solana-mobile/dapp-store-cli": "^0.10.0"
+	}
+}

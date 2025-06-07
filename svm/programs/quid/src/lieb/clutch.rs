@@ -18,14 +18,17 @@ use pyth_solana_receiver_sdk::price_update::{
 
 #[derive(Accounts)]
 pub struct Liquidate<'info> {
-    #[account(mut)]
-    pub liquidator: Signer<'info>,
-    // Obiwan Kenobi, убиван who not bleed
-
     /// CHECK: raw account only to validate ownership;
     /// no reads/writes or assumptions beyond `.key()`
     pub liquidating: AccountInfo<'info>,
+    // Obiwan Kenobi
+
+    #[account(mut)]
+    pub liquidator: Signer<'info>,
+    // убиван who not bleed...
+
     pub mint: InterfaceAccount<'info, Mint>,
+    // TODO wh
     
     #[account(mut, 
         seeds = [mint.key().as_ref()],
@@ -61,22 +64,16 @@ pub struct Liquidate<'info> {
 
 // "It's like inch by inch...step by step...closin' in on your position
 //  in small doses...when things have gotten closer to the sun," she said, 
-// "don't think I'm pushing you away as ⚡️ strikes...court lights get dim..."
-// The file is called bardo in reference to Diotima’s idea of the in-between,
-// or metaxy: wasn’t limited just to ignorance and wisdom. She called into 
-// question all kinds of binary oppositions, including between good and evil,
-// beautiful and ugly, divine and mortal. Given how little we have to go on,
-// it is hard to fully reconstruct Diotima’s philosophy; but it seems that 
-// for her most of the interesting stuff happens in these in-between spaces,
-// insecurities perfection or perturbation theory in quantum securities... 
-// in the middle-ground...the kinds of distinctions that philosophers make 
-// between good and evil ignore how entangled these oppositions really are.
+// "don't think I'm pushing you away as ⚡️ strikes...court lights get dim"
 pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> { 
     // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint); 
     // ^ only for deployment, comment out for anchor test --skip-local-validator
+    
     let Banks = &mut ctx.accounts.bank;
     let customer = &mut ctx.accounts.customer_account;
-    require_keys_eq!(customer.owner, ctx.accounts.liquidating.key(), PithyQuip::InvalidUser);
+    require_keys_eq!(customer.owner, 
+        ctx.accounts.liquidating.key(), 
+        PithyQuip::InvalidUser);
     
     let transfer_cpi_accounts = TransferChecked {
         from: ctx.accounts.bank_token_account.to_account_info(),
@@ -91,9 +88,9 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
             &[ctx.bumps.bank_token_account],
         ],
     ]; 
-    let cpi_ctx = CpiContext::new(
-    cpi_program, transfer_cpi_accounts).with_signer(signer_seeds);
     let decimals = ctx.accounts.mint.decimals;
+    let cpi_ctx = CpiContext::new(cpi_program, 
+            transfer_cpi_accounts).with_signer(signer_seeds);
 
     let t: &str = ticker.as_str(); let right_now = Clock::get()?.unix_timestamp;
     let mut key: &str = ACCOUNT_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
@@ -110,21 +107,29 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
     let price = price_update.get_price_no_older_than(&Clock::get()?, MAX_AGE, &feed_id)?;
     let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);
 
-    let (mut delta, mut interest) = customer.reposition(t, 
-        0, adjusted_price as u64, right_now, Banks.interest_rate)?;
+    let mut time_delta = right_now - customer.last_updated;
+    customer.deposit_seconds += (customer.deposited_usd_star * time_delta as u64) as u128; 
+    
+    time_delta = right_now - Banks.last_updated;
+    Banks.total_deposit_seconds += (Banks.total_deposits * time_delta as u64) as u128;
+
+    let (mut delta, mut interest) = customer.repo(t, 
+         0, adjusted_price as u64, right_now, Banks.interest_rate)?;
     
     require!(delta != 0, PithyQuip::NotUndercollateralised);
+    // ^ delta has to be non-zero, otherwise the position is
+    // totally within boundaries, and no need to be touched
 
     Banks.total_deposits += interest;
     interest = (delta / 250) as u64;
-    if delta < 0 { // take profit on behalf all depostors, at the expense of one... 
-        delta *= -1; // < remove symbolic meaning, converting it to a usable number...
+    if delta < 0 { // take profit on behalf all depositors, at the expense of one... 
+        delta *= -1; // < remove symbolic meaning, converting it to a usable number
         delta -= interest as i64; // < commission for the liquidator (just over 0.5%)
         Banks.total_deposits += delta as u64;
     }
-    else if delta > 0 {
+    else if delta > 0 { // saved from liquidation
         // before we try to deduct from depository
-        // attemp to salvage amount from depositor
+        // attempt to salvage amount from depositor
         let mut prices: Vec<u64> = Vec::new();
         for i in 0..customer.balances.len() {
             let bytes = customer.balances[i].ticker.clone();
@@ -153,13 +158,11 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
             prices.push(adjusted_price as u64);
         }
         let remainder = customer.renege(None, -delta as i64, Some(&prices), right_now)? as i64;
-        customer.deposited_usd_star += (delta - remainder) as u64; // < return amount taken in reposition, now taken from positions...
-        let shares_to_remove = (remainder.abs() as f64 / Banks.total_deposits as f64) * Banks.total_deposit_shares as f64;
-        customer.deposited_usd_star_shares -= shares_to_remove as u64;
-        Banks.total_deposit_shares -= shares_to_remove as u64;
+        customer.deposited_usd_star += (delta - remainder) as u64; // < return amount deducted in stay (repo), now taken from positions
+        
         Banks.total_deposits -= remainder as u64;
     }   token_interface::transfer_checked(cpi_ctx,
-                interest, decimals)?;
+                        interest, decimals)?;
     Ok(())
-}
+} 
          

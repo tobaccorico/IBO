@@ -19,8 +19,8 @@ import {IUiPoolDataProviderV3} from "aave-v3/helpers/interfaces/IUiPoolDataProvi
 import {IPoolAddressesProvider} from "aave-v3/interfaces/IPoolAddressesProvider.sol";
 
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
-import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
-// import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol"; // base
+// import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
+import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol"; // base
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -156,6 +156,10 @@ contract Auxiliary is Ownable {
     // race conditons within the lock mechanism; therefore,
     // we clear the entire batch as 1 swap, looping only to
     // distribute the output pro rata (as a % of the total)
+    // Iceberg orders are large single orders that divide
+    // into smaller limit orders for the purpose of hiding
+    // the actual order quantity. This is similar in spirit,
+    // but different in purpose; which for us is gas saving.
 
     // amount specifies only how much to sell...
     function swap(address token, bool zeroForOne, 
@@ -428,6 +432,9 @@ contract Auxiliary is Ownable {
         repayUSDC = data[3].scaledVariableDebt - totalBorrowed[address(USDC)];
     }
 
+    // untouchable helps track how much USDC must never 
+    // leave the contract, to make sure this debt can
+    // always be repaid, it's a form of 
     function unwindOneForZero(address[] calldata whose) // TODO untouchables
         external { Types.viaAAVE memory pledge; 
         uint buffer; uint pivot; uint touched;

@@ -18,25 +18,13 @@ import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
 import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 
-interface IStakeToken is IERC20 { // StkGHO (safety module)
-    function stake(address to, uint256 amount) external;
-    // here the amount is in underlying, not in shares...
-    function redeem(address to, uint256 amount) external;
-    // the amount param is in shares, not underlying...
-    function claimRewards(address to, uint256 amount) external;
-    function previewStake(uint256 assets)
-             external view returns (uint256);
-    function previewRedeem(uint256 shares)
-             external view returns (uint256);
-}
-
 interface ISCRVOracle { 
     function pricePerShare(uint ts) 
     external view returns (uint);
 } // these two Oracle contracts are only used on L2
 import {IDSROracle} from "./imports/IDSROracle.sol";
 
-contract Basket is ERC6909 {
+contract Basket is ERC6909 { // Base
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IERC4626;
     using SortedSetLib for SortedSetLib.Set;
@@ -146,18 +134,18 @@ contract Basket is ERC6909 {
             isStable[stable] = true;
         }   V4 = payable(_router);
         // the following oracles are needed on L2 in absence of 4626
-        DSR = IDSROracle(0xEE2816c1E1eed14d444552654Ed3027abC033A36); 
-        // ^ 0x65d946e533748A998B1f0E430803e39A6388f7a1 // <----- Base
-        CRV = ISCRVOracle(0x3195A313F409714e1f173ca095Dba7BfBb5767F7);
-        // ^ 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1 // <----- Base
+        DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); 
+        // 0xEE2816c1E1eed14d444552654Ed3027abC033A36 // <----- Arbitrum
+        CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
+        // 0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
     }
     
     function _getPrice(address token) internal 
         view returns (uint price) { // L2 only
         if (token == vaults[stables[5]]) { // SUSDE
             (, int answer,, uint ts,) = AggregatorV3Interface(
-            0x605EA726F0259a30db5b7c9ef39Df9fE78665C44).latestRoundData();
-            // 0xdEd37FC1400B8022968441356f771639ad1B23aA // Base
+                    0xdEd37FC1400B8022968441356f771639ad1B23aA).latestRoundData();
+                    // 0x605EA726F0259a30db5b7c9ef39Df9fE78665C44 // ARB
             price = uint(answer); require(ts > 0 
                 && ts <= block.timestamp, "link");
             // console.log("SUSDE obtained price", price);
@@ -233,12 +221,7 @@ contract Basket is ERC6909 {
                     IERC4626(vault).totalAssets() * multiplier, // APY 
                     IERC4626(vault).totalSupply()); // for staking...
             }
-        } vault = vaults[stables[ghoIndex]];
-        shares = IStakeToken(vault).previewRedeem(
-                 IStakeToken(vault).balanceOf(
-                                address(this)));
-        amounts[stables.length] = shares;
-        amounts[0] += shares; // our total
+        } 
     }
 
     function take(address who, // on whose behalf
@@ -278,7 +261,6 @@ contract Basket is ERC6909 {
                 sent += amounts[i] * divisor;
             }
         } vault = vaults[stables[stables.length - 1]];
-
         amounts[ghoIndex] = FullMath.mulDiv(amount, FullMath.mulDiv(
                                 WAD, amounts[ghoIndex], total), WAD);
 
@@ -439,6 +421,9 @@ contract Basket is ERC6909 {
                 balanceOf[from][k] -= amt;
                 if (!burning) {
                     perMonth[to].insert(k);
+                    // ^ this does nothing if
+                    // k is already in sorted
+                    // set for this address
                     balanceOf[to][k] += amt;
                 } else {
                     totalSupplies[k] -= amt;
