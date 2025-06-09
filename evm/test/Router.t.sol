@@ -217,6 +217,9 @@ contract RouterTest is Test, Fixtures {
         address[] memory whose = new address[](1);
         whose[0] = User01;
 
+        bool[] memory direction = new bool[](1);
+        direction[0] = true;
+
         // uint price = AUX.getPrice(0, false);
         // uint expectingToBuy = price * 1 ether;
         // expectingToBuy += expectingToBuy / 25;
@@ -230,7 +233,7 @@ contract RouterTest is Test, Fixtures {
         // We will get "Too little received"
         // because the simulated price spike
         // will not correspond to pool price
-        AUX.unwindOneForZero(whose);
+        AUX.unwind(whose, direction);
 
         USDC.approve(address(QUID), stack / 10);
         AUX.leverZeroForOne{value : 3524821}(stack / 10,

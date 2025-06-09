@@ -9,8 +9,8 @@ import {Types} from "./imports/Types.sol";
 
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
-// import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
-import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol"; // base
+import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
+// import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol"; // base
 
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
@@ -62,7 +62,8 @@ contract Router is SafeCallback, Ownable {
     uint internal tokenId;
     // ^ always incrementing
 
-    enum Action { Swap,
+    enum Action { 
+        Swap, BatchSwap, 
         Repack, ModLP,
         OutsideRange
     }
@@ -329,21 +330,25 @@ contract Router is SafeCallback, Ownable {
             position.lower, position.upper)), (BalanceDelta));
     }
 
-    // TODO denial of service by filling with small amounts, min
-    function pushSwapZeroForOne(Types.Trade calldata trade) onlyAux public {
-        uint currentBlock = block.number;
+    // @dev: returns the block number when the trade will clear, since the result already
+    // clears ony from now till from 93 cents till 1.07 with at least 7 cents APY on Sol,
+    // capped at 7% loss, so that means it makes between 15-30 if dual-staked on Base L1
+    function pushSwapZeroForOne(Types.Trade calldata trade/*, uint cancel*/) onlyAux public 
+        returns (uint currentBlock)  { currentBlock = block.number;
         Types.Batch storage ourBatch = swapsZeroForOne[currentBlock];
         Types.Batch memory otherBatch = swapsOneForZero[currentBlock];
         while (ourBatch.swaps.length + otherBatch.swaps.length > 30) {
             currentBlock += 1;
             ourBatch = swapsZeroForOne[currentBlock];
             otherBatch = swapsOneForZero[currentBlock];
-        }
-        ourBatch.swaps.push(trade); 
-        ourBatch.total += trade.amount;
-    }
+        }   // require(cancel > currentBlock - block.number, 
+        // "i do this for us, stuck on the grind, never above ya...");
+        ourBatch.swaps.push(trade); ourBatch.total += trade.amount;
+    } // 
 
-    function pushSwapOneForZero(Types.Trade calldata trade) onlyAux public {
+    // the frontend can store the block when trade will clear if it wants to (optional)
+    // but it's optional from a rust perspecive, can either cancel the push or it won't
+    function pushSwapOneForZero(Types.Trade calldata trade/*, uint cancel*/) onlyAux public {
         uint currentBlock = block.number;
         Types.Batch storage ourBatch = swapsOneForZero[currentBlock];
         Types.Batch memory otherBatch = swapsZeroForOne[currentBlock];
@@ -385,7 +390,7 @@ contract Router is SafeCallback, Ownable {
         }
         Action discriminator = Action(firstByte);
         // ^ similar to Solana program entrypoint
-        if (discriminator == Action.Swap) {
+        if (discriminator == Action.BatchSwap) {
             // first we buy ETH then we sell it
             (uint160 sqrtPriceX96, uint lastBlock,
              uint splitForZero, uint splitForOne,
