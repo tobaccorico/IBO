@@ -156,7 +156,7 @@ contract RouterTest is Test, Fixtures {
         uint expectingToBuy = price / 1e12;
         uint USDCbalanceBefore = USDC.balanceOf(User01);
 
-        AUX.swap{value: 1 ether}(address(USDC), false, 0);
+        AUX.swap{value: 1 ether}(address(USDC), false, 0, 2);
        
         vm.roll(vm.getBlockNumber() + 1);
         AUX.clearSwaps();
@@ -171,10 +171,10 @@ contract RouterTest is Test, Fixtures {
         USDC.approve(address(QUID), (price / 1e12) * 4); 
         // but Basket, because QUID does transferFrom
 
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12);
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12);
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12);
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12);
+        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
+        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
+        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
+        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
         
         vm.roll(vm.getBlockNumber() + 1);
         AUX.clearSwaps();
@@ -185,7 +185,7 @@ contract RouterTest is Test, Fixtures {
 
         USDCbalanceBefore = USDC.balanceOf(User01);
         
-        AUX.swap{value: 100 ether}(address(USDC), false, 0);
+        AUX.swap{value: 100 ether}(address(USDC), false, 0, 2);
         
         vm.roll(vm.getBlockNumber() + 1);
         AUX.clearSwaps();

@@ -44,7 +44,7 @@ contract Auxiliary is Ownable {
     // ^ in raw dollar terms,
     // units are 1e18 to match
     // the precision of Basket's
-    // internal token (6909)
+    // internal token (ERC6909)
 
     // uint public LEVER_MARGIN;
     // ^ TODO measure the rate
@@ -97,7 +97,7 @@ contract Auxiliary is Ownable {
         UNWIND_COST = 3524821; // TODO recalculate
         // ^ gas for unwind()
         SWAP_SELECTOR = bytes4(
-            keccak256("swap(uint160,uint256,uint256,uint256,uint256,uint256)")
+            keccak256("batchSwap(uint160,uint256,uint256,uint256,uint256,uint256)")
         );
     }
 
@@ -151,58 +151,75 @@ contract Auxiliary is Ownable {
     }
 
     // In order to prevent sandwich attacks, we implemented 
-    // a simple form of ASS: process buys first, then sells
+    // a simple form of ASS: process buys first, then sells!
+    // Minimum trade size is a form of DoS/spam protection.
     // It's not possible to go through each swap one by one
     // and execute them in sequence, because it would cause
     // race conditons within the lock mechanism; therefore,
     // we clear the entire batch as 1 swap, looping only to
-    // distribute the output pro rata (as a % of the total)
-    // Iceberg orders are large single orders that divide
-    // into smaller limit orders for the purpose of hiding
-    // the actual order quantity. This is similar in spirit,
-    // but different in purpose; which for us is gas saving.
+    // distribute the output pro rata (as a % of the total).
 
-    // amount specifies only how much to sell...
-    function swap(address token, bool zeroForOne, 
-        uint amount) public payable { 
-        require(msg.value >= SWAP_COST, "gas");
+    // `amount` specifies only how much to sell,
+    // `token` specifies what you want to buy,
+    // returns which block trade will clear in
+    function swap(address token, bool zeroForOne, uint amount, 
+        uint waitable) public payable returns (uint blockNumber) { 
         (uint160 sqrtPriceX96,,,) = V4.repack();
+        uint price = getPrice(sqrtPriceX96, false);
         bool isStable = QUID.isStable(token);
-        // if this is true ^ user cares
+        // ^ if this is true user cares
         // about their output being all
         // in 1 specific token, so they
         // won't get multiple tokens...
-        Types.Trade memory current;
-        current.sender = msg.sender;
-        current.token = token;        
-        if (!zeroForOne) { 
+        bool sensitive; 
+        if (!zeroForOne) { // < trying to sell ETH for dollars 
             require(token == address(QUID) || isStable, "$!");
             amount = _depositETH(amount);
             wethVault.deposit(amount, address(this));
-            amount -= SWAP_COST; current.amount = amount;
-            V4.pushSwapOneForZero(current);
-        }
-        else { 
-            wethVault.deposit(_depositETH(0), address(this));
+            sensitive = FullMath.mulDiv(amount, 
+                             price, WAD) >= 5000 * WAD;
+            if (sensitive) 
+                amount -= SWAP_COST;
+        } else {
             amount = QUID.deposit(msg.sender, token, amount);
             uint scale = IERC20(token).decimals() - 6; // normalize
             amount /= scale > 0 ? 10 ** scale : 1;
+            sensitive = amount >= 5000000; // $5,000
+            if (sensitive) { // < park the ETH for gas comp...
+                wethVault.deposit(_depositETH(0), address(this)); 
+            }
+        } if (sensitive) { // must subsidise gas cost
+            require(msg.value >= SWAP_COST, "gas");
+            // entering into protected clearing
+            // pipeline: no sandwiches, slower
+            Types.Trade memory current;
+            current.sender = msg.sender;
+            current.token = token;        
             current.amount = amount;
-            V4.pushSwapZeroForOne(current);
+            blockNumber = V4.pushSwap(zeroForOne, 
+                            current, waitable);
+        } else { blockNumber = block.number;
+            // Executes instantly, no batching, 
+            // no sandwich protection...cheaper, 
+            // reliably scalable...suitable for: 
+            // small trades, routine flow, etc.
+            V4.swap(sqrtPriceX96, msg.sender, 
+                zeroForOne, token, amount);
         }
-        _clearSwaps(sqrtPriceX96);
+        _clearSwaps(sqrtPriceX96, price);
+        return blockNumber;
     }
 
     function clearSwaps() external {
         (uint160 sqrtPriceX96,,,) = V4.repack();
-        _clearSwaps(sqrtPriceX96);
+        uint price = getPrice(sqrtPriceX96, false);
+        _clearSwaps(sqrtPriceX96, price);
     }
 
-    function _clearSwaps(uint160 sqrtPriceX96) internal {
+    function _clearSwaps(uint160 sqrtPriceX96, uint price) internal {
         if (lastBlock == block.number) return;
         (Types.Batch memory forZero, 
          Types.Batch memory forOne) = V4.getSwaps(lastBlock);
-        uint price = getPrice(sqrtPriceX96, false);
         uint swapping; uint value; uint remains; 
         uint splitForZero; uint splitForOne;
         uint gotForOne; uint gotForZero;
@@ -249,12 +266,11 @@ contract Auxiliary is Ownable {
                 wethVault.deposit(gotForOne, 
                               address(this));
             }
-        }  
-        if (swapping > 0) {
+        } if (swapping > 0) {
             bytes memory payload = abi.encodeWithSelector(
-             SWAP_SELECTOR, sqrtPriceX96, lastBlock,
-             splitForZero, splitForOne, 
-             gotForZero, gotForOne);
+                SWAP_SELECTOR, sqrtPriceX96, lastBlock,
+                splitForZero, splitForOne, 
+                gotForZero, gotForOne);
 
             uint forGas = _takeWETH(swapping); WETH.withdraw(forGas);
             // because of the way we do this low-level call, our swap entrypoint
@@ -276,7 +292,7 @@ contract Auxiliary is Ownable {
         uint totalValue = FullMath.mulDiv(
                         amount, price, WAD);
 
-        require(totalValue > 50 * WAD);
+        require(totalValue > 500 * WAD, "$500");
         uint took = QUID.take(address(this),
             totalValue / 1e12, address(USDC), false); 
         // TODO as part of take(), it's worthwhile 
@@ -326,7 +342,7 @@ contract Auxiliary is Ownable {
         amount = QUID.deposit(msg.sender, token, amount);
         uint scaled = 18 - IERC20(token).decimals();
         scaled = scaled > 0 ? amount * (10 ** scaled) : amount;
-
+        require(scaled >= 500 * WAD, "$500");
         uint withProfit = scaled + scaled / 42;
         uint inETH = FullMath.mulDiv(WAD,
                         scaled, price);

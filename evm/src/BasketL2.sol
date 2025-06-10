@@ -2,35 +2,29 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+
 import {Router} from  "./Router.sol";
 import {Auxiliary} from  "./Auxiliary.sol";
 
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SortedSetLib} from "./imports/SortedSet.sol";
 import {ERC6909} from "solmate/src/tokens/ERC6909.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
+import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 
-interface IStakeToken is IERC20 { // StkGHO (safety module)
-    function stake(address to, uint256 amount) external;
-    // here the amount is in underlying, not in shares...
-    function redeem(address to, uint256 amount) external;
-    // the amount param is in shares, not underlying...
-    function claimRewards(address to, uint256 amount) external;
-    function previewStake(uint256 assets)
-             external view returns (uint256);
-    function previewRedeem(uint256 shares)
-             external view returns (uint256);
-}
+interface ISCRVOracle { 
+    function pricePerShare(uint ts) 
+    external view returns (uint);
+} // these two Oracle contracts are only used on L2
+import {IDSROracle} from "./imports/IDSROracle.sol";
 
-contract Basket is ERC6909 { // extended
-// for full ERC20 compatibility, batch
-// transferring through helper function
+contract Basket is ERC6909 { // Base
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IERC4626;
     using SortedSetLib for SortedSetLib.Set;
@@ -40,8 +34,10 @@ contract Basket is ERC6909 { // extended
     uint constant WAD = 1e18;
     address[] public stables;
     Auxiliary public AUX; 
-    
+
     Metrics private coreMetrics;
+    IDSROracle internal DSR;
+    ISCRVOracle internal CRV;
     string private _name = "QU!D";
     string private _symbol = "QD";
     address payable public V4;
@@ -49,11 +45,23 @@ contract Basket is ERC6909 { // extended
     struct Metrics {
         uint last; uint total; uint yield;
     }
-    struct Pod { uint shares; uint cash; }
+    // TODO credit can be used to borrow 
+    // stables against stables when Morpho
+    // is launched on Arbitrum and Polygon
+    struct Pod { uint credit; uint cash; }
     mapping(address => Pod) public perVault;
-    mapping(address => bool) public isVault;
     mapping(address => bool) public isStable;
-    mapping(address => address) public vaults;
+
+    address immutable USDC;
+    address immutable DAI;
+    address immutable USDS;
+    address immutable USDE; 
+    address immutable CRVUSD;
+    address immutable SUSDE;
+    address immutable SCRVUSD;
+    address immutable USDCvault;
+    address immutable sUSDSvault;
+    
     mapping(uint => uint) public totalSupplies;
     mapping(address => uint) public totalBalances;
     mapping(address => SortedSetLib.Set) private perMonth;
@@ -125,10 +133,19 @@ contract Basket is ERC6909 { // extended
         }
     }
 
+
     constructor(address _router, address _aux,
-        address[] memory _stables,
-        address[] memory _vaults) { 
+        address usdc, address usdcVault,
+        address usds, address sUSDSvault,
+        address dai, // Morpho vaults ^
+        // LayerZero-bridged tokens:
+        address usde, address crvusd, 
+        address susde, address srcvusd) { 
         _deployed = block.timestamp;
+        USDC = usdc; USDS = usds;
+        sUSDS = sUSDSvault; DAI = dai;
+        USDE = usde; CRVUSD = crvusd;
+        SUSDE = susde; SCRVUSD = srcvusd;
         AUX = Auxiliary(payable(_aux));
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
@@ -137,7 +154,31 @@ contract Basket is ERC6909 { // extended
             isVault[vault] = true; vaults[stable] = vault;
             isStable[stable] = true;
         }   V4 = payable(_router);
+        // the following oracles are needed on L2 in absence of 4626
+        DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); 
+        // 0xEE2816c1E1eed14d444552654Ed3027abC033A36 // <----- Arbitrum
+        CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
+        // 0x3195A313F409714e1f173ca095Dba7BfBb5767F7 // <----- Arbitrum
     }
+    
+    function _getPrice(address token) internal 
+        view returns (uint price) { // L2 only
+        if (token == vaults[stables[5]]) { // SUSDE
+            (, int answer,, uint ts,) = AggregatorV3Interface(
+                    0xdEd37FC1400B8022968441356f771639ad1B23aA).latestRoundData();
+                    // 0x605EA726F0259a30db5b7c9ef39Df9fE78665C44 // ARB
+            price = uint(answer); require(ts > 0 
+                && ts <= block.timestamp, "link");
+            // console.log("SUSDE obtained price", price);
+        } else if (token == vaults[stables[6]]) { // SCRVUSD
+            price = CRV.pricePerShare(block.timestamp);
+            // console.log("SCRVUSD obtained price", price);
+        } else if (token == vaults[stables[3]]) { // SUSDS
+            price = DSR.getConversionRateBinomialApprox() / 1e9;
+            // console.log("SUSDS obtained price", price);
+        }
+        require(price >= WAD, "price");
+    } // function used only on Base...
 
     function get_metrics(bool force)
         public returns (uint, uint) {
@@ -153,40 +194,27 @@ contract Basket is ERC6909 { // extended
         } return (stats.total, stats.yield); // to the Router's owner
     }
 
-    function collect() external {
-        address vault = vaults[
-        stables[stables.length-1]];
-        IStakeToken(vault).claimRewards(
-                    Router(V4).owner(),
-                    type(uint256).max);
-    }
 
-    function get_deposits() public view
-        returns (uint[10] memory amounts) {
-        address vault; uint shares; // 4626
-        uint ghoIndex = stables.length - 1;
-        for (uint i = 0; i < ghoIndex; i++) { 
-            uint multiplier = i > 1 ? 1 : 1e12;
-            uint noTouching = i == 0 ? 
-               AUX.untouchable() : 0;
-            // ^ scale precision for USDC/USDT
-            // because the rest are all 1e18
-            vault = vaults[stables[i]];
-            shares = perVault[vault].shares;
-            if (shares > 0) {
-                shares = (IERC4626(vault).convertToAssets(shares) - noTouching) * multiplier;
-                amounts[i + 1] = shares; amounts[0] += shares; // track total;
-                amounts[9] += FullMath.mulDiv(shares, // < weighted sum of
-                    IERC4626(vault).totalAssets() * multiplier, // APY 
-                    IERC4626(vault).totalSupply()); // for staking...
-            }
-        } vault = vaults[stables[ghoIndex]];
-        shares = IStakeToken(vault).previewRedeem(
-                 IStakeToken(vault).balanceOf(
-                                address(this)));
-        amounts[stables.length] = shares;
-        amounts[0] += shares; // our total
-    }
+    function get_total_deposits
+        (bool usdc) public view
+        // this is only *part* of the captalisation()
+        returns (uint total) { // handle USDC first
+        total += usdc ? IERC4626(USDCvault).maxWithdraw(
+                                          address(this)) * 1e12 : 0;
+        // TODO on Arbitrum there's no Morpho vault yet...
+        // total += perVault[FRAX].debit; // ARB only
+
+        total += perVault[USDE].cash;
+        total += FullMath.mulDiv(_getPrice(SUSDE),
+                    perVault[SUSDE].cash, WAD);
+        total += FullMath.mulDiv(_getPrice(SUSDS),
+                    perVault[SUSDS].cash, WAD);
+        total += perVault[USDS].cash;
+        total += perVault[DAI].cash;
+        total += perVault[CRVUSD].cash;
+        total += FullMath.mulDiv(_getPrice(SCRVUSD),
+                    perVault[SCRVUSD].cash, WAD); 
+    } 
 
     function take(address who, // on whose behalf
         uint amount, address token, bool strict) 
@@ -195,21 +223,18 @@ contract Basket is ERC6909 { // extended
         if (token != address(this)) {
             vault = vaults[token];
             uint max = perVault[vault].cash;
-            // if strict is true, we don't care about
-            // AAVE obligations; we want USDC strictly 
             max -= (token == stables[0] && !strict) ? 
                  AUX.untouchable() : 0;
 
-            if (max >= amount) { // can be covered
-                // wholly in the desired token...
+            if (max >= amount) {
                 return withdraw(who, vault, amount);
-            } else { // < must split the output...
+            } else {
                 max = withdraw(who, vault, max);
                 amount -= max; 
                 if (!strict) {
                     uint scale = 18 - IERC20(token).decimals();
                     if (scale > 0) {
-                        amount *= 10 ** scale;
+                        amount *=  10 ** scale;
                         max *= 10 ** scale;
                     }   sent = max;
                 } else return max;
@@ -228,7 +253,6 @@ contract Basket is ERC6909 { // extended
                 sent += amounts[i] * divisor;
             }
         } vault = vaults[stables[stables.length - 1]];
-
         amounts[ghoIndex] = FullMath.mulDiv(amount, FullMath.mulDiv(
                                 WAD, amounts[ghoIndex], total), WAD);
 
@@ -255,43 +279,34 @@ contract Basket is ERC6909 { // extended
     function deposit(address from,
         address token, uint amount)
         public returns (uint usd) {
-        address GHO = stables[stables.length - 1];
-        address SGHO = vaults[GHO]; address vault;
-        if (isVault[token] && token != SGHO) { 
-            amount = Math.min(
-                IERC4626(token).allowance(from, address(this)),
-                 IERC4626(token).convertToShares(amount));
-            usd = IERC4626(token).convertToAssets(amount);
-                   IERC4626(token).transferFrom(msg.sender,
-                                    address(this), amount);
-            require(usd >= 50 * 
-            (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
-            perVault[token].shares += amount; // comment out above for L2
+       
+        if (isVault[token]) { 
+            // TODO uncomment for L2
+            // uint price = _getPrice(token); 
+            /* amount = FullMath.min(
+                IERC20(token).balanceOf(from),
+                FullMath.mulDiv(amount, WAD, price)
+            ); 
+            usd = FullMath.mulDiv(amount, price, WAD); */
             perVault[token].cash += usd;
         }    
-        else if (isStable[token] || token == SGHO) {
+        else if (isStable[token]) {
             usd = Math.min(amount, 
             IERC20(token).allowance(
                 from, address(this)));
             IERC20(token).transferFrom(
                 from, address(this), usd);
-            require(usd >= 50 * (10 ** 
-                IERC20(token).decimals()), "grant");
             
-            // TODO comment out safety module for L2
-            if (token == GHO) { vault = SGHO;
-                IERC20(token).approve(vault, usd);
-                amount = IStakeToken(vault).previewStake(usd);
-                IStakeToken(vault).stake(address(this), usd);
-            } 
-            else if (token != SGHO) { 
-                vault = vaults[token];
-                IERC20(token).approve(vault, usd);
-                // comment out for L2 (except USDC and USDT)
-                amount = IERC4626(vault).deposit(usd, 
-                                    address(this));
-            } perVault[vault].shares += amount;
-              perVault[vault].cash += usd;
+            require(usd >= 50 * (10 ** 
+            IERC20(token).decimals()), "grant");
+        
+            vault = vaults[token];
+            IERC20(token).approve(vault, usd);
+            // comment out for L2 (except USDC and USDT)
+            amount = IERC4626(vault).deposit(usd, 
+                                address(this));
+            perVault[vault].shares += amount;
+            perVault[vault].cash += usd;
         } else {
             require(false, "unsupported token");
         }
@@ -391,14 +406,17 @@ contract Basket is ERC6909 { // extended
                 balanceOf[from][k] -= amt;
                 if (!burning) {
                     perMonth[to].insert(k);
+                    // ^ this does nothing if
+                    // k is already in sorted
+                    // set for this address
                     balanceOf[to][k] += amt;
                 } else {
                     totalSupplies[k] -= amt;
                 }
                 if (balanceOf[from][k] == 0) {
                     perMonth[from].remove(k);
-                } 
-                amount -= amt;
+                }
+                amount -= amt; 
                 sent += amt;
             }   i -= 1;
         }
@@ -425,6 +443,7 @@ contract Basket is ERC6909 { // extended
         uint oldBalanceFrom = totalBalances[from];
         uint oldBalanceTo = totalBalances[to];
         uint value = _transferHelper(
-                    from, to, amount); return true;
+                from, to, amount);
+       return true;
     }
 }

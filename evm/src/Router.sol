@@ -330,36 +330,21 @@ contract Router is SafeCallback, Ownable {
             position.lower, position.upper)), (BalanceDelta));
     }
 
-    // @dev: returns the block number when the trade will clear, since the result already
-    // clears ony from now till from 93 cents till 1.07 with at least 7 cents APY on Sol,
-    // capped at 7% loss, so that means it makes between 15-30 if dual-staked on Base L1
-    function pushSwapZeroForOne(Types.Trade calldata trade/*, uint cancel*/) onlyAux public 
+    function pushSwap(bool zeroForOne, // < direction of this swap
+        Types.Trade calldata trade, uint waitable) onlyAux public 
         returns (uint currentBlock)  { currentBlock = block.number;
-        Types.Batch storage ourBatch = swapsZeroForOne[currentBlock];
-        Types.Batch memory otherBatch = swapsOneForZero[currentBlock];
-        while (ourBatch.swaps.length + otherBatch.swaps.length > 30) {
+        Types.Batch memory sellETH = swapsZeroForOne[currentBlock];
+        Types.Batch memory buyETH = swapsOneForZero[currentBlock];
+        Types.Batch storage ourBatch; // < will be writing to this
+        while (buyETH.swaps.length + sellETH.swaps.length > 40) {
             currentBlock += 1;
-            ourBatch = swapsZeroForOne[currentBlock];
-            otherBatch = swapsOneForZero[currentBlock];
-        }   // require(cancel > currentBlock - block.number, 
-        // "i do this for us, stuck on the grind, never above ya...");
+            sellETH = swapsZeroForOne[currentBlock];
+            buyETH = swapsOneForZero[currentBlock];
+        } require(waitable >= currentBlock - block.number, "time");
+        ourBatch = zeroForOne ? swapsZeroForOne[currentBlock] : 
+                                swapsOneForZero[currentBlock];
         ourBatch.swaps.push(trade); ourBatch.total += trade.amount;
-    } // 
-
-    // the frontend can store the block when trade will clear if it wants to (optional)
-    // but it's optional from a rust perspecive, can either cancel the push or it won't
-    function pushSwapOneForZero(Types.Trade calldata trade/*, uint cancel*/) onlyAux public {
-        uint currentBlock = block.number;
-        Types.Batch storage ourBatch = swapsOneForZero[currentBlock];
-        Types.Batch memory otherBatch = swapsZeroForOne[currentBlock];
-        while (ourBatch.swaps.length + otherBatch.swaps.length > 30) {
-            currentBlock += 1;
-            ourBatch = swapsOneForZero[currentBlock];
-            otherBatch = swapsZeroForOne[currentBlock];
-        }
-        ourBatch.swaps.push(trade); 
-        ourBatch.total += trade.amount;
-    }
+    } 
 
     function getSwaps(uint whichBlock) public view returns 
         (Types.Batch memory, Types.Batch memory) {
@@ -371,12 +356,19 @@ contract Router is SafeCallback, Ownable {
         uint subtracting = Math.min(PENDING_ETH, howMuch);
         PENDING_ETH -= subtracting; return subtracting;
     }
+
+    function swap(uint160 sqrtPriceX96, address sender, 
+        bool forOne, address token, uint amount) 
+        onlyAux public returns (BalanceDelta delta) {
+        delta = abi.decode(poolManager.unlock(abi.encode(Action.Swap, 
+            sqrtPriceX96, sender, forOne, token, amount)), (BalanceDelta));
+    }
     
-    function swap(uint160 sqrtPriceX96, uint lastBlock, 
+    function batchSwap(uint160 sqrtPriceX96, uint lastBlock, 
         uint splitForZero, uint splitForOne, 
         uint gotForZero, uint gotForOne) 
         onlyAux public returns (BalanceDelta delta) {
-        delta = abi.decode(poolManager.unlock(abi.encode(Action.Swap, 
+        delta = abi.decode(poolManager.unlock(abi.encode(Action.BatchSwap, 
                     sqrtPriceX96, lastBlock, splitForZero, splitForOne, 
                     gotForZero, gotForOne)), (BalanceDelta));
     }
@@ -390,7 +382,20 @@ contract Router is SafeCallback, Ownable {
         }
         Action discriminator = Action(firstByte);
         // ^ similar to Solana program entrypoint
-        if (discriminator == Action.BatchSwap) {
+        if (discriminator == Action.Swap) {
+             (uint160 sqrtPriceX96, address sender, bool forOne,
+             address token, uint amount) = abi.decode(
+                data[32:], (uint160, address,
+                     bool, address, uint));
+            
+            delta = poolManager.swap(VANILLA, IPoolManager.SwapParams({
+                    zeroForOne: forOne, amountSpecified: -int(amount),
+                    sqrtPriceLimitX96: _paddedSqrtPrice(sqrtPriceX96, 
+                                        !forOne, 3000) }), ZERO_BYTES);
+           
+            _handleDelta(delta, true, false, sender, token);
+        } 
+        else if (discriminator == Action.BatchSwap) {
             // first we buy ETH then we sell it
             (uint160 sqrtPriceX96, uint lastBlock,
              uint splitForZero, uint splitForOne,
@@ -406,8 +411,8 @@ contract Router is SafeCallback, Ownable {
                     sqrtPriceLimitX96: _paddedSqrtPrice(sqrtPriceX96, 
                                         false, 3000) }), ZERO_BYTES);
                
-                (, uint delta1) = _handleDelta(delta, true, 
-                                        false, address(0));
+                (, uint delta1) = _handleDelta(delta, true, false, 
+                                        address(0), address(QUID));
                  
                 for (uint i = 0; i < forOne.swaps.length; i++) {
                     amount = FullMath.mulDiv(delta1 + gotForOne, 
@@ -425,8 +430,9 @@ contract Router is SafeCallback, Ownable {
                     sqrtPriceLimitX96: _paddedSqrtPrice(sqrtPriceX96, 
                                         true, 3000) }), ZERO_BYTES);
                 
-                (uint delta0,) = _handleDelta(delta, true, 
-                                        false, address(0));
+                (uint delta0,) = _handleDelta(delta, true, false, 
+                                        address(0), address(QUID));
+                
                 address out; uint scale;
                 for (uint i = 0; i < forZero.swaps.length; i++) {
                     amount = FullMath.mulDiv(delta0 + gotForZero, 
@@ -453,8 +459,9 @@ contract Router is SafeCallback, Ownable {
                 -int(uint(myLiquidity)),
                  tickLower, tickUpper);
 
-            (uint delta0, // who address is irrelevant for this call...
-             uint delta1) = _handleDelta(delta, false, true, address(0));
+            (uint delta0, // who is irrelevant (address(0))
+             uint delta1) = _handleDelta(delta, false, true, 
+                                address(0), address(QUID));
             
             uint eth_fees = uint(int(fees.amount1()));
             uint usd_fees = uint(int(fees.amount0()));
@@ -480,7 +487,8 @@ contract Router is SafeCallback, Ownable {
                             tickUpper, sqrtPriceX96);
             
             // keep and who are irrelevant for this call
-            _handleDelta(delta, true, false, address(0));
+            _handleDelta(delta, true, false,
+                address(0), address(QUID));
         } 
         else if (discriminator == Action.OutsideRange) {
             (address sender, int liquidity, 
@@ -490,7 +498,8 @@ contract Router is SafeCallback, Ownable {
             (delta, ) = _modifyLiquidity(liquidity,
                             tickLower, tickUpper);
 
-            _handleDelta(delta, false, false, sender);
+            _handleDelta(delta, false, false,
+                        sender, address(QUID));
         }
         else if (discriminator == Action.ModLP) {
             (uint160 sqrtPriceX96, uint delta1, uint delta0,
@@ -500,24 +509,31 @@ contract Router is SafeCallback, Ownable {
             delta = _modLP(delta0, delta1, tickLower,
                             tickUpper, sqrtPriceX96);
         
-            _handleDelta(delta, true, 
-                delta0 == 0, sender);
-        }   return abi.encode(delta);
+            _handleDelta(delta, true, delta0 == 0, 
+                            sender, address(QUID));
+        }   
+        return abi.encode(delta);
     }
-
+    
+    // if who is address(0), token irrelevant
     function _handleDelta(BalanceDelta delta, 
-        bool inRange, bool keep, address who) internal 
-        returns (uint delta0, uint delta1) {
+        bool inRange, bool keep, address who, 
+        address token) internal returns 
+        (uint delta0, uint delta1) {
         if (delta.amount0() > 0) {
             delta0 = uint(int(delta.amount0()));
             VANILLA.currency0.take(poolManager,
                 address(this), delta0, false);
+            
             mockUSD.burn(delta0); 
             if (inRange) POOLED_USD -= delta0;
             if (!keep && who != address(0)) {
-                delta0 *=  1e12;
+                uint scale = IERC20(token).decimals() - 6;
+                if (scale > 0) {
+                    delta0 *= 10 ** scale;
+                }
                 require(stdMath.delta(delta0, QUID.take(
-                     who, delta0, address(QUID), false)) <= 5);
+                     who, delta0, token, false)) <= 5); 
             } // keep is for preventing disbursal of $ 
             // when single-sided LPs withdraw their ETH 
         }

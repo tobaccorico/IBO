@@ -148,21 +148,9 @@ contract Deploy is Script {
     // Arbi : 0xc6962004f452be9203591991d15f6b388e09e8d0
     // Base : 0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59
 
-    // Deploy contracts to Polygon
+    // Deploy contracts (Base)
     function run() public {
-        // exclude the ones not available on Polygon
-        STABLECOINS = [ address(USDC), // address(USDT),
-            address(DAI), address(USDS), address(USDE), 
-            address(CRVUSD), address(SUSDE), 
-            address(SCRVUSD), /* address(GHO),
-            address(FRAX), address(SFRAX) */
-        ]; // vaults are only relevant for L1
-         VAULTS = [
-            address(USDCvault), address(sUSDSvault)
-            // address(smokehouseUSDTvault),
-            // address(SFRAX), address(SGHO),
-            // address(SDAI), 
-        ]; 
+        
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
         Router V4router = new Router(poolManager);
@@ -172,7 +160,7 @@ contract Deploy is Script {
             address(gauntletWETHvault), aavePool);
        
         Basket QUID = new Basket(address(V4router),
-            address(AUX), STABLECOINS, VAULTS);
+            address(AUX), , );
 
         V4router.setup(address(QUID),
         address(AUX), address(V3pool));

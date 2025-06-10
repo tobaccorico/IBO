@@ -61,7 +61,6 @@ pub struct Deposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// do you like DAGs? nah, I love fight club, every teardrop is a waterfall in it...
 pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<()> {
     // require_keys_eq!(ctx.accounts.mint.key(), USD_STAR, PithyQuip::InvalidMint);
     // ^ only for deployment, comment out for anchor test --skip-local-validator
