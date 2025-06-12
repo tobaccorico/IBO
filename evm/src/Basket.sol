@@ -41,7 +41,7 @@ contract Basket is ERC6909 { // extended
     address[] public stables;
     Auxiliary public AUX; 
     
-    Metrics private coreMetrics;
+    Metrics public coreMetrics;
     string private _name = "QU!D";
     string private _symbol = "QD";
     address payable public V4;
@@ -51,11 +51,14 @@ contract Basket is ERC6909 { // extended
     }
     struct Pod { uint shares; uint cash; }
     mapping(address => Pod) public perVault;
+    
     mapping(address => bool) public isVault;
     mapping(address => bool) public isStable;
     mapping(address => address) public vaults;
+   
     mapping(uint => uint) public totalSupplies;
     mapping(address => uint) public totalBalances;
+    
     mapping(address => SortedSetLib.Set) private perMonth;
     mapping(address => mapping( // legacy IERC20 version
             address => uint256)) private _allowances;
@@ -71,7 +74,7 @@ contract Basket is ERC6909 { // extended
      */
     function currentMonth() public view returns
         (uint month) { month = (block.timestamp -
-                        _deployed) / 2420000; // ~28 days
+                      _deployed) / 2420000; // ~28 days
     }
     /**
      * @dev Returns the name of our token.
@@ -139,6 +142,9 @@ contract Basket is ERC6909 { // extended
         }   V4 = payable(_router);
     }
 
+    // if force is false we just return
+    // the most recent known metrics 
+    // without recalculating them...
     function get_metrics(bool force)
         public returns (uint, uint) {
         Metrics memory stats = coreMetrics;
@@ -153,6 +159,7 @@ contract Basket is ERC6909 { // extended
         } return (stats.total, stats.yield); // to the Router's owner
     }
 
+    // deployer's take-home...
     function collect() external {
         address vault = vaults[
         stables[stables.length-1]];
@@ -214,14 +221,12 @@ contract Basket is ERC6909 { // extended
                     }   sent = max;
                 } else return max;
             }
-        }
-        uint[10] memory amounts = get_deposits();
-        uint total = amounts[0];
-        uint ghoIndex = stables.length;
+        } uint ghoIndex = stables.length;
+        uint[10] memory amounts = get_deposits();  
         for (uint i = 1; i < ghoIndex; i++) {
             uint divisor = (i - 1) > 1 ? 1 : 1e12;
             amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                    WAD, amounts[i], total), WAD);
+                                WAD, amounts[i], amounts[0]), WAD);
             amounts[i] /= divisor;
             if (amounts[i] > 0) { vault = vaults[stables[i - 1]];
                 amounts[i] = withdraw(who, vault, amounts[i]);
@@ -230,7 +235,7 @@ contract Basket is ERC6909 { // extended
         } vault = vaults[stables[stables.length - 1]];
 
         amounts[ghoIndex] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                WAD, amounts[ghoIndex], total), WAD);
+                            WAD, amounts[ghoIndex], amounts[0]), WAD);
 
         if (amounts[ghoIndex] > 0) {
             // exchange rate is 1:1, but just to be safe we calculate
@@ -238,19 +243,18 @@ contract Basket is ERC6909 { // extended
             require(IStakeToken(vault).previewRedeem(amount) == amounts[ghoIndex], "sgho");
             IStakeToken(vault).redeem(who, amount); sent += amounts[ghoIndex];
         }
-    }  // TODO bonds come with specific redemption features. For example, they can be callable,
-    // whereby the issuer has the right to redeem, or call back the bond prior to its maturity,
-    // or puttable, where bondholders have the right to sell their bonds back to the issuer...
+    }  
+
     function withdraw(address to, address vault, uint amount) internal returns (uint sent) {
         uint sharesWithdrawn = Math.min(IERC4626(vault).balanceOf(address(this)),
                                         IERC4626(vault).convertToShares(amount));
 
         sent = IERC4626(vault).convertToAssets(sharesWithdrawn);
         require(sent == IERC4626(vault).redeem(sharesWithdrawn, to,
-                                            address(this)), "take");
+                                            address(this)), "draw");
         perVault[vault].cash -= sent;
         perVault[vault].shares -= sharesWithdrawn;
-    } // TODO L2 doesn't use 4626
+    }
 
     function deposit(address from,
         address token, uint amount)
@@ -266,7 +270,7 @@ contract Basket is ERC6909 { // extended
                                     address(this), amount);
             require(usd >= 50 * 
             (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
-            perVault[token].shares += amount; // comment out above for L2
+            perVault[token].shares += amount; 
             perVault[token].cash += usd;
         }    
         else if (isStable[token] || token == SGHO) {
@@ -278,7 +282,6 @@ contract Basket is ERC6909 { // extended
             require(usd >= 50 * (10 ** 
                 IERC20(token).decimals()), "grant");
             
-            // TODO comment out safety module for L2
             if (token == GHO) { vault = SGHO;
                 IERC20(token).approve(vault, usd);
                 amount = IStakeToken(vault).previewStake(usd);
@@ -287,11 +290,11 @@ contract Basket is ERC6909 { // extended
             else if (token != SGHO) { 
                 vault = vaults[token];
                 IERC20(token).approve(vault, usd);
-                // comment out for L2 (except USDC and USDT)
                 amount = IERC4626(vault).deposit(usd, 
                                     address(this));
-            } perVault[vault].shares += amount;
-              perVault[vault].cash += usd;
+            } 
+            perVault[vault].shares += amount;
+            perVault[vault].cash += usd;
         } else {
             require(false, "unsupported token");
         }
@@ -323,6 +326,7 @@ contract Basket is ERC6909 { // extended
         address token, uint when) public {
         uint month = Math.max(when,
             currentMonth() + 1);
+            
         if (token == address(this)) {
             require(msg.sender == address(AUX), "403");
             _mint(pledge, month, amount);
@@ -333,9 +337,6 @@ contract Basket is ERC6909 { // extended
 
             uint paid = deposit(pledge, token, depositing);
             (uint total, uint yield) = get_metrics(false);
-            // Note: this feature only really behaves as
-            // expected on L1 and Base, because (for now)
-            // the other venues don't have yield-bearing 
             amount += FullMath.mulDiv(amount * yield,
                     month - currentMonth(), WAD * 12);
 
@@ -358,6 +359,7 @@ contract Basket is ERC6909 { // extended
         } return _transfer(from, to, amount);
     }
 
+    // utility function for redemption (i.e. burn)
     function turn(address from, // whose balance
         uint value) onlyUs public returns (uint sent) {
         uint oldBalanceFrom = totalBalances[from];
@@ -383,6 +385,7 @@ contract Basket is ERC6909 { // extended
             // this may return -1
             matureBatches(batches) :
             int(batches.length - 1);
+
         while (amount > 0 && i >= 0) {
             uint k = batches[uint(i)];
             uint amt = balanceOf[from][k];
@@ -424,7 +427,8 @@ contract Basket is ERC6909 { // extended
         uint amount) internal returns (bool) {
         uint oldBalanceFrom = totalBalances[from];
         uint oldBalanceTo = totalBalances[to];
-        uint value = _transferHelper(
-                    from, to, amount); return true;
+        uint value = _transferHelper(from, 
+                          to, amount); 
+                          return true;
     }
 }

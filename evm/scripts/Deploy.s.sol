@@ -8,7 +8,7 @@ import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 
 import {Auxiliary} from "../src/Auxiliary.sol";
 import {Router} from "../src/Router.sol";
-import {Basket} from "../src/Basket.sol";
+import {BasketL2} from "../src/BasketL2.sol";
 
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
@@ -159,11 +159,15 @@ contract Deploy is Script {
             address(V3pool), address(V3router),
             address(gauntletWETHvault), aavePool);
        
-        Basket QUID = new Basket(address(V4router),
-            address(AUX), , );
-
-        V4router.setup(address(QUID),
-        address(AUX), address(V3pool));
+        Basket QUID = new BasketL2(
+            address(V4router), address(AUX), 
+            address(USDCvault), address(sUSDSvault),
+            address(USDC), address(DAI),
+            address(USDS), address(SUSDS),
+            address(USDE), address(SUSDE), 
+            address(CRVUSD), address(SCRVUSD)
+        );  V4router.setup(address(QUID),
+            address(AUX), address(V3pool));
         
         USDC.transfer(address(AUX), 1000000);
         AUX.setQuid{value: 1 wei}(address(QUID));   

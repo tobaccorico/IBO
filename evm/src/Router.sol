@@ -68,12 +68,12 @@ contract Router is SafeCallback, Ownable {
         OutsideRange
     }
 
+    uint constant WAD = 1e18;
     uint internal PENDING_ETH;
     // ^ single-sided liqudity
     // that is waiting for $
     // before it's deposited
     // into the VANILLA pool
-    
     uint public POOLED_USD;
     // ^ currently "in-range"
     uint public POOLED_ETH;
@@ -85,11 +85,7 @@ contract Router is SafeCallback, Ownable {
     // to measure APY% for:
     uint public USD_FEES;
     uint public ETH_FEES;
-    uint public YIELD; // TODO:
-    // use ring buffer to average
-    // out the yield over a week
-
-    uint constant WAD = 1e18;
+    uint public YIELD; 
     
     bytes internal constant ZERO_BYTES = bytes("");
     constructor(IPoolManager _manager) 
@@ -102,7 +98,7 @@ contract Router is SafeCallback, Ownable {
     
     // must send $1 USDC to address(this) & attach msg.value 1 wei
     function setup(address _quid, address _aux, address _pool)
-        external payable onlyOwner { renounceOwnership(); // ;)
+        external payable onlyOwner { // renounceOwnership();
         // these virtual balances represent assets inside the curve
         mockToken temporaryToken = new mockToken(address(this), 18);
         mockToken tokenTemporary = new mockToken(address(this), 6);
@@ -112,17 +108,18 @@ contract Router is SafeCallback, Ownable {
             mockETH = tokenTemporary; mockUSD = temporaryToken;
         }    
         require(mockUSD.decimals() == 6, "1e6");
-        require(address(QUID) == address(0), "QUID");
-        QUID = Basket(_quid); require(QUID.V4() == 
-                                address(this), "!");
+        require(address(QUID) == address(0), "!");
+        
+        QUID = Basket(_quid);     
         VANILLA = PoolKey({
             currency0: Currency.wrap(address(mockUSD)),
             currency1: Currency.wrap(address(mockETH)),
             fee: 420, tickSpacing: 10,
             hooks: IHooks(address(0))}); 
         AUX = Auxiliary(payable(_aux)); 
-        WETH = WETH9(payable(
-        address(AUX.WETH())));
+        
+        WETH = WETH9(payable(address(AUX.WETH())));
+        require(QUID.V4() == address(this), "?");
 
         (,int24 tick,,,,,) = IUniswapV3Pool(_pool).slot0();
         tick *= AUX.token1isWETH() ? int24(1) : int24(-1);
@@ -198,7 +195,6 @@ contract Router is SafeCallback, Ownable {
         else { LP.fees_eth = eth_fees; LP.fees_usd = usd_fees; }
     } 
 
-     
     function _depositETH(uint amount) internal returns (uint) {
         if (amount > 0) { WETH.transferFrom(msg.sender,
                             address(this), amount);
@@ -209,16 +205,21 @@ contract Router is SafeCallback, Ownable {
         return amount;  
     }
 
+    // this is for single-sided liquidity (ETH deposit)
+    // if you want to deposit dollars, mint with Basket
     function deposit(uint amount) external payable {
         Types.Deposit memory LP = autoManaged[msg.sender];
         amount = _depositETH(amount);
         LP.eth_shares += AUX.putETH(amount);
         uint pooled_eth = POOLED_ETH;
         LP.pooled_eth += amount;
+        
         (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper,) = _repack();
         uint price = AUX.getPrice(sqrtPriceX96, false);
+        
         uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES;
+        
         if (LP.fees_eth > 0 || LP.fees_usd > 0) {
             LP.usd_owed += FullMath.mulDiv((usd_fees - LP.fees_usd),
                                           LP.pooled_eth, pooled_eth);
@@ -301,11 +302,13 @@ contract Router is SafeCallback, Ownable {
         selfManaged[next] = newPosition;
         positions[msg.sender].push(next);
         tokenId = next;
+
         abi.decode(poolManager.unlock(abi.encode(
             Action.OutsideRange, msg.sender, liquidity,
             tickLower, tickUpper)), (BalanceDelta));
     }
 
+    // reclaim liquidity from a self-managed position
     function reclaim(uint id, int percent) external {
         Types.SelfManaged memory position = selfManaged[id];
         require(position.owner == msg.sender, "403");
@@ -330,6 +333,7 @@ contract Router is SafeCallback, Ownable {
             position.lower, position.upper)), (BalanceDelta));
     }
 
+    // this is for batched swaps, which clear through simple ASS...
     function pushSwap(bool zeroForOne, // < direction of this swap
         Types.Trade calldata trade, uint waitable) onlyAux public 
         returns (uint currentBlock)  { currentBlock = block.number;
