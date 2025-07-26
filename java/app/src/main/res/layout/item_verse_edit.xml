@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    app:cardCornerRadius="8dp"
+    app:cardElevation="2dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <!-- Verse Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:id="@+id/tv_verse_number"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Verse 1"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/purple_700" />
+
+            <TextView
+                android:id="@+id/tv_verse_char_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0/140"
+                android:textSize="12sp"
+                android:textColor="@color/teal_700" />
+
+        </LinearLayout>
+
+        <!-- Verse Content -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_verse_lyrics"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Enter your bars here..."
+                android:inputType="textMultiLine"
+                android:lines="3"
+                android:maxLines="4" />
+
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Verse Tips -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="💡 Keep it under 140 chars for Twitter compatibility"
+            android:textSize="10sp"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/teal_700"
+            android:gravity="center" />
+
+    </LinearLayout>
+
+</com.google.android.material.card.MaterialCardView>

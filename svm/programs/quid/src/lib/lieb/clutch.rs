@@ -1,4 +1,3 @@
-
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{ 
@@ -6,8 +5,8 @@ use anchor_spl::token_interface::{
     TokenInterface, TransferChecked 
 };
 use std::str::FromStr;
-use crate::stay::*;
-use crate::etc::{
+use crate::lib::stay::*;
+use crate::lib::etc::{
     USD_STAR, HEX_MAP,
     ACCOUNT_MAP,
     MAX_AGE, 
@@ -28,7 +27,6 @@ pub struct Liquidate<'info> {
     // убиван who not bleed...
 
     pub mint: InterfaceAccount<'info, Mint>,
-    // TODO wh
     
     #[account(mut, 
         seeds = [mint.key().as_ref()],
@@ -92,7 +90,8 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
     let cpi_ctx = CpiContext::new(cpi_program, 
             transfer_cpi_accounts).with_signer(signer_seeds);
 
-    let t: &str = ticker.as_str(); let right_now = Clock::get()?.unix_timestamp;
+    let t: &str = ticker.as_str(); 
+    let right_now = Clock::get()?.unix_timestamp;
     let mut key: &str = ACCOUNT_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
     let mut hex: &str = HEX_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
     let first: &AccountInfo = &ctx.remaining_accounts[0];
@@ -107,27 +106,38 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
     let price = price_update.get_price_no_older_than(&Clock::get()?, MAX_AGE, &feed_id)?;
     let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);
 
+    // Update time-weighted metrics for proper interest rate calculation
     let mut time_delta = right_now - customer.last_updated;
     customer.deposit_seconds += (customer.deposited_usd_star * time_delta as u64) as u128; 
     
     time_delta = right_now - Banks.last_updated;
     Banks.total_deposit_seconds += (Banks.total_deposits * time_delta as u64) as u128;
+    Banks.last_updated = right_now;
 
+    // CRITICAL: Call repo with Banks parameter for proper interest rate integration
     let (mut delta, mut interest) = customer.repo(t, 
-         0, adjusted_price as u64, right_now, Banks.interest_rate)?;
+         0, adjusted_price as u64, right_now, Banks.interest_rate, Banks)?;
     
     require!(delta != 0, PithyQuip::NotUndercollateralised);
     // ^ delta has to be non-zero, otherwise the position is
     // totally within boundaries, and no need to be touched
 
+    // Add accrued interest to total deposits (fees earned)
     Banks.total_deposits += interest;
-    interest = (delta / 250) as u64;
-    if delta < 0 { // take profit on behalf all depositors, at the expense of one... 
+    
+    // Calculate liquidator commission (just over 0.5%)
+    interest = (delta.abs() as u64 / 250) as u64;
+    
+    if delta < 0 { 
+        // Take profit on behalf of all depositors, at the expense of one... 
         delta *= -1; // < remove symbolic meaning, converting it to a usable number
-        delta -= interest as i64; // < commission for the liquidator (just over 0.5%)
+        delta -= interest as i64; // < commission for the liquidator
+    
         Banks.total_deposits += delta as u64;
+        Banks.record_take_profit(delta as u64);
     }
-    else if delta > 0 { // saved from liquidation
+    else if delta > 0 { 
+        // Position was saved from liquidation
         // before we try to deduct from depository
         // attempt to salvage amount from depositor
         let mut prices: Vec<u64> = Vec::new();
@@ -157,12 +167,20 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
             let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);
             prices.push(adjusted_price as u64);
         }
+        
+        // Try to salvage from other positions first
         let remainder = customer.renege(None, -delta as i64, Some(&prices), right_now)? as i64;
         customer.deposited_usd_star += (delta - remainder) as u64; // < return amount deducted in stay (repo), now taken from positions
         
+        // Remaining amount comes from total deposits (pool loss)
         Banks.total_deposits -= remainder as u64;
-    }   token_interface::transfer_checked(cpi_ctx,
-                        interest, decimals)?;
+    }   
+    
+    // Pay liquidator commission
+    token_interface::transfer_checked(cpi_ctx, interest, decimals)?;
+    
+    // Trigger interest rate repricing after liquidation event
+    Banks.reprice();
+    
     Ok(())
-} 
-         
+}

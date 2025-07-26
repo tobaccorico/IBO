@@ -1,4 +1,3 @@
-
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{ 
@@ -6,8 +5,8 @@ use anchor_spl::token_interface::{
     TokenInterface, TransferChecked 
 };
 use std::str::FromStr;
-use crate::stay::*;
-use crate::etc::{
+use crate::lib::stay::*;
+use crate::lib::etc::{
     USD_STAR, HEX_MAP,
     ACCOUNT_MAP,
     MAX_AGE, 
@@ -81,6 +80,7 @@ pub fn handle_out(ctx: Context<Withdraw>,
     let cpi_ctx = CpiContext::new(cpi_program, 
             transfer_cpi_accounts).with_signer(signer_seeds);
     
+    // Update time-weighted metrics for interest rate calculation
     let mut time_delta = right_now - Banks.last_updated;
     Banks.total_deposit_seconds += (time_delta as u64 * Banks.total_deposits) as u128;
     Banks.last_updated = right_now; 
@@ -147,12 +147,11 @@ pub fn handle_out(ctx: Context<Withdraw>,
             require!(amount < 0, PithyQuip::InvalidAmount);
             customer.renege(Some(t), amount, None, right_now)?;
             token_interface::transfer_checked(cpi_ctx, -amount as u64, decimals)?;
-        } else { // amount positive for taking on long exposure, or short TP; negative for 
-            // taking on short exposure, or TP for ^^^^^^^^^^^^
+        } else { // Handle position operations with proper interest rate integration
             let key: &str = ACCOUNT_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
             let hex: &str = HEX_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
             let first: &AccountInfo = &ctx.remaining_accounts[0];
-            let first_key = first.key.to_string(); // `AccountInfo` has the `.key` field for the public key
+            let first_key = first.key.to_string();
             if first_key != key {
                 return Err(PithyQuip::UnknownSymbol.into());
             }
@@ -163,17 +162,20 @@ pub fn handle_out(ctx: Context<Withdraw>,
             let price = price_update.get_price_no_older_than(&Clock::get()?, MAX_AGE, &feed_id)?;
             let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);     
 
+            // CRITICAL: Pass Banks (depository) to repo function for proper interest rate integration
             let (mut delta, mut interest) = customer.repo(t,
-                 amount, adjusted_price as u64, right_now, Banks.interest_rate)?;
-            // ^ call this through external try catch, catch an error, passthrough,
-            // try to borrow dollars against dollars on solend, passthrough again
-            // if succeed, which calls the external try catch again if zero delta? 
+                 amount, adjusted_price as u64, right_now, Banks.interest_rate, Banks)?;
+            // ^ This now properly integrates with the dynamic interest rate system
+            
             if delta != 0 { 
-                if delta < 0 { // TP
+                if delta < 0 { // Take Profit
                     delta *= -1; // < remove symbolic meaning, converting it to a usable number...
                     // interest includes (partially) the pod.pledged (delta is from total_deposits)
                     token_interface::transfer_checked(cpi_ctx, interest as u64, decimals)?;
                     interest = 0; // < so we don't add it back to the total_deposits later
+                    
+                    // This is a significant take profit - will affect interest rates
+                    Banks.record_take_profit(delta as u64);
                 } else { // was auto-protected against liquidation
                     time_delta = right_now - customer.last_updated;
                     customer.deposit_seconds += (time_delta as u64 * 
@@ -183,7 +185,13 @@ pub fn handle_out(ctx: Context<Withdraw>,
                 }   
                 Banks.total_deposits -= delta as u64;
             }   
+            
+            // Add interest back to total deposits (this represents fees earned)
             Banks.total_deposits += interest;
+            
+            // Trigger repricing after any position operation
+            Banks.reprice();
         }   
-    } Ok(())    
+    } 
+    Ok(())    
 }

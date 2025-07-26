@@ -1,10 +1,10 @@
 
 use anchor_lang::prelude::*;
 use lieb::*; mod lieb;
-mod stay; 
-mod etc; 
-// declare_id!("QDgHUZjtccRjKZ63MBvW8uzKR7qcqjpRfGhNSEGfDu9"); // < devnet
-declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet
+mod stay; mod etc; 
+mod math;
+declare_id!("QgV3iN5rSkBU8jaZy8AszQt5eoYwKLmBgXEK5cehAKX"); // < devnet
+// declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet
 
 #[program]
 pub mod quid {

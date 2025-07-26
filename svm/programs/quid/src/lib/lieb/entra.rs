@@ -1,4 +1,3 @@
-
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{
     get_associated_token_address,
@@ -8,8 +7,8 @@ use anchor_spl::token_interface::{
     self, Mint, TokenAccount, 
     TokenInterface, TransferChecked 
 };
-use crate::stay::*;
-use crate::etc::{
+use crate::lib::stay::*;
+use crate::lib::etc::{
     USD_STAR, HEX_MAP,
     MAX_LEN, PithyQuip
 };
