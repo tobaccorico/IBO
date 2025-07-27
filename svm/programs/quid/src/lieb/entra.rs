@@ -1,3 +1,4 @@
+
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{
     get_associated_token_address,
@@ -7,8 +8,8 @@ use anchor_spl::token_interface::{
     self, Mint, TokenAccount, 
     TokenInterface, TransferChecked 
 };
-use crate::lib::stay::*;
-use crate::lib::etc::{
+use crate::stay::*;
+use crate::etc::{
     USD_STAR, HEX_MAP,
     MAX_LEN, PithyQuip
 };
@@ -87,10 +88,8 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
     
     if customer.owner == Pubkey::default() { // init
         customer.owner = ctx.accounts.signer.key();
-    } else { // modifying existing customer account
-        let mut delta = right_now - customer.last_updated;
+    } else { let mut delta = right_now - customer.last_updated;
         customer.deposit_seconds += (customer.deposited_usd_star * delta as u64) as u128; 
-        
         delta = right_now - Banks.last_updated;
         Banks.total_deposit_seconds += (Banks.total_deposits * delta as u64) as u128;
     }
@@ -106,5 +105,6 @@ pub fn handle_in(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<(
     }
     customer.last_updated = right_now;
     Banks.last_updated = right_now;
+    Banks.reprice();
     Ok(())
 }

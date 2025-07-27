@@ -1,8 +1,10 @@
 
 use anchor_lang::prelude::*;
-use lieb::*; mod lieb;
-mod stay; mod etc; 
-mod math;
+use lieb::*; use etc::*; 
+mod lieb; mod stay; 
+mod state; mod casa; 
+mod etc; 
+
 declare_id!("QgV3iN5rSkBU8jaZy8AszQt5eoYwKLmBgXEK5cehAKX"); // < devnet
 // declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet
 
@@ -14,7 +16,7 @@ pub mod quid {
         handle_in(ctx, amount, ticker)
     } 
 
-    // if you're obtaining short leverage, flip the signs respectively for amount; otherwise (long):
+    // if you're obtaining short leverage, flip the Stringsigns respectively for amount; otherwise (long):
     // positive amount = increase exposure; negative = withdraw USD* (or) redeem exposure for USD*
     pub fn withdraw(ctx: Context<Withdraw>, amount: i64, ticker: String, exposure: bool) -> Result<()> {
         handle_out(ctx, amount, ticker, exposure) // no ticker = withdraw collateral from all positions;
@@ -25,4 +27,29 @@ pub mod quid {
     pub fn liquidate(ctx: Context<Liquidate>, ticker: String) -> Result<()> { 
         amortise(ctx, ticker) 
     }
+
+    pub fn create_battle(
+        ctx: Context<CreateBattle>,
+        stake_amount: u64,
+        ticker: String,
+        initial_tweet_uri: String,
+    ) -> Result<()> {
+        create_battle_challenge(ctx, stake_amount, ticker, initial_tweet_uri)
+    }
+    
+    pub fn accept_battle(
+        ctx: Context<AcceptBattle>,
+        ticker: String,
+        defender_tweet_uri: String,
+    ) -> Result<()> {
+        accept_battle_challenge(ctx, ticker, defender_tweet_uri)
+    }
+    
+    pub fn finalize_battle(
+        ctx: Context<FinalizeBattle>,
+        oracle_result: OracleResult, 
+    ) -> Result<()> {
+        finalize_battle_with_oracle(ctx, oracle_result)
+    }
 }
+

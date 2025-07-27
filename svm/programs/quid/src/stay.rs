@@ -2,12 +2,10 @@ use anchor_lang::prelude::*;
 use std::f32::consts::E;
 use core::time;
 
-use crate::lib::etc::{MAX_LEN, 
-    PithyQuip, MAX_AGE};
-
-use crate::lib::math::{
-    update_ema,
-    compute_rate_raw
+use crate::etc::{ 
+    MAX_AGE, update_ema,
+    compute_rate_raw, 
+    PithyQuip, MAX_LEN
 };
 
 #[derive(AnchorSerialize, 
@@ -15,7 +13,7 @@ use crate::lib::math::{
     Clone, Copy, Debug, 
     PartialEq, Eq)]
 pub struct Position {
-    // (e.g. b"GOOGL\0\0\0")
+    // (b"GOOGL\0\0\0")
     pub ticker: [u8; 8], 
     pub pledged: u64,
     pub exposure: i64,
@@ -46,7 +44,8 @@ pub struct Depository {
     pub high_vol_flag: bool,
     // the above influences:
     pub interest_rate: u64,
-    pub total_drawn: u64, // Total amount utilized/at risk
+    pub total_drawn: u64, 
+    // ^ leverage exposure
 } 
 
 impl Depository {
@@ -85,12 +84,9 @@ impl Depository {
         let new_rate = if delta * self.last_rate_change < 0 {
             // Direction changed, dampen the movement
             (self.dyn_rate_bps as i16 + delta / 2) as u16
-        } else { 
-            // Same direction, apply full change
+        } else { // Same direction, apply full change
             raw 
         };
-
-        // Update state
         self.last_rate_change = delta;
         self.dyn_rate_bps = new_rate;
         self.interest_rate = new_rate as u64; // Update the actual interest rate used
@@ -130,6 +126,7 @@ pub struct Depositor {
     pub deposited_usd_star: u64,
     pub deposit_seconds: u128,
     pub last_updated: i64,
+    
     #[max_len(MAX_LEN)]
     pub balances: Vec<Position>,
 }
@@ -574,4 +571,48 @@ impl Depositor {
         // if there is exposure it will automatically shrink (charging %) 
         Ok(amount) // < remainder must be returned if ticker was None...
     }    
+}
+
+pub fn stake_from_depositor_cpi<'info>(
+    depositor_account: &Account<'info, Depositor>,
+    depository_account: &Account<'info, Depository>,
+    amount: u64, use_time_weighted: bool) -> Result<u64> {
+    let stake_value = if use_time_weighted {
+        let share = depositor_account.deposit_seconds
+            .saturating_mul(depository_account.total_deposits as u128)
+            .checked_div(depository_account.total_deposit_seconds)
+            .unwrap_or(0).min(amount as u128) as u64; share
+    } else {
+        let total_pledged: u64 = depositor_account.balances
+            .iter().map(|pos| pos.pledged).sum();
+        
+        total_pledged.min(amount)
+    };  Ok(stake_value)
+}
+
+pub fn deduct_battle_stake<'info>(
+    depositor: &mut Account<'info, Depositor>,
+    depository: &mut Account<'info, Depository>,
+    amount: u64, won: bool) -> Result<()> {
+    if won { // Winner keeps 
+        // their stake
+        return Ok(());
+    }   let now = Clock::get()?.unix_timestamp;    
+    // Loser pays from deposited_usd_star first
+    let deduction = amount.min(depositor.deposited_usd_star);
+    depositor.deposited_usd_star -= deduction;
+
+    // we don't deduct from total_deposits because (like liqudation)
+    // If not enough in deposits, take from positions proportionally
+    let remaining = amount - deduction;
+    if remaining > 0 {
+        let total_pledged: u64 = depositor.balances.iter().map(|p| p.pledged).sum();
+        if total_pledged > 0 {
+            for pos in depositor.balances.iter_mut() {
+                let pos_share = (remaining * pos.pledged) / total_pledged;
+                pos.pledged = pos.pledged.saturating_sub(pos_share);
+            }
+        }
+    } depositor.last_updated = now; depository.last_updated = now;
+    Ok(())
 }

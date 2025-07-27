@@ -1,3 +1,4 @@
+
 [package]
 name = "quid"
 version = "0.1.0"
@@ -7,14 +8,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "lib"]
 name = "quid"
-
-[[bin]]
-name = "quid"
-path = "src/bin/lib.rs"
-
-[[bin]]
-name = "raps"
-path = "src/bin/raps.rs"
 
 [features]
 default = []
@@ -30,5 +23,6 @@ anchor-lang = { version = "0.31.1", features=["init-if-needed"] }
 anchor-spl = "0.31.1"
 pyth-sdk-solana = "0.10.4"
 pyth-solana-receiver-sdk = "0.6.1"
-switchboard-on-demand = "0.5.0"
-switchboard-solana = "0.33.0"
+
+# switchboard-on-demand = "0.5.0"
+# switchboard-solana = "0.33.0"

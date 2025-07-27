@@ -1,19 +1,17 @@
+
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{ 
     self, Mint, TokenAccount, 
     TokenInterface, TransferChecked 
 };
-use std::str::FromStr;
-use crate::lib::stay::*;
-use crate::lib::etc::{
-    USD_STAR, HEX_MAP,
-    ACCOUNT_MAP,
-    MAX_AGE, 
-    PithyQuip
+use crate::stay::*;
+use crate::etc::{
+    USD_STAR, MAX_AGE,
+    HEX_MAP, ACCOUNT_MAP,
+    PithyQuip, fetch_price, 
+    fetch_multiple_prices
 };
-use pyth_solana_receiver_sdk::price_update::{
-         get_feed_id_from_hex, PriceUpdateV2};
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
@@ -92,34 +90,7 @@ pub fn handle_out(ctx: Context<Withdraw>,
         require!(amount < 0, PithyQuip::InvalidAmount);
         if exposure { // first empty credit accounts,
         // prior to withdrawing from Depository...
-            let mut prices: Vec<u64> = Vec::new();
-            let mut hex: &str; let mut key: &str;
-            for i in 0..customer.balances.len() {
-                let bytes = customer.balances[i].ticker.clone();
-                
-                let len = bytes.iter().position(|&b| b == 0)
-                                        .unwrap_or(bytes.len());
-
-                let t = std::str::from_utf8(&bytes[..len])
-                    .expect("Invalid UTF-8");
-                
-                hex = HEX_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
-                key = ACCOUNT_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
-
-                let pubkey = Pubkey::from_str(key).map_err(|_| PithyQuip::UnknownSymbol)?;
-                let acct_info: &AccountInfo = ctx.remaining_accounts
-                    .iter().find(|a| a.key == &pubkey).ok_or(PithyQuip::Tickers)?;
-
-                let mut data: &[u8] = &acct_info.try_borrow_data()?;
-                let price_update = PriceUpdateV2::try_deserialize(&mut data)?;
-                
-                let feed_id = get_feed_id_from_hex(hex)?;
-                let price = price_update.get_price_no_older_than(
-                         &Clock::get()?, MAX_AGE, &feed_id)?;
-                
-                let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);
-                prices.push(adjusted_price as u64);
-            }
+            let prices = fetch_multiple_prices(&customer.balances, ctx.remaining_accounts)?;
             amt = amount.abs() as u64; 
             // amount gets passed into renege as a negative number, but if a remainder is returned it will be positive
             amount = customer.renege(None, amount as i64, Some(&prices), right_now)? as i64;
@@ -149,24 +120,15 @@ pub fn handle_out(ctx: Context<Withdraw>,
             token_interface::transfer_checked(cpi_ctx, -amount as u64, decimals)?;
         } else { // Handle position operations with proper interest rate integration
             let key: &str = ACCOUNT_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
-            let hex: &str = HEX_MAP.get(t).ok_or(PithyQuip::UnknownSymbol)?;
             let first: &AccountInfo = &ctx.remaining_accounts[0];
             let first_key = first.key.to_string();
             if first_key != key {
                 return Err(PithyQuip::UnknownSymbol.into());
             }
-            let mut first_data: &[u8] = &first.try_borrow_data()?;
-            let price_update = PriceUpdateV2::try_deserialize(&mut first_data)?;
-            
-            let feed_id = get_feed_id_from_hex(hex)?;
-            let price = price_update.get_price_no_older_than(&Clock::get()?, MAX_AGE, &feed_id)?;
-            let adjusted_price = (price.price as f64) * 10f64.powi(price.exponent as i32);     
-
-            // CRITICAL: Pass Banks (depository) to repo function for proper interest rate integration
+            let adjusted_price = fetch_price(t, first)?;
             let (mut delta, mut interest) = customer.repo(t,
-                 amount, adjusted_price as u64, right_now, Banks.interest_rate, Banks)?;
+                 amount, adjusted_price, right_now, Banks.interest_rate, Banks)?;
             // ^ This now properly integrates with the dynamic interest rate system
-            
             if delta != 0 { 
                 if delta < 0 { // Take Profit
                     delta *= -1; // < remove symbolic meaning, converting it to a usable number...
@@ -184,14 +146,8 @@ pub fn handle_out(ctx: Context<Withdraw>,
                     customer.last_updated = right_now;
                 }   
                 Banks.total_deposits -= delta as u64;
-            }   
-            
-            // Add interest back to total deposits (this represents fees earned)
-            Banks.total_deposits += interest;
-            
-            // Trigger repricing after any position operation
-            Banks.reprice();
+            }   Banks.total_deposits += interest;
+                Banks.reprice();
         }   
-    } 
-    Ok(())    
+    } Ok(())    
 }
