@@ -8,11 +8,18 @@ pub struct Battle {
     pub challenger: Pubkey,
     pub defender: Pubkey,
     pub stake_amount: u64,
-    // TODO remove tickers they are completely irrelevant
+    
     pub challenger_ticker: [u8; 8], 
     pub defender_ticker: [u8; 8],
+    
+    #[max_len(43)]
     pub challenger_tweet_uri: String, 
     // ^ challenger's initial tweet
+    // maximum length following x.com :
+    // / + 15 max (username) + /status/ + 19 (ID)
+    // = 1 + 15 + 8 + 19 = **43 characters**
+    
+    #[max_len(43)]
     pub defender_tweet_uri: String, 
     // Defender's reply tweet 
     // (must be reply to first
@@ -26,7 +33,8 @@ pub struct Battle {
 #[derive(AnchorSerialize, 
     AnchorDeserialize, 
     Clone, Debug, 
-    PartialEq)]
+    PartialEq,
+    InitSpace)]
 pub enum BattlePhase {
     Open,
     Active,
@@ -40,4 +48,35 @@ pub struct BattleConfig {
     pub min_stake: u64,
     pub battle_timeout: i64,
     // pub oracle_function: Pubkey,
+}
+
+#[derive(AnchorSerialize, 
+    AnchorDeserialize,
+    Clone, Debug)]
+pub struct OracleResult {
+    pub challenger_broke_streak: bool,
+    pub defender_broke_streak: bool,
+    // TODO these don't need to be bools, they can both be 
+    // option strings and stay as none
+    pub broken_at_tweet: Option<String>, 
+    // URI of tweet that broke streak
+}
+
+
+#[error_code]
+pub enum PithyQuip { 
+    #[msg("Imported a ticker that's not yet supported.")]
+    UnknownSymbol,
+
+    #[msg("Not enough to play this game, your stake's too low, what a shame")]
+    InsufficientStake,
+    
+    #[msg("Wrong phase mate, you're way too late, patience is your only fate")]
+    InvalidBattlePhase,
+    
+    #[msg("Not your turn to spit that fire, wait your chance or you'll expire")]
+    NotYourTurn,
+    
+    #[msg("No authority to make that call, you're not the one who rules it all")]
+    UnauthorizedAction,
 }

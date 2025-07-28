@@ -28,15 +28,6 @@ pub const MAX_AGE: u64 = 300;
 pub const USD_STAR: Pubkey = pubkey!("5qj9FAj2jdZr4FfveDtKyWYCnd73YQfmJGkAgRxjwbq6");
 // ^ this is currently a mock token deployed on devnet, for testing purposes only...
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
-pub struct OracleResult {
-    pub challenger_broke_streak: bool,
-    pub defender_broke_streak: bool,
-    // TODO these don't need to be bools, they can both be option strings and stay as none
-    pub broken_at_tweet: Option<String>, // URI of tweet that broke streak
-}
-
-
 #[error_code]
 pub enum PithyQuip { 
     #[msg("If you are who you say you are, then you're not who you are.")]
@@ -83,45 +74,6 @@ pub enum PithyQuip {
     
     #[msg("You must deposit before you can do this.")]
     DepositFirst,
-  
-    #[msg("Not enough to play this game, your stake's too low, what a shame")]
-    InsufficientStake,
-    
-    #[msg("Wrong phase mate, you're way too late, patience is your only fate")]
-    InvalidBattlePhase,
-    
-    #[msg("Not your turn to spit that fire, wait your chance or you'll expire")]
-    NotYourTurn,
-    
-    #[msg("No authority to make that call, you're not the one who rules it all")]
-    UnauthorizedAction,
-}
-
-#[derive(AnchorSerialize, 
-    AnchorDeserialize, 
-    Clone, Debug)]
-pub enum BattleEvent {
-    BattleCreated {
-        battle_id: u64,
-        challenger: Pubkey,
-        stake: u64,
-        ticker: [u8; 8],
-    },
-    BattleAccepted {
-        battle_id: u64,
-        defender: Pubkey,
-        ticker: [u8; 8],
-    },
-    BattleFinalized {
-        battle_id: u64,
-        winner: Pubkey,
-        reason: String,
-    },
-}
-
-pub fn emit_battle_event(event: BattleEvent) -> Result<()> {
-    emit!(event);
-    Ok(())
 }
 
 pub fn fetch_price(ticker: &str, account_info: &AccountInfo) -> Result<u64> {

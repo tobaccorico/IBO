@@ -1,9 +1,8 @@
 
 use anchor_lang::prelude::*;
-use lieb::*; use etc::*; 
-mod lieb; mod stay; 
-mod state; mod casa; 
-mod etc; 
+use lieb::*; mod lieb; mod stay; 
+mod state; use state::*;
+mod casa; mod etc; 
 
 declare_id!("QgV3iN5rSkBU8jaZy8AszQt5eoYwKLmBgXEK5cehAKX"); // < devnet
 // declare_id!("CBk32LDw7RVt1hoCqRx55W5HxJYHzTFFXHkFM7Ue8KeA"); // < localnet

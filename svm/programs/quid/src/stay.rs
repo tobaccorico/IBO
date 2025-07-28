@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 use std::f32::consts::E;
-use core::time;
 
 use crate::etc::{ 
     MAX_AGE, update_ema,
@@ -226,7 +225,7 @@ impl Depositor {
                 } else { // long hasn't exceeded max growth 
                     delta = pod.pledged - pod.pledged / 10;
                     if  delta > exposure && exposure > 0 { 
-                        // exceeding maximum drop of 10% so
+                        // exceeding maximum drop of 10% sostate
                         // first, try to prevent liquidation:
                         delta -= exposure + pod.pledged / 10;
                         delta += delta / 250; // < ликарь cut 

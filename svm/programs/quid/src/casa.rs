@@ -1,8 +1,7 @@
 
 use anchor_lang::prelude::*;
 use crate::state::*;
-use crate::etc::*;
-use crate::stay::{
+use crate::stay::{ 
     stake_from_depositor_cpi, 
     deduct_battle_stake, 
     Depositor, Depository
@@ -14,24 +13,20 @@ use switchboard_on_demand::{
     FunctionRequestAccountData
 }; */
 
-pub fn stake_battle(
-    depositor: &Account<Depositor>,
-    depository: &Account<Depository>,
+pub fn stake_battle<'info>(
+    depositor: &Account<'info, Depositor>,
+    depository: &Account<'info, Depository>,
     battle: &mut Account<Battle>,
-    stake_amount: u64,
+    stake_amount: u64, 
     ticker: [u8; 8],
     is_challenger: bool,
 ) -> Result<()> {
-  
     let position = depositor.balances
-        .iter()
-        .find(|p| p.ticker == ticker)
+        .iter().find(|p| p.ticker == ticker)
         .ok_or(PithyQuip::UnknownSymbol)?;
     
     let available = stake_from_depositor_cpi(
-        depositor,
-        depository,
-        stake_amount,
+        depositor, depository, stake_amount,
         true, // Use time-weighted for fairness
     )?;
     require!(available >= stake_amount, PithyQuip::InsufficientStake);
@@ -50,11 +45,11 @@ pub fn stake_battle(
     Ok(())
 }
 
-pub fn settle_battle(
+pub fn settle_battle<'info>(
     battle: &mut Account<Battle>,
-    challenger_depositor: &mut Account<Depositor>,
-    defender_depositor: &mut Account<Depositor>,
-    depository: &mut Account<Depository>,
+    challenger_depositor: &mut Account<'info, Depositor>,
+    defender_depositor: &mut Account<'info, Depositor>,
+    depository: &mut Account<'info, Depository>,
     winner: Pubkey,
 ) -> Result<()> {
     require!(battle.phase == BattlePhase::Active,

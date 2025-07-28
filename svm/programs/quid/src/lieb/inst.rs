@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use crate::state::*;
 use crate::casa::*;
-use crate::etc::*;
 // use switchboard_on_demand::{FunctionAccountData, FunctionRequestAccountData};
 
 #[derive(Accounts)]
@@ -13,7 +12,7 @@ pub struct CreateBattle<'info> {
         init,
         payer = challenger,
         space = 8 + Battle::INIT_SPACE,
-        seeds = [b"battle", &Clock::get()?.slot.to_le_bytes()],
+        seeds = [b"battle", challenger.key.as_ref()],
         bump
     )]
     pub battle: Account<'info, Battle>,
@@ -94,7 +93,6 @@ pub fn create_battle_challenge(
     let config = &ctx.accounts.config;
     
     require!(stake_amount >= config.min_stake, PithyQuip::InsufficientStake);
-    require!(!initial_tweet_uri.is_empty(), PithyQuip::InvalidAmount);
     
     let mut ticker_bytes = [0u8; 8];
     let ticker_trimmed = ticker.trim();
@@ -104,25 +102,17 @@ pub fn create_battle_challenge(
     battle.battle_id = Clock::get()?.slot;
     battle.created_at = Clock::get()?.unix_timestamp;
     battle.phase = BattlePhase::Open;
-    battle.challenger_tweet_uri = initial_tweet_uri;
+    battle.challenger_tweet_uri = initial_tweet_uri; // TODO validation 43 chars
+    // first step in validation is simply
+    // require!(!initial_tweet_uri.is_empty(), PithyQuip::ValidationError);
     battle.defender_tweet_uri = String::new(); // Empty until defender joins
     
     stake_battle(
         &ctx.accounts.challenger_depositor,
         &ctx.accounts.depository,
-        battle,
-        stake_amount,
-        ticker_bytes,
-        true,
+        battle, stake_amount,
+        ticker_bytes, true,
     )?;
-    
-    emit_battle_event(BattleEvent::BattleCreated {
-        battle_id: battle.battle_id,
-        challenger: ctx.accounts.challenger.key(),
-        stake: stake_amount,
-        ticker: ticker_bytes,
-    })?;
-    
     Ok(())
 }
 
@@ -135,14 +125,20 @@ pub fn accept_battle_challenge(
     
     require!(battle.phase == BattlePhase::Open, PithyQuip::InvalidBattlePhase);
     require!(battle.defender == Pubkey::default(), PithyQuip::InvalidBattlePhase);
-    require!(!defender_tweet_uri.is_empty(), PithyQuip::InvalidAmount);
     
     let mut ticker_bytes = [0u8; 8];
     let ticker_trimmed = ticker.trim();
     let len = ticker_trimmed.len().min(8);
     ticker_bytes[..len].copy_from_slice(&ticker_trimmed.as_bytes()[..len]);
+
+    // TODO validation 43 chars
+    // first step in validation is simply
+    // require!(!defender_tweet_uri.is_empty(), PithyQuip:: );
     
-    // Store defender's tweet URI - oracle will verify it's a reply to challenger's tweet
+    // then also trim
+    
+    // Store defender's tweet URI - oracle will verify 
+    // that it is a reply to challenger's tweet...
     battle.defender_tweet_uri = defender_tweet_uri;
     
     stake_battle(
@@ -153,12 +149,6 @@ pub fn accept_battle_challenge(
         ticker_bytes,
         false,
     )?;
-    
-    emit_battle_event(BattleEvent::BattleAccepted {
-        battle_id: battle.battle_id,
-        defender: ctx.accounts.defender.key(),
-        ticker: ticker_bytes,
-    })?;
     Ok(())
 }
 
@@ -171,7 +161,6 @@ pub fn finalize_battle_with_oracle(
     
     require!(battle.phase == BattlePhase::Active, PithyQuip::InvalidBattlePhase);
     
-    // DUMMY: For now, always assume no one broke streak (triggers coin flip)
     // TODO: Uncomment when Switchboard oracle is integrated
     /*
     // Process oracle result
@@ -194,15 +183,11 @@ pub fn finalize_battle_with_oracle(
         battle.winner.unwrap()
     };
     */
-    
     // DUMMY: Always do coin flip (which currently always picks challenger)
-    break_tie_with_randomness(
-        battle,
-        &ctx.accounts.randomness_account,
-    )?;
+    break_tie_with_randomness( battle,
+        &ctx.accounts.randomness_account)?;
     let winner = battle.winner.unwrap();
-    
-    // Settle stakes
+
     settle_battle(
         battle,
         &mut ctx.accounts.challenger_depositor,
@@ -210,20 +195,6 @@ pub fn finalize_battle_with_oracle(
         &mut ctx.accounts.depository,
         winner,
     )?;
-    
-    emit_battle_event(BattleEvent::BattleFinalized {
-        battle_id: battle.battle_id,
-        winner,
-        reason: "dummy_coin_flip".to_string(), // DUMMY: Always coin flip for now
-        /*
-        reason: if oracle_result.challenger_broke_streak || oracle_result.defender_broke_streak {
-            format!("streak_broken_{:?}", oracle_result.broken_at_tweet)
-        } else {
-            "coin_flip".to_string()
-        },
-        */
-    })?;
-    
     Ok(())
 }
 
