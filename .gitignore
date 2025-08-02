@@ -4,8 +4,6 @@
 /svm/target
 **/test-ledger
 /svm/.anchor
-/react/build
-/react/node_modules
 **/package-lock.json
 **/yarn.lock
 **/*.rs.bk
@@ -17,7 +15,6 @@
 /thuggable/releases/*
 /thuggable/Thuggable.app.app
 /thuggable/Thuggable_apk.apk
-
 /thuggable/Thuggable-app.app
 /thuggable/selfsigned.crt
 /thuggable/selfsigned.key
@@ -31,6 +28,10 @@
 /thuggable/repo-structure.txt
 /thuggable/pepk.jar
 /thuggable/output.zip
+
+/quid.io/build
+/quid.io/react/node_modules
+
 /thuggable/encryption_public_key.pem
 /thuggable/fyne-cross/*
 /thuggable/deplpyment-rpc.info

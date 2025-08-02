@@ -36,8 +36,7 @@ pub struct Battle {
     PartialEq,
     InitSpace)]
 pub enum BattlePhase {
-    Open,
-    Active,
+    Open, Active,
     Completed,
 }
 
@@ -47,21 +46,7 @@ pub struct BattleConfig {
     pub authority: Pubkey,
     pub min_stake: u64,
     pub battle_timeout: i64,
-    // pub oracle_function: Pubkey,
 }
-
-#[derive(AnchorSerialize, 
-    AnchorDeserialize,
-    Clone, Debug)]
-pub struct OracleResult {
-    pub challenger_broke_streak: bool,
-    pub defender_broke_streak: bool,
-    // TODO these don't need to be bools, they can both be 
-    // option strings and stay as none
-    pub broken_at_tweet: Option<String>, 
-    // URI of tweet that broke streak
-}
-
 
 #[error_code]
 pub enum PithyQuip { 

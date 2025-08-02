@@ -147,6 +147,38 @@ func (c *Client) BuildWithdrawInstruction(
 	return solana.NewInstruction(c.programID, accounts, data), nil
 }
 
+func (c *Client) FinalizeBattleWithMPC(
+    ctx context.Context,
+    battleID uint64,
+    challengerBroke bool,
+    defenderBroke bool,
+    challengerSig []byte,
+    defenderSig []byte,
+    judgeSig []byte,
+) (*solana.Transaction, error) {
+    // Build instruction to call finalize_battle_mpc
+    instruction := &Instruction{
+        Program: c.programID,
+        Accounts: []AccountMeta{
+            {PublicKey: battleAccount, IsSigner: false, IsWritable: true},
+            {PublicKey: challengerDepositor, IsSigner: false, IsWritable: true},
+            {PublicKey: defenderDepositor, IsSigner: false, IsWritable: true},
+            {PublicKey: depository, IsSigner: false, IsWritable: true},
+            {PublicKey: config, IsSigner: false, IsWritable: false},
+            {PublicKey: randomnessAccount, IsSigner: false, IsWritable: false},
+        },
+        Data: SerializeFinalizeBattleMPC(
+            challengerBroke,
+            defenderBroke, 
+            challengerSig,
+            defenderSig,
+            judgeSig,
+        ),
+    }
+    
+    return c.buildTransaction(ctx, instruction)
+}
+
 // Helper to encode instruction data
 func encodeDepositData(amount uint64, ticker string) ([]byte, error) {
 	buf := new(binary.Encoder)

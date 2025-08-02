@@ -11,14 +11,16 @@ type Sidebar struct {
 	OnHomeClicked           func()
 	OnSendClicked           func()
 	OnWalletClicked         func()
-	OnAddressBookClicked    func()
-	OnTxHistoryClicked      func()
+	OnExposureClicked       func()
 	OnCalypsoClicked        func()
-	OnConditionalBotClicked func() // New field for Conditional Bot
-	OnHardwareSignClicked   func() // New field for Conditional Bot
+	OnConditionalBotClicked func()
+	OnHardwareSignClicked   func()
 	OnTxInspectorClicked    func()
 	OnMultisigCreateClicked func()
 	OnMultisigInfoClicked   func()
+	OnCasaBattleClicked     func() 
+	OnVotingClicked         func() 
+	OnSelfManagedClicked    func()
 }
 
 func NewSidebar() *Sidebar {
@@ -28,71 +30,147 @@ func NewSidebar() *Sidebar {
 }
 
 func (s *Sidebar) CreateRenderer() fyne.WidgetRenderer {
-	homeBtn := widget.NewButton("Home", func() {
+	// Core features
+	homeBtn := widget.NewButton("🏠 Home", func() {
 		if s.OnHomeClicked != nil {
 			s.OnHomeClicked()
 		}
 	})
-	sendBtn := widget.NewButton("Send", func() {
+	
+	sendBtn := widget.NewButton("💸 Send", func() {
 		if s.OnSendClicked != nil {
 			s.OnSendClicked()
 		}
 	})
-	walletBtn := widget.NewButton("Wallet", func() {
+	
+	walletBtn := widget.NewButton("👛 Wallet", func() {
 		if s.OnWalletClicked != nil {
 			s.OnWalletClicked()
 		}
 	})
-	calypsoBtn := widget.NewButton("Calypso", func() {
+	
+	// Quid Protocol features
+	exposureBtn := widget.NewButton("📊 Exposure", func() {
+		if s.OnExposureClicked != nil {
+			s.OnExposureClicked()
+		}
+	})
+	exposureBtn.Importance = widget.HighImportance
+	
+	// Trading bots
+	calypsoBtn := widget.NewButton("🤖 Calypso", func() {
 		if s.OnCalypsoClicked != nil {
 			s.OnCalypsoClicked()
 		}
 	})
-	conditionalBotBtn := widget.NewButton("Conditional Bot", func() {
+	
+	conditionalBotBtn := widget.NewButton("⚡ Conditional Bot", func() {
 		if s.OnConditionalBotClicked != nil {
 			s.OnConditionalBotClicked()
 		}
 	})
-	hardwareSignBtn := widget.NewButton("Hardware Sign", func() {
+	
+	// Casa Battle (NEW)
+	casaBattleBtn := widget.NewButton("🎤 Casa Battle", func() {
+		if s.OnCasaBattleClicked != nil {
+			s.OnCasaBattleClicked()
+		}
+	})
+	casaBattleBtn.Importance = widget.HighImportance
+	
+	// Governance (NEW)
+	votingBtn := widget.NewButton("🗳️ Voting", func() {
+		if s.OnVotingClicked != nil {
+			s.OnVotingClicked()
+		}
+	})
+	
+	// Tools
+	hardwareSignBtn := widget.NewButton("🔐 Hardware Sign", func() {
 		if s.OnHardwareSignClicked != nil {
 			s.OnHardwareSignClicked()
 		}
 	})
-
-	txInspectorBtn := widget.NewButton("Tx Inspector", func() {
+	
+	txInspectorBtn := widget.NewButton("🔍 Tx Inspector", func() {
 		if s.OnTxInspectorClicked != nil {
 			s.OnTxInspectorClicked()
 		}
 	})
-
-	OnMultisigCreateClickedBtn := widget.NewButton("Squads Create", func() {
+	
+	// Multisig
+	multisigCreateBtn := widget.NewButton("➕ Create Multisig", func() {
 		if s.OnMultisigCreateClicked != nil {
 			s.OnMultisigCreateClicked()
 		}
 	})
-
-	infoBtn := widget.NewButton("Multisig Info", func() {
+	
+	multisigInfoBtn := widget.NewButton("ℹ️ Multisig Info", func() {
 		if s.OnMultisigInfoClicked != nil {
 			s.OnMultisigInfoClicked()
 		}
 	})
-	
-	swapBtn := widget.NewButton("Exposure", func() {
-		if s.OnSwapClicked != nil {
-			s.OnSwapClicked()
+
+	selfManagedBtn := widget.NewButtonWithIcon("Self-Managed", theme.DocumentIcon(), func() {
+		if s.OnSelfManagedClicked != nil {
+			s.OnSelfManagedClicked()
 		}
 	})
 
-	content := container.NewVBox(
+	// Group buttons by category
+	coreSection := container.NewVBox(
+		widget.NewLabelWithStyle("Core", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		homeBtn,
 		sendBtn,
 		walletBtn,
+		widget.NewSeparator(),
+	)
+	
+	quidSection := container.NewVBox(
+		widget.NewLabelWithStyle("Quid Protocol", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		exposureBtn,
+		votingBtn,
+		widget.NewSeparator(),
+	)
+	
+	tradingSection := container.NewVBox(
+		widget.NewLabelWithStyle("Trading", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		calypsoBtn,
 		conditionalBotBtn,
+		widget.NewSeparator(),
+	)
+	
+	socialSection := container.NewVBox(
+		widget.NewLabelWithStyle("Social", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		casaBattleBtn,
+		widget.NewSeparator(),
+	)
+	
+	toolsSection := container.NewVBox(
+		widget.NewLabelWithStyle("Tools", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		hardwareSignBtn,
 		txInspectorBtn,
-		OnMultisigCreateClickedBtn,
-		infoBtn)
+		widget.NewSeparator(),
+	)
+	
+	multisigSection := container.NewVBox(
+		widget.NewLabelWithStyle("Multisig", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		multisigCreateBtn,
+		multisigInfoBtn,
+	)
 
-	return widget.NewSimpleRenderer(content)
+	// Combine all sections
+	content := container.NewVBox(
+		coreSection,
+		quidSection,
+		tradingSection,
+		socialSection,
+		toolsSection,
+		multisigSection,
+	)
+
+	// Wrap in scroll container for smaller screens
+	scroll := container.NewVScroll(content)
+	
+	return widget.NewSimpleRenderer(scroll)
 }

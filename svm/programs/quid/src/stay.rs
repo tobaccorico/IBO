@@ -125,9 +125,11 @@ pub struct Depositor {
     pub deposited_usd_star: u64,
     pub deposit_seconds: u128,
     pub last_updated: i64,
-    
     #[max_len(MAX_LEN)]
     pub balances: Vec<Position>,
+    // TODO support up to 200
+    // if this fits into storage
+    // of a single account...
 }
 
 impl Depositor {    

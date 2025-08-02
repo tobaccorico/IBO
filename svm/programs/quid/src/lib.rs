@@ -44,11 +44,14 @@ pub mod quid {
         accept_battle_challenge(ctx, ticker, defender_tweet_uri)
     }
     
-    pub fn finalize_battle(
+    pub fn finalize_battle_mpc(
         ctx: Context<FinalizeBattle>,
-        oracle_result: OracleResult, 
+        winner_is_challenger: bool,
+        challenger_sig: [u8; 64],
+        defender_sig: [u8; 64],
+        judge_sig: [u8; 64],
     ) -> Result<()> {
-        finalize_battle_with_oracle(ctx, oracle_result)
+        finalize_battle_with_mpc(ctx, winner_is_challenger, challenger_sig, defender_sig, judge_sig)
     }
 }
 
