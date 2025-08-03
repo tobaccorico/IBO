@@ -1,533 +1,631 @@
 #!/bin/bash
-# ------------------------- #
-# Multi-platform builder #
-# ------------------------- #
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
-# Metadata
+
+# Build script for Thuggable multi-platform application
+# This script builds the Go application for multiple platforms including Android
+
+set -e  # Exit on error
+
+# Script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+cd "$SCRIPT_DIR"
+
+# Version configuration
+# Read version from version file or use default
+if [ -f "version.txt" ]; then
+    APP_VERSION=$(cat version.txt | tr -d '\n' | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || echo "1.0.0")
+else
+    APP_VERSION="1.0.0"
+fi
+
+# Build number - can be from CI/CD or local counter
+if [ -f "build_number.txt" ]; then
+    APP_BUILD=$(cat build_number.txt | tr -d '\n')
+    # Increment for next build
+    echo $((APP_BUILD + 1)) > build_number.txt
+else
+    APP_BUILD="1"
+    echo "2" > build_number.txt
+fi
+
+# Application configuration
 APP_NAME="Thuggable"
 APP_ID="com.thuggable.app"
-ICON_FILE="icon.png"
-VERSION="1.0"
-BUILD="1"
-CATEGORY="utilities"
-SRC_DIR="."
+ICON_PATH="icon.png"
 
-# Paths for whisper
-WHISPER_DIR="./third_party/whisper.cpp"
-WHISPER_REPO="https://github.com/ggerganov/whisper.cpp.git"
-MODELS_DIR="./models"
+# Whisper configuration
+WHISPER_MODEL="base.en"
+WHISPER_MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin"
 
-# Logger functions
+# Build configuration
+BUILD_DIR="build"
+THIRD_PARTY_DIR="third_party"
+WHISPER_DIR="${THIRD_PARTY_DIR}/whisper.cpp"
+
+# Android configuration
+ANDROID_MIN_SDK=21
+ANDROID_TARGET_SDK=33
+ANDROID_ARCHS=("armeabi-v7a" "arm64-v8a" "x86" "x86_64")
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging functions
 log_info() {
-echo -e "${GREEN}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
 log_error() {
-echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
+
 log_warn() {
-echo -e "${YELLOW}[WARN]${NC} $1"
-}
-run_or_exit() {
-"$@" 2>&1 || { log_error "Command failed: $*"; exit 1; }
-}
-# Platform detection
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-IS_WINDOWS=false
-IS_MAC=false
-IS_LINUX=false
-[[ "$OS" == "mingw"* || "$OS" == "cygwin"* || "$OS" == "msys"* ]] && IS_WINDOWS=true
-[[ "$OS" == "darwin"* ]] && IS_MAC=true
-[[ "$OS" == "linux"* ]] && IS_LINUX=true
-
-# Detect Linux distribution
-detect_linux_distro() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        DISTRO=$ID
-        DISTRO_LIKE=$ID_LIKE
-    elif [ -f /etc/debian_version ]; then
-        DISTRO="debian"
-    elif [ -f /etc/redhat-release ]; then
-        DISTRO="rhel"
-    else
-        DISTRO="unknown"
-    fi
+    echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# Install Linux dependencies
-install_linux_dependencies() {
-    log_info "Installing Linux dependencies..."
+# Utility functions
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
+get_os() {
+    case "$OSTYPE" in
+        linux*)   echo "linux" ;;
+        darwin*)  echo "darwin" ;;
+        msys*)    echo "windows" ;;
+        cygwin*)  echo "windows" ;;
+        *)        echo "unknown" ;;
+    esac
+}
+
+get_arch() {
+    case "$(uname -m)" in
+        x86_64)   echo "amd64" ;;
+        i686)     echo "386" ;;
+        armv7l)   echo "arm" ;;
+        aarch64)  echo "arm64" ;;
+        *)        echo "unknown" ;;
+    esac
+}
+
+# Dependency checking and installation
+check_dependencies() {
+    log_info "Checking build requirements..."
     
-    detect_linux_distro
+    local missing_deps=()
+    local missing_go_tools=()
     
-    # Check if running with sudo or as root
-    if [ "$EUID" -ne 0 ] && ! sudo -n true 2>/dev/null; then
-        log_warn "This script needs sudo privileges to install dependencies."
-        log_info "Please enter your password when prompted."
+    # Essential tools
+    local essential_tools=("go" "git" "make" "gcc" "cmake")
+    for tool in "${essential_tools[@]}"; do
+        if ! command_exists "$tool"; then
+            missing_deps+=("$tool")
+        fi
+    done
+    
+    # Android specific
+    if [ -z "$ANDROID_HOME" ] && [ -z "$ANDROID_SDK_ROOT" ]; then
+        log_warn "Android SDK not found (ANDROID_HOME or ANDROID_SDK_ROOT not set)"
+        missing_deps+=("android-sdk")
     fi
     
-    case "$DISTRO" in
-        ubuntu|debian|pop|mint)
-            log_info "Detected Debian-based distribution: $DISTRO"
-            
-            # Update package list
-            sudo apt-get update
-            
-            # Install build essentials and dependencies
-            sudo apt-get install -y \
-                build-essential \
-                cmake \
-                make \
-                git \
-                curl \
-                wget \
-                pkg-config \
-                gcc \
-                libgl1-mesa-dev \
-                xorg-dev \
-                libx11-dev \
-                libxcursor-dev \
-                libxrandr-dev \
-                libxinerama-dev \
-                libxi-dev \
-                libxxf86vm-dev \
-                libasound2-dev \
-                libpulse-dev \
-                libjack-dev \
-                portaudio19-dev \
-                libsqlite3-dev \
-                sqlite3 \
-                openjdk-11-jdk \
-                android-tools-adb \
-                android-tools-fastboot \
-                autoconf \
-                automake \
-                libtool \
-                tree
-            
-            # Install Go if not present
-            if ! command -v go >/dev/null 2>&1; then
-                log_info "Installing Go..."
-                wget -q -O go.tar.gz https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
-                sudo tar -C /usr/local -xzf go.tar.gz
-                rm go.tar.gz
-                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-                export PATH=$PATH:/usr/local/go/bin
+    if [ -z "$ANDROID_NDK_HOME" ] && [ -z "$ANDROID_NDK_ROOT" ] && [ -z "$NDK_HOME" ]; then
+        log_warn "Android NDK not found (ANDROID_NDK_HOME, ANDROID_NDK_ROOT, or NDK_HOME not set)"
+        missing_deps+=("android-ndk")
+    fi
+    
+    # Go tools
+    if ! command_exists "fyne"; then
+        missing_go_tools+=("fyne.io/fyne/v2/cmd/fyne@latest")
+    fi
+    
+    # Platform specific
+    local os=$(get_os)
+    case "$os" in
+        linux)
+            # Check for required libraries
+            local required_libs=("libgl1-mesa-dev" "xorg-dev" "libxcursor-dev" "libxrandr-dev" "libxinerama-dev" "libxi-dev")
+            ;;
+        darwin)
+            # macOS specific checks
+            if ! command_exists "brew"; then
+                missing_deps+=("homebrew")
             fi
-            ;;
-            
-        fedora|rhel|centos)
-            log_info "Detected Red Hat-based distribution: $DISTRO"
-            
-            sudo dnf install -y \
-                gcc \
-                gcc-c++ \
-                make \
-                cmake \
-                git \
-                curl \
-                wget \
-                pkg-config \
-                mesa-libGL-devel \
-                libX11-devel \
-                libXcursor-devel \
-                libXrandr-devel \
-                libXinerama-devel \
-                libXi-devel \
-                libXxf86vm-devel \
-                alsa-lib-devel \
-                pulseaudio-libs-devel \
-                jack-audio-connection-kit-devel \
-                portaudio-devel \
-                sqlite-devel \
-                sqlite \
-                java-11-openjdk-devel \
-                autoconf \
-                automake \
-                libtool \
-                tree
-            
-            # Install Go if not present
-            if ! command -v go >/dev/null 2>&1; then
-                log_info "Installing Go..."
-                wget -q -O go.tar.gz https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
-                sudo tar -C /usr/local -xzf go.tar.gz
-                rm go.tar.gz
-                echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-                export PATH=$PATH:/usr/local/go/bin
-            fi
-            ;;
-            
-        arch|manjaro)
-            log_info "Detected Arch-based distribution: $DISTRO"
-            
-            sudo pacman -Syu --noconfirm
-            sudo pacman -S --noconfirm \
-                base-devel \
-                cmake \
-                make \
-                git \
-                curl \
-                wget \
-                pkg-config \
-                go \
-                libgl \
-                xorg-server-devel \
-                libx11 \
-                libxcursor \
-                libxrandr \
-                libxinerama \
-                libxi \
-                libxxf86vm \
-                alsa-lib \
-                pulseaudio \
-                jack2 \
-                portaudio \
-                sqlite \
-                jdk11-openjdk \
-                tree
-            ;;
-            
-        *)
-            log_warn "Unknown distribution: $DISTRO"
-            log_warn "Please install dependencies manually"
             ;;
     esac
     
-    # Install fyne command if not present
-    if ! command -v fyne >/dev/null 2>&1; then
-        log_info "Installing fyne command..."
-        go install fyne.io/fyne/v2/cmd/fyne@latest
+    # Report findings
+    if [ ${#missing_deps[@]} -ne 0 ]; then
+        log_error "Missing required dependencies: ${missing_deps[*]}"
+        log_info "Please install missing dependencies and try again"
         
-        # Add Go bin to PATH if not already there
-        if [[ ":$PATH:" != *":$HOME/go/bin:"* ]]; then
-            echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.bashrc
-            export PATH=$PATH:$HOME/go/bin
-        fi
-    fi
-    
-    # Download and setup Android SDK/NDK if not present
-    if [ -z "$ANDROID_NDK_HOME" ] && [ -z "$ANDROID_NDK_ROOT" ]; then
-        log_info "Setting up Android SDK/NDK..."
+        # Provide installation hints
+        case "$os" in
+            linux)
+                if [ -f /etc/debian_version ]; then
+                    log_info "On Debian/Ubuntu, you can install with:"
+                    log_info "sudo apt-get update && sudo apt-get install -y ${missing_deps[*]}"
+                elif [ -f /etc/redhat-release ]; then
+                    log_info "On RHEL/CentOS/Fedora, you can install with:"
+                    log_info "sudo yum install -y ${missing_deps[*]}"
+                fi
+                ;;
+            darwin)
+                log_info "On macOS, you can install with Homebrew:"
+                log_info "brew install ${missing_deps[*]}"
+                ;;
+        esac
         
-        # Create android directory
-        mkdir -p ~/android-sdk
-        cd ~/android-sdk
-        
-        # Download command line tools
-        if [ ! -d "cmdline-tools" ]; then
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-            unzip -q commandlinetools-linux-9477386_latest.zip
-            mkdir -p cmdline-tools/latest
-            mv cmdline-tools/* cmdline-tools/latest/ 2>/dev/null || true
-            rm commandlinetools-linux-9477386_latest.zip
-        fi
-        
-        # Set up environment
-        export ANDROID_HOME=~/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-        export PATH=$PATH:$ANDROID_HOME/platform-tools
-        
-        # Accept licenses and install NDK
-        yes | sdkmanager --licenses >/dev/null 2>&1 || true
-        sdkmanager "platform-tools" "platforms;android-30" "ndk;25.2.9519653"
-        
-        # Set NDK path
-        export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653
-        
-        # Add to bashrc
-        echo 'export ANDROID_HOME=~/android-sdk' >> ~/.bashrc
-        echo 'export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653' >> ~/.bashrc
-        echo 'export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin' >> ~/.bashrc
-        echo 'export PATH=$PATH:$ANDROID_HOME/platform-tools' >> ~/.bashrc
-        
-        cd - >/dev/null
-        
-        log_info "Android SDK/NDK setup complete"
-    fi
-}
-
-# Check for required tools
-check_requirements() {
-    log_info "Checking build requirements..."
-    
-    local missing=()
-    command -v cmake >/dev/null 2>&1 || missing+=("cmake")
-    command -v make >/dev/null 2>&1 || missing+=("make")
-    command -v go >/dev/null 2>&1 || missing+=("go")
-    command -v fyne >/dev/null 2>&1 || missing+=("fyne")
-    command -v gcc >/dev/null 2>&1 || missing+=("gcc")
-    command -v git >/dev/null 2>&1 || missing+=("git")
-    command -v curl >/dev/null 2>&1 || missing+=("curl")
-    
-    if [ ${#missing[@]} -ne 0 ]; then
-        log_warn "Missing required tools: ${missing[*]}"
-        
-        if $IS_LINUX; then
-            log_info "Attempting to install missing dependencies..."
-            install_linux_dependencies
-            
-            # Re-check after installation
-            missing=()
-            command -v cmake >/dev/null 2>&1 || missing+=("cmake")
-            command -v make >/dev/null 2>&1 || missing+=("make")
-            command -v go >/dev/null 2>&1 || missing+=("go")
-            command -v fyne >/dev/null 2>&1 || missing+=("fyne")
-            
-            if [ ${#missing[@]} -ne 0 ]; then
-                log_error "Still missing tools after installation: ${missing[*]}"
-                exit 1
-            fi
-        else
-            log_error "Please install missing tools and try again"
-            exit 1
-        fi
-    fi
-}
-
-# Download whisper model if not present
-download_whisper_model() {
-    log_info "Checking for whisper model..."
-    mkdir -p "$MODELS_DIR"
-    
-    if [ ! -f "$MODELS_DIR/ggml-base.en.bin" ]; then
-        log_info "Downloading whisper base.en model..."
-        run_or_exit curl -L -o "$MODELS_DIR/ggml-base.en.bin" \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
-    else
-        log_info "Whisper model already present"
-    fi
-}
-
-# Clone or update whisper.cpp
-setup_whisper() {
-    log_info "Setting up whisper.cpp..."
-    
-    if [ -d "$WHISPER_DIR" ]; then
-        log_info "Updating existing whisper.cpp..."
-        cd "$WHISPER_DIR" && git pull && cd - >/dev/null
-    else
-        log_info "Cloning whisper.cpp..."
-        run_or_exit git clone "$WHISPER_REPO" "$WHISPER_DIR"
-    fi
-}
-
-# Build whisper for host platform (needed for CGO)
-build_whisper_host() {
-    log_info "Building whisper.cpp for host platform..."
-    
-    cd "$WHISPER_DIR" || exit 1
-    mkdir -p build-host
-    cd build-host || exit 1
-    
-    run_or_exit cmake ..
-    run_or_exit make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    
-    cd ../../.. || exit 1
-    
-    # Export paths for Go
-    export CGO_CFLAGS="-I$(pwd)/$WHISPER_DIR"
-    export CGO_LDFLAGS="-L$(pwd)/$WHISPER_DIR/build-host"
-    
-    log_info "Whisper host build complete"
-}
-
-# Build whisper for Android
-build_whisper_android() {
-    log_info "Building whisper.cpp for Android..."
-    
-    # Check for Android NDK
-    NDK_PATH="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT}}"
-    if [ -z "$NDK_PATH" ]; then
-        log_error "Android NDK not found. Please set ANDROID_NDK_HOME"
         return 1
     fi
     
-    cd "$WHISPER_DIR" || exit 1
+    # Install Go tools if needed
+    if [ ${#missing_go_tools[@]} -ne 0 ]; then
+        log_info "Installing required Go tools..."
+        for tool in "${missing_go_tools[@]}"; do
+            log_info "Installing $tool..."
+            go install "$tool" || {
+                log_error "Failed to install $tool"
+                return 1
+            }
+        done
+    fi
     
-    # Build for multiple Android architectures
-    for ABI in "armeabi-v7a" "arm64-v8a" "x86" "x86_64"; do
-        log_info "Building for Android $ABI..."
+    log_success "All dependencies satisfied"
+    return 0
+}
+
+# Find Android NDK
+find_android_ndk() {
+    # Check various NDK environment variables
+    local ndk_paths=()
+    
+    [ -n "$ANDROID_NDK_HOME" ] && ndk_paths+=("$ANDROID_NDK_HOME")
+    [ -n "$ANDROID_NDK_ROOT" ] && ndk_paths+=("$ANDROID_NDK_ROOT")
+    [ -n "$NDK_HOME" ] && ndk_paths+=("$NDK_HOME")
+    
+    # Check common locations
+    if [ -n "$ANDROID_HOME" ]; then
+        # Look for NDK in Android SDK
+        if [ -d "$ANDROID_HOME/ndk" ]; then
+            # Find the latest NDK version
+            local latest_ndk=$(ls -1 "$ANDROID_HOME/ndk" 2>/dev/null | sort -V | tail -1)
+            [ -n "$latest_ndk" ] && ndk_paths+=("$ANDROID_HOME/ndk/$latest_ndk")
+        fi
         
-        mkdir -p "build-android-$ABI"
-        cd "build-android-$ABI" || exit 1
-        
-        run_or_exit cmake \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK_PATH/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI="$ABI" \
-            -DANDROID_PLATFORM=android-21 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWHISPER_BUILD_TESTS=OFF \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
-            ..
-        
-        run_or_exit make -j$(nproc 2>/dev/null || echo 4)
-        
-        cd .. || exit 1
+        # Legacy location
+        [ -d "$ANDROID_HOME/ndk-bundle" ] && ndk_paths+=("$ANDROID_HOME/ndk-bundle")
+    fi
+    
+    # Find first valid NDK
+    for ndk in "${ndk_paths[@]}"; do
+        if [ -f "$ndk/build/cmake/android.toolchain.cmake" ]; then
+            echo "$ndk"
+            return 0
+        fi
     done
     
-    cd ../.. || exit 1
-    
-    # Create Android library structure
-    mkdir -p android/libs
-    cp "$WHISPER_DIR"/build-android-*/libwhisper.so android/libs/ 2>/dev/null || true
-    
-    log_info "Whisper Android build complete"
+    return 1
 }
-
-# Build whisper for iOS
-build_whisper_ios() {
-    log_info "Building whisper.cpp for iOS..."
-    
-    cd "$WHISPER_DIR" || exit 1
-    
-    # Use the iOS build script if available
-    if [ -f "build-ios.sh" ]; then
-        run_or_exit ./build-ios.sh
-    else
-        # Manual iOS build
-        mkdir -p build-ios
-        cd build-ios || exit 1
-        
-        run_or_exit cmake \
-            -DCMAKE_TOOLCHAIN_FILE=../cmake/ios.toolchain.cmake \
-            -DPLATFORM=OS64 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWHISPER_BUILD_TESTS=OFF \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
-            ..
-        
-        run_or_exit make -j$(sysctl -n hw.ncpu)
-        
-        cd .. || exit 1
-    fi
-    
-    cd ../.. || exit 1
-    log_info "Whisper iOS build complete"
-}
-
-# Build whisper for Windows
-build_whisper_windows() {
-    log_info "Building whisper.cpp for Windows..."
-    
-    cd "$WHISPER_DIR" || exit 1
-    mkdir -p build-windows
-    cd build-windows || exit 1
-    
-    # Use MinGW or MSVC depending on what's available
-    if command -v mingw32-make >/dev/null 2>&1; then
-        run_or_exit cmake -G "MinGW Makefiles" ..
-        run_or_exit mingw32-make -j$(nproc 2>/dev/null || echo 4)
-    else
-        run_or_exit cmake ..
-        run_or_exit cmake --build . --config Release
-    fi
-    
-    cd ../../.. || exit 1
-    log_info "Whisper Windows build complete"
-}
-
-# Prepare Go modules
-prepare_go_modules() {
-    log_info "Preparing Go modules..."
-    
-    # Add missing dependencies
-    run_or_exit go get github.com/gen2brain/malgo
-    run_or_exit go get github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper
-    run_or_exit go get github.com/kkdai/youtube/v2
-    run_or_exit go get github.com/mattn/go-sqlite3
-    
-    # Tidy modules
-    run_or_exit go mod tidy
-}
-
-# Start
-log_info "🛠  Starting multi-platform build..."
-
-# Check requirements (will auto-install on Linux)
-check_requirements
 
 # Setup whisper.cpp
-setup_whisper
-download_whisper_model
-
-# Build whisper for host first (needed for CGO)
-build_whisper_host
-
-# Prepare Go environment
-prepare_go_modules
-
-# Android build
-if [ -n "${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT}}" ]; then
-    log_info "📦 Building for Android..."
+setup_whisper() {
+    log_info "Setting up whisper.cpp..."
     
-    # Build whisper for Android first
-    build_whisper_android || log_warn "Whisper Android build failed, continuing..."
+    # Create third party directory
+    mkdir -p "$THIRD_PARTY_DIR"
     
-    # Set Android-specific environment
-    export CGO_ENABLED=1
-    export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
-    
-    run_or_exit fyne package --target android --name "${APP_NAME}.apk" --app-id "${APP_ID}" --icon "${ICON_FILE}" --app-version "${VERSION}" --app-build "${BUILD}"
-else
-    log_warn "Skipping Android build - NDK not found"
-fi
-
-# Web build
-log_info "📦 Building for Web..."
-export CGO_ENABLED=0  # Disable CGO for web
-run_or_exit fyne package --target web --app-id "${APP_ID}" --icon "${ICON_FILE}"
-export CGO_ENABLED=1  # Re-enable CGO
-
-# Start local server
-log_info "🌐 Serving WebAssembly (WASM) app on http://localhost:8080 ..."
-fyne serve "$SRC_DIR/wasm" &
-
-# iOS/macOS — skip if not macOS
-if $IS_MAC; then
-    log_info "📦 Building for iOS..."
-    build_whisper_ios || log_warn "Whisper iOS build failed, continuing..."
-    run_or_exit fyne package --target ios --name "${APP_NAME}.app" --app-id "${APP_ID}" --icon "${ICON_FILE}"
-    
-    log_info "📦 Building for macOS..."
-    run_or_exit fyne package --target darwin --name "${APP_NAME}.app" --app-id "${APP_ID}" --icon "${ICON_FILE}"
-    
-    log_info "📦 Building for iOS Simulator..."
-    run_or_exit fyne package --target iossimulator --app-id "${APP_ID}" --icon "${ICON_FILE}"
-else
-    log_info "⚠️ Skipping iOS/macOS builds — not on macOS"
-fi
-
-# Windows — only if on Windows
-if $IS_WINDOWS; then
-    log_info "📦 Building for Windows..."
-    build_whisper_windows || log_warn "Whisper Windows build failed, continuing..."
-    run_or_exit fyne package --target windows --name "${APP_NAME}.exe" --app-id "${APP_ID}" --icon "${ICON_FILE}"
-else
-    log_info "⚠️ Skipping Windows build — not on Windows"
-fi
-
-# Android release packaging
-if [ -n "${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT}}" ]; then
-    log_info "🚀 Packaging release for Android..."
-    run_or_exit fyne release --target android --name "${APP_NAME}.apk" --app-id "${APP_ID}" --icon "${ICON_FILE}" --app-version "${VERSION}" --app-build "${BUILD}" --category "${CATEGORY}"
-fi
-
-# Copy whisper models to output directories
-log_info "📁 Copying whisper models to build outputs..."
-for dir in *.app *.apk wasm; do
-    if [ -e "$dir" ]; then
-        mkdir -p "$dir/models"
-        cp -r "$MODELS_DIR"/* "$dir/models/" 2>/dev/null || true
+    # Clone or update whisper.cpp
+    if [ ! -d "$WHISPER_DIR" ]; then
+        log_info "Cloning whisper.cpp..."
+        git clone https://github.com/ggerganov/whisper.cpp.git "$WHISPER_DIR"
+    else
+        log_info "Updating whisper.cpp..."
+        cd "$WHISPER_DIR"
+        git pull origin master
+        cd - > /dev/null
     fi
-done
+    
+    # Download model if needed
+    local model_dir="$WHISPER_DIR/models"
+    local model_path="$model_dir/ggml-${WHISPER_MODEL}.bin"
+    
+    if [ ! -f "$model_path" ]; then
+        log_info "Downloading whisper ${WHISPER_MODEL} model..."
+        mkdir -p "$model_dir"
+        
+        if command_exists "wget"; then
+            wget -O "$model_path" "$WHISPER_MODEL_URL" || {
+                log_error "Failed to download model"
+                return 1
+            }
+        elif command_exists "curl"; then
+            curl -L -o "$model_path" "$WHISPER_MODEL_URL" || {
+                log_error "Failed to download model"
+                return 1
+            }
+        else
+            log_error "Neither wget nor curl found. Cannot download model."
+            return 1
+        fi
+    else
+        log_info "Whisper model already downloaded"
+    fi
+    
+    return 0
+}
 
-# Tree snapshot (optional)
-log_info "🗂 Snapshotting folder structure (3 levels deep)..."
-tree -L 3 internal go.mod go.sum main.go > folders.txt 2>/dev/null || true
+# Build whisper.cpp for host
+build_whisper_host() {
+    log_info "Building whisper.cpp for host platform..."
+    
+    cd "$WHISPER_DIR"
+    
+    # Clean previous build
+    rm -rf build-host
+    mkdir -p build-host
+    cd build-host
+    
+    # Configure
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DWHISPER_BUILD_EXAMPLES=ON \
+        -DWHISPER_BUILD_TESTS=OFF || {
+        log_error "Failed to configure whisper.cpp"
+        return 1
+    }
+    
+    # Build
+    make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1) || {
+        log_error "Failed to build whisper.cpp"
+        return 1
+    }
+    
+    cd "$SCRIPT_DIR"
+    log_success "Whisper host build complete"
+    return 0
+}
 
-log_info "✅ Build complete."
+# Build whisper.cpp for Android
+build_whisper_android() {
+    log_info "Building whisper.cpp for Android..."
+    
+    # Find NDK
+    local ndk_path=$(find_android_ndk)
+    if [ -z "$ndk_path" ]; then
+        log_error "Cannot find Android NDK"
+        return 1
+    fi
+    
+    log_info "Using Android NDK: $ndk_path"
+    
+    cd "$WHISPER_DIR"
+    
+    # Build for each architecture
+    for arch in "${ANDROID_ARCHS[@]}"; do
+        log_info "Building for Android $arch..."
+        
+        # Clean previous build
+        rm -rf "build-android-$arch"
+        mkdir -p "build-android-$arch"
+        cd "build-android-$arch"
+        
+        # Configure
+        cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE="$ndk_path/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=$arch \
+            -DANDROID_PLATFORM=android-${ANDROID_MIN_SDK} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWHISPER_BUILD_EXAMPLES=OFF \
+            -DWHISPER_BUILD_TESTS=OFF || {
+            log_error "Failed to configure whisper.cpp for $arch"
+            cd ..
+            continue
+        }
+        
+        # Build
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1) || {
+            log_error "Failed to build whisper.cpp for $arch"
+            cd ..
+            continue
+        }
+        
+        cd ..
+    done
+    
+    cd "$SCRIPT_DIR"
+    log_success "Whisper Android build complete"
+    return 0
+}
+
+# Fix for whisper.cpp Go bindings
+# Fix for whisper.cpp Go bindings
+setup_whisper_go_bindings() {
+    log_info "Setting up whisper.cpp Go bindings..."
+    
+    # First, let's find where whisper.h actually is
+    log_info "Searching for whisper.h..."
+    local whisper_header_locations=$(find "${WHISPER_DIR}" -name "whisper.h" -type f 2>/dev/null)
+    
+    if [ -z "$whisper_header_locations" ]; then
+        log_error "whisper.h not found in ${WHISPER_DIR}"
+        log_info "Contents of whisper.cpp directory:"
+        ls -la "${WHISPER_DIR}/"
+        log_info "Looking in subdirectories..."
+        find "${WHISPER_DIR}" -type d -name include
+        find "${WHISPER_DIR}" -type d -name src
+        return 1
+    fi
+    
+    log_info "Found whisper.h at:"
+    echo "$whisper_header_locations"
+    
+    # Get the first location
+    local whisper_header=$(echo "$whisper_header_locations" | head -n1)
+    local whisper_include_dir=$(dirname "$whisper_header")
+    
+    # The whisper.cpp bindings expect the header in the root or include directory
+    # Let's check if we need to copy it
+    if [ ! -f "${WHISPER_DIR}/whisper.h" ]; then
+        log_info "Copying whisper.h to root directory..."
+        cp "$whisper_header" "${WHISPER_DIR}/" || {
+            log_error "Failed to copy whisper.h"
+            return 1
+        }
+    fi
+    
+    # Also check common locations
+    if [ -f "${WHISPER_DIR}/src/whisper.h" ] && [ ! -f "${WHISPER_DIR}/include/whisper.h" ]; then
+        mkdir -p "${WHISPER_DIR}/include"
+        cp "${WHISPER_DIR}/src/whisper.h" "${WHISPER_DIR}/include/"
+    fi
+    
+    # Set CGO flags with multiple include paths
+    export CGO_CFLAGS="-I${WHISPER_DIR} -I${WHISPER_DIR}/include -I${WHISPER_DIR}/src -I${whisper_include_dir}"
+    export CGO_LDFLAGS="-L${WHISPER_DIR}/build-host -lwhisper"
+    
+    # Also check for the compiled library
+    log_info "Checking for libwhisper.so..."
+    local lib_locations=$(find "${WHISPER_DIR}" -name "libwhisper*" -type f 2>/dev/null)
+    if [ -n "$lib_locations" ]; then
+        log_info "Found whisper libraries at:"
+        echo "$lib_locations"
+        
+        # Add all library paths
+        local lib_paths=""
+        while IFS= read -r lib_path; do
+            local lib_dir=$(dirname "$lib_path")
+            lib_paths="$lib_paths -L$lib_dir"
+        done <<< "$lib_locations"
+        
+        export CGO_LDFLAGS="$lib_paths -lwhisper"
+    fi
+    
+    # Set library paths
+    export LD_LIBRARY_PATH="${WHISPER_DIR}/build-host:${LD_LIBRARY_PATH}"
+    export DYLD_LIBRARY_PATH="${WHISPER_DIR}/build-host:${DYLD_LIBRARY_PATH}"
+    
+    # For Go modules
+    export WHISPER_CPP_PATH="${WHISPER_DIR}"
+    
+    log_info "Whisper Go bindings configured"
+    log_info "CGO_CFLAGS: $CGO_CFLAGS"
+    log_info "CGO_LDFLAGS: $CGO_LDFLAGS"
+    
+    return 0
+}
+
+# Build Go application
+build_go_app() {
+    local platform=$1
+    local output_dir="$BUILD_DIR/$platform"
+    
+    log_info "Building Go application for $platform..."
+    
+    # Setup whisper bindings
+    setup_whisper_go_bindings || {
+        log_error "Failed to setup whisper Go bindings"
+        return 1
+    }
+    
+    # Create output directory
+    mkdir -p "$output_dir"
+    
+    case "$platform" in
+        linux)
+            # Build with proper tags and CGO settings
+            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+                go build -tags whisper \
+                -ldflags "-L${WHISPER_DIR}/build-host -lwhisper" \
+                -o "$output_dir/${APP_NAME}" . || {
+                log_error "Failed to build for Linux"
+                
+                # Debug information
+                log_info "Debugging build failure..."
+                log_info "WHISPER_DIR: $WHISPER_DIR"
+                log_info "Looking for libwhisper.so:"
+                find "${WHISPER_DIR}" -name "libwhisper*" -type f
+                
+                return 1
+            }
+            log_success "Linux build complete: $output_dir/${APP_NAME}"
+            ;;
+            
+        windows)
+            # Check for MinGW
+            if command_exists "x86_64-w64-mingw32-gcc"; then
+                CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+                    go build -tags whisper \
+                    -ldflags "-L${WHISPER_DIR}/build-host -lwhisper" \
+                    -o "$output_dir/${APP_NAME}.exe" . || {
+                    log_error "Failed to build for Windows"
+                    return 1
+                }
+                log_success "Windows build complete: $output_dir/${APP_NAME}.exe"
+            else
+                log_warn "MinGW not found, skipping Windows build"
+            fi
+            ;;
+            
+        darwin)
+            if [ "$(get_os)" = "darwin" ]; then
+                CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+                    go build -tags whisper \
+                    -ldflags "-L${WHISPER_DIR}/build-host -lwhisper" \
+                    -o "$output_dir/${APP_NAME}" . || {
+                    log_error "Failed to build for macOS"
+                    return 1
+                }
+                log_success "macOS build complete: $output_dir/${APP_NAME}"
+            else
+                log_warn "Cross-compilation to macOS not supported from $(get_os)"
+            fi
+            ;;
+            
+        android)
+            # Ensure we're in the correct directory
+            cd "$SCRIPT_DIR"
+            
+            # Validate version format
+            if ! [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                log_error "Invalid version format: $APP_VERSION"
+                log_info "Version must be in format X.Y.Z where X, Y, and Z are integers"
+                return 1
+            fi
+            
+            # Build APK using fyne
+            fyne package \
+                --target android \
+                --name "${APP_NAME}.apk" \
+                --appID "$APP_ID" \
+                --icon "$ICON_PATH" \
+                --appVersion "$APP_VERSION" \
+                --appBuild "$APP_BUILD" || {
+                log_error "Failed to build Android APK"
+                return 1
+            }
+            
+            # Move APK to output directory
+            mv "${APP_NAME}.apk" "$output_dir/" || {
+                log_error "Failed to move APK to output directory"
+                return 1
+            }
+            
+            log_success "Android build complete: $output_dir/${APP_NAME}.apk"
+            ;;
+            
+        *)
+            log_error "Unknown platform: $platform"
+            return 1
+            ;;
+    esac
+    
+    return 0
+}
+
+# Main build process
+main() {
+    log_info "🛠  Starting multi-platform build..."
+    log_info "Version: $APP_VERSION, Build: $APP_BUILD"
+    
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Setup Go environment
+    export PATH="$PATH:$(go env GOPATH)/bin"
+    
+    # Download Go dependencies
+    log_info "Downloading Go dependencies..."
+    go mod download || {
+        log_error "Failed to download Go dependencies"
+        exit 1
+    }
+    
+    # Verify Go modules
+    go mod verify || {
+        log_error "Failed to verify Go modules"
+        exit 1
+    }
+    
+    # Setup whisper.cpp
+    if ! setup_whisper; then
+        exit 1
+    fi
+    
+    # Build whisper.cpp for host
+    if ! build_whisper_host; then
+        exit 1
+    fi
+    
+    # Create build directory
+    mkdir -p "$BUILD_DIR"
+    
+    # Build for each platform
+    local platforms=()
+    local os=$(get_os)
+    
+    # Always build for current platform
+    case "$os" in
+        linux)   platforms+=("linux") ;;
+        darwin)  platforms+=("darwin") ;;
+        windows) platforms+=("windows") ;;
+    esac
+    
+    # Add cross-compilation targets if available
+    if [ "$os" = "linux" ]; then
+        # Can build for Windows if MinGW is available
+        command_exists "x86_64-w64-mingw32-gcc" && platforms+=("windows")
+        
+        # Can build for Android if SDK/NDK is available
+        if [ -n "$ANDROID_HOME" ] || [ -n "$ANDROID_SDK_ROOT" ]; then
+            if find_android_ndk > /dev/null; then
+                platforms+=("android")
+            fi
+        fi
+    fi
+    
+    # Build for each platform
+    for platform in "${platforms[@]}"; do
+        log_info "📦 Building for $platform..."
+        
+        # Build whisper.cpp for Android if needed
+        if [ "$platform" = "android" ]; then
+            if ! build_whisper_android; then
+                log_warn "Failed to build whisper.cpp for Android, skipping Android build"
+                continue
+            fi
+        fi
+        
+        # Build Go application
+        if ! build_go_app "$platform"; then
+            log_warn "Failed to build for $platform"
+            continue
+        fi
+    done
+    
+    # Summary
+    log_success "✅ Build complete!"
+    log_info "Build artifacts are in: $BUILD_DIR/"
+    
+    # List built artifacts
+    if [ -d "$BUILD_DIR" ]; then
+        log_info "Built artifacts:"
+        find "$BUILD_DIR" -type f -name "${APP_NAME}*" | while read -r file; do
+            log_info "  - $file"
+        done
+    fi
+    
+    return 0
+}
+
+# Run main function
+main "$@"

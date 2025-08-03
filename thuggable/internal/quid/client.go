@@ -2,29 +2,38 @@ package quid
 
 import (
 	"context"
-	"fmt"
-	"math"
+    "encoding/binary"
+    "fmt"
+    "math/big"
 
 	"github.com/gagliardetto/binary"
 	"github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/programs/system"
+	
 	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
+	"github.com/gagliardetto/solana-go/programs/system"
 )
 
-// Program addresses from the Rust code
+// Program addresses from the svm/programs/quid/src/lib.rs
 var (
 	QuidProgramID = solana.MustPublicKeyFromBase58("QgV3iN5rSkBU8jaZy8AszQt5eoYwKLmBgXEK5cehAKX") // devnet
 	USDStarMint   = solana.MustPublicKeyFromBase58("5qj9FAj2jdZr4FfveDtKyWYCnd73YQfmJGkAgRxjwbq6") // mock on devnet
 	
-	// Supported assets from etc.rs
+	// Supported assets from svm/programs/quid/src/etc.rs
 	SupportedAssets = map[string]AssetInfo{
 		"XAU": {Symbol: "XAU", Decimals: 6},
 		"BTC": {Symbol: "BTC", Decimals: 8},
 		"SOL": {Symbol: "SOL", Decimals: 9},
-		"JUP": {Symbol: "JUP", Decimals: 6},
-		"JTO": {Symbol: "JTO", Decimals: 9},
 	}
 )
+
+type BattleID uint64
+
+func (b BattleID) Bytes() []byte {
+    buf := make([]byte, 8)
+    binary.LittleEndian.PutUint64(buf, uint64(b))
+    return buf
+}
 
 type AssetInfo struct {
 	Symbol   string
@@ -32,24 +41,203 @@ type AssetInfo struct {
 }
 
 type Client struct {
-    endpoint  string
     rpcClient *rpc.Client
-    wallet    string
+    wallet    solana.PrivateKey
     programID solana.PublicKey
 }
 
-func NewClient(rpcURL string) *Client {
-	return &Client{
-		rpc:       rpc.New(rpcURL),
-		programID: QuidProgramID,
-	}
+type BattleState struct {
+    ID          uint64
+    Creator     solana.PublicKey
+    Opponent    solana.PublicKey
+    Status      uint8
+    Winner      solana.PublicKey
 }
 
-// Helper to convert uint64 to bytes
-func (id uint64) Bytes() []byte {
-    b := make([]byte, 8)
-    binary.LittleEndian.PutUint64(b, id)
-    return b
+func DeserializeBattleState(data []byte, state *BattleState) error {
+    if len(data) < 105 { // 8 + 32 + 32 + 1 + 32
+        return fmt.Errorf("insufficient data for battle state")
+    }
+    
+    state.ID = binary.LittleEndian.Uint64(data[0:8])
+    copy(state.Creator[:], data[8:40])
+    copy(state.Opponent[:], data[40:72])
+    state.Status = data[72]
+    copy(state.Winner[:], data[73:105])
+    
+    return nil
+}
+
+
+func (c *Client) JoinBattle(ctx context.Context, battleID uint64) (*solana.Signature, error) {
+    // Instruction discriminator for join_battle
+    discriminator := []byte{2} // Assuming 2 is the join_battle instruction
+    
+    // Create battle ID bytes
+    battleIDBytes := make([]byte, 8)
+    binary.LittleEndian.PutUint64(battleIDBytes, battleID)
+    
+    // Combine discriminator and battle ID
+    data := append(discriminator, battleIDBytes...)
+    
+    // Derive battle PDA
+    seeds := [][]byte{
+        []byte("battle"),
+        battleIDBytes,
+    }
+    battlePDA, _, err := solana.FindProgramAddress(seeds, c.programID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to derive battle PDA: %w", err)
+    }
+    
+    // Build instruction
+    instruction := &solana.GenericInstruction{
+        ProgID: c.programID,
+        AccountValues: solana.AccountMetaSlice{
+            {PublicKey: c.wallet.PublicKey(), IsSigner: true, IsWritable: true},
+            {PublicKey: battlePDA, IsSigner: false, IsWritable: true},
+        },
+        DataBytes: data,
+    }
+    
+    // Get recent blockhash
+    recent, err := c.rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentFinalized)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get recent blockhash: %w", err)
+    }
+    
+    // Build and sign transaction
+    tx, err := solana.NewTransaction(
+        []solana.Instruction{instruction},
+        recent.Value.Blockhash,
+        solana.TransactionPayer(c.wallet.PublicKey()),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to create transaction: %w", err)
+    }
+    
+    _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+        if key.Equals(c.wallet.PublicKey()) {
+            return &c.wallet
+        }
+        return nil
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to sign transaction: %w", err)
+    }
+    
+    // Send transaction
+    sig, err := c.rpcClient.SendTransactionWithOpts(
+        ctx,
+        tx,
+        rpc.TransactionOpts{
+            SkipPreflight: false,
+            PreflightCommitment: rpc.CommitmentFinalized,
+        },
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to send transaction: %w", err)
+    }
+    
+    return &sig, nil
+}
+
+func (c *Client) CreateBattle(ctx context.Context, battleID BattleID) (*solana.Signature, error) {
+    // Get recent blockhash
+    recent, err := c.rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentFinalized)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get recent blockhash: %w", err)
+    }
+    
+    // Build instruction
+    instruction := solana.NewInstruction(
+        c.programID,
+        solana.AccountMetaSlice{
+            {PublicKey: c.wallet.PublicKey(), IsSigner: true, IsWritable: true},
+        },
+        battleID.Bytes(),
+    )
+    
+    // Build transaction
+    tx, err := solana.NewTransaction(
+        []solana.Instruction{instruction},
+        recent.Value.Blockhash,
+        solana.TransactionPayer(c.wallet.PublicKey()),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to create transaction: %w", err)
+    }
+    
+    // Sign transaction
+    _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+        if key.Equals(c.wallet.PublicKey()) {
+            return &c.wallet
+        }
+        return nil
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to sign transaction: %w", err)
+    }
+    
+    // Send transaction
+    sig, err := c.rpcClient.SendTransactionWithOpts(
+        ctx,
+        tx,
+        rpc.TransactionOpts{
+            SkipPreflight: false,
+            PreflightCommitment: rpc.CommitmentFinalized,
+        },
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to send transaction: %w", err)
+    }
+    
+    return &sig, nil
+}
+
+func (c *Client) GetBattleState(ctx context.Context,
+	battleID BattleID) (*BattleState, error) {
+   
+    seeds := [][]byte{
+        []byte("battle"),
+        battleID.Bytes(),
+    }
+    
+    battlePDA, _, err := solana.FindProgramAddress(seeds, c.programID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to derive battle PDA: %w", err)
+    }
+    
+    account, err := c.rpcClient.GetAccountInfo(ctx, battlePDA)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get battle account: %w", err)
+    }
+    
+    var state BattleState
+    if err := DeserializeBattleState(account.Value.Data.GetBinary(), &state); err != nil {
+        return nil, fmt.Errorf("failed to deserialize battle state: %w", err)
+    }
+    
+    return &state, nil
+}
+
+func NewClient(rpcURL string,
+	walletKey string, programID string) (*Client, error) {
+    wallet, err := solana.PrivateKeyFromBase58(walletKey)
+    if err != nil {
+        return nil, fmt.Errorf("invalid wallet key: %w", err)
+    }
+ 
+    program, err := solana.PublicKeyFromBase58(programID)
+    if err != nil {
+        return nil, fmt.Errorf("invalid program ID: %w", err)
+    }
+    
+    return &Client{
+        rpcClient: rpc.New(rpcURL),
+        wallet:    wallet,
+        programID: program,
+    }, nil
 }
 
 // GetDepositorAccount derives the PDA for a user's depositor account

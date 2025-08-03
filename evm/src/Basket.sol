@@ -17,17 +17,16 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
 
 interface IStakeToken is IERC20 { // StkGHO (safety module)
-    function stake(address to, uint256 amount) external;
+    function stake(address to, uint amount) external;
     // here the amount is in underlying, not in shares...
-    function redeem(address to, uint256 amount) external;
+    function redeem(address to, uint amount) external;
     // the amount param is in shares, not underlying...
-    function claimRewards(address to, uint256 amount) external;
-    function previewStake(uint256 assets)
-             external view returns (uint256);
-    function previewRedeem(uint256 shares)
-             external view returns (uint256);
+    function claimRewards(address to, uint amount) external;
+    function previewStake(uint assets)
+             external view returns (uint);
+    function previewRedeem(uint shares)
+             external view returns (uint);
 }
-
 
 contract Basket is ERC6909 { // extended
 // for full ERC20 compatibility, batch
@@ -62,22 +61,20 @@ contract Basket is ERC6909 { // extended
     
     mapping(address => SortedSetLib.Set) private perMonth;
     mapping(address => mapping( // legacy IERC20 version
-            address => uint256)) private _allowances;
+            address => uint)) private _allowances;
     
-    mapping(address => uint256) public currentConcentrations;
-    mapping(address => uint256) public targetConcentrations;
+    mapping(address => uint) public currentConcentrations;
+    mapping(address => uint) public targets;
     
-    // included to avoid building propeller indexer 
-    mapping(address => uint256) public lastVoteEpoch;
-    mapping(uint256 => mapping(uint256 => uint256[])) public epochVotes; 
+    mapping(address => uint) public lastVoteEpoch;
+    mapping(uint => mapping(uint => uint[])) public epochVotes; 
     // epoch => stableIndex => array of vote values
-    mapping(uint256 => uint256[]) public epochVoteWeights; 
-    // epoch => array of weights
-    mapping(uint256 => uint256) public epochTotalWeight;
+    mapping(uint => uint[]) public epochVoteWeights; 
+    mapping(uint => uint) public epochTotalWeight;
     
-    mapping(uint256 => mapping(uint256 => uint256)) public medianSum; 
+    mapping(uint => mapping(uint => uint)) public medianSum; 
     // epoch => stableIndex => running sum
-    mapping(uint256 => mapping(uint256 => uint256)) public medianK; 
+    mapping(uint => mapping(uint => uint)) public medianK; 
     // epoch => stableIndex => current median position
 
     modifier onlyUs { 
@@ -86,38 +83,24 @@ contract Basket is ERC6909 { // extended
                 sender == address(AUX), "403"); _;
     }
 
-    /**
-     * @dev Returns the current reading of our internal clock.
-     */
     function currentMonth() public view returns
         (uint month) { month = (block.timestamp -
                       _deployed) / 2420000; // ~28 days
     }
-    /**
-     * @dev Returns the name of our token.
-     */
+ 
     function name() public view virtual returns (string memory) {
         return _name;
     }
 
-    /**
-     * @dev Returns the symbol of our token.
-     */
     function symbol() public view virtual returns (string memory) {
         return _symbol;
     }
 
-    /**
-     * @dev Tokens usually opt for a value of 18, 
-     * imitating the relationship between Ether and Wei. 
-     */
     function decimals() public view virtual returns (uint8) {
         return 18;
     }
 
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
+
     function totalSupply() public 
         view returns (uint) {
         return _totalSupply;
@@ -125,12 +108,11 @@ contract Basket is ERC6909 { // extended
 
     function transfer(address to, // receiver
         uint amount) public returns (bool) {
-        // TODO compute true based on some timer?
         return _transfer(msg.sender, to, amount, true);
     }
 
     function approve(address spender, 
-        uint256 value) public returns (bool) {
+        uint value) public returns (bool) {
         require(spender != address(0), "suspender");
         _allowances[msg.sender][spender] = value;
         return true;
@@ -153,9 +135,12 @@ contract Basket is ERC6909 { // extended
         AUX = Auxiliary(payable(_aux));
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
+        uint256 equalWeight = WAD / _stables.length;
         for (uint i = 0; i < _vaults.length; i++) {
             stable = _stables[i]; vault = _vaults[i];
             isVault[vault] = true; vaults[stable] = vault;
+            currentConcentrations[stable] = equalWeight;
+            targets[stable] = equalWeight;
             isStable[stable] = true;
         }   V4 = payable(_router);
     }
@@ -183,7 +168,7 @@ contract Basket is ERC6909 { // extended
         stables[stables.length-1]];
         IStakeToken(vault).claimRewards(
                     Router(V4).owner(),
-                    type(uint256).max);
+                    type(uint).max);
     }
 
     function get_deposits() public view
@@ -213,34 +198,39 @@ contract Basket is ERC6909 { // extended
         amounts[0] += shares; // our total
     }
 
-    function take(address who, // on whose behalf
-        uint amount, address token, bool strict) 
-        public onlyUs returns (uint sent) { 
-        address vault;
+    function take(address who, uint amount, 
+        address token, bool strict) public
+        onlyUs returns (uint sent) { 
+        address vault; // ERC4626...
         if (token != address(this)) {
             vault = vaults[token];
             uint max = perVault[vault].cash;
             // if strict is true, we don't care about
             // AAVE obligations; we want USDC strictly 
             max -= (token == stables[0] && !strict) ? 
-                 AUX.untouchable() : 0;
+                 AUX.untouchable() : 0; // bonded...
 
-            if (max >= amount) { // can be covered
-                // wholly in the desired token...
-                return withdraw(who, vault, amount);
-            } else { // < must split the output...
-                max = withdraw(who, vault, max);
-                amount -= max; 
+            if (max >= amount) { // can be covered wholly
+                uint withdrawn = withdraw(who, vault, amount);
+                return FullMath.mulDiv(withdrawn, WAD - getFee(
+                                    token, false, amount), WAD);
+            } 
+            else { uint withdrawn = withdraw(who, vault, max);
+                sent = FullMath.mulDiv(withdrawn, WAD - getFee(
+                                        token, false, max), WAD);
+                amount -= withdrawn;
                 if (!strict) {
                     uint scale = 18 - IERC20(token).decimals();
                     if (scale > 0) {
                         amount *= 10 ** scale;
-                        max *= 10 ** scale;
-                    }   sent = max;
-                } else return max;
+                        sent *= 10 ** scale;
+                    }  
+                } else { return sent; }
             }
-        } uint ghoIndex = stables.length;
-        uint[10] memory amounts = get_deposits();  
+        } 
+        uint[10] memory amounts = get_deposits(); 
+        uint ghoIndex = stables.length; sent = 0;
+        
         for (uint i = 1; i < ghoIndex; i++) {
             uint divisor = (i - 1) > 1 ? 1 : 1e12;
             amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
@@ -262,7 +252,7 @@ contract Basket is ERC6909 { // extended
             IStakeToken(vault).redeem(who, amount); sent += amounts[ghoIndex];
         }
     }  
-
+   
     function withdraw(address to, address vault, uint amount) internal returns (uint sent) {
         uint sharesWithdrawn = Math.min(IERC4626(vault).balanceOf(address(this)),
                                         IERC4626(vault).convertToShares(amount));
@@ -279,27 +269,42 @@ contract Basket is ERC6909 { // extended
         public returns (uint usd) {
         address GHO = stables[stables.length - 1];
         address SGHO = vaults[GHO]; address vault;
-        if (isVault[token] && token != SGHO) { 
-            amount = Math.min(
-                IERC4626(token).allowance(from, address(this)),
-                 IERC4626(token).convertToShares(amount));
+        if (isVault[token] && token != SGHO) {
+            uint allowed = IERC4626(token).allowance(from, address(this));
+            amount = Math.min(allowed, IERC4626(token).convertToShares(amount));
             usd = IERC4626(token).convertToAssets(amount);
-                   IERC4626(token).transferFrom(msg.sender,
-                                    address(this), amount);
+            uint feeInShares = FullMath.mulDiv(amount,
+                 getFee(token, true, usd), WAD);
+            
+            uint totalShares = amount + feeInShares;
+            require(totalShares <= allowed, 
+                                "allowance");
+
+            IERC4626(token).transferFrom(msg.sender,
+                        address(this), totalShares);
+            
             require(usd >= 50 * 
             (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
-            perVault[token].shares += amount; 
+            perVault[token].shares += amount; // Not totalShares!
             perVault[token].cash += usd;
         }    
         else if (isStable[token] || token == SGHO) {
-            usd = Math.min(amount, 
-            IERC20(token).allowance(
-                from, address(this)));
-            IERC20(token).transferFrom(
-                from, address(this), usd);
+            uint allowed = IERC20(token).allowance(
+                                from, address(this));
+            usd = Math.min(amount, allowed);
+            uint fee = getFee(token, true, usd);
+            uint totalNeeded = FullMath.mulDiv(usd, 
+                                WAD + fee, WAD);
+            
+            require(totalNeeded <= allowed, 
+            "insufficient allowance for fee");
+            
+            IERC20(token).transferFrom(from, 
+                address(this), totalNeeded);                
+
             require(usd >= 50 * (10 ** 
                 IERC20(token).decimals()), "grant");
-            
+
             if (token == GHO) { vault = SGHO;
                 IERC20(token).approve(vault, usd);
                 amount = IStakeToken(vault).previewStake(usd);
@@ -315,12 +320,12 @@ contract Basket is ERC6909 { // extended
             perVault[vault].cash += usd;
         } else {
             require(false, "unsupported token");
-        }
+        }  
     }
 
     // overriding standard 6909 code
     function _mint(address receiver,
-        uint256 id, uint256 amount
+        uint id, uint amount
     ) internal override {
         _totalSupply += amount; 
         totalSupplies[id] += amount;
@@ -331,10 +336,14 @@ contract Basket is ERC6909 { // extended
 
         emit Transfer(msg.sender,
             address(0), receiver,
-            id, amount);
-    }
+            id, amount); // TODO 404
+    } // what they're for SIC
+    // WAD therefore, Y
+    // series sony vaio
+    // pink sheets music
+    // cyan samsung a16z
 
-    /**
+    /** TODO can reutrn new total 
      * @param pledge is on whose behalf...
      * @param amount is the amount to mint
      * @param token is what will be bonded
@@ -355,10 +364,9 @@ contract Basket is ERC6909 { // extended
 
             uint paid = deposit(pledge, token, depositing);
             (uint total, uint yield) = get_metrics(false);
-            amount += FullMath.mulDiv(amount * yield,
-                    month - currentMonth(), WAD * 12);
-
-            _mint(pledge, month, amount);
+            paid += FullMath.mulDiv(paid * yield, month 
+                            - currentMonth(), WAD * 12);
+                             _mint(pledge, month, paid);
         }
     } 
 
@@ -370,12 +378,11 @@ contract Basket is ERC6909 { // extended
             if (to == V4) {
                 require(msg.sender == V4, "403");
             }
-            uint256 allowed = _allowances[from][msg.sender];
-            if (allowed != type(uint256).max) {
+            uint allowed = _allowances[from][msg.sender];
+            if (allowed != type(uint).max) {
                 _allowances[from][msg.sender] = allowed - amount;
             }
         } return _transfer(from, to, amount, true);
-        // TODO compute true based on some timer?
     }
 
     // utility function for redemption (i.e. burn)
@@ -454,87 +461,79 @@ contract Basket is ERC6909 { // extended
         }
     }
 
-    // Voting with weighted median computation
-    function vote(uint256[] calldata targets) external {
-        require(targets.length == stables.length, "Target mismatch");
-        uint256 epoch = block.timestamp / 1 weeks;
-        require(lastVoteEpoch[msg.sender] < epoch, "Already voted this epoch");
-        
-        // Verify targets sum to 100%
-        uint256 sum;
-        for (uint256 i = 0; i < targets.length; i++) {
-            sum += targets[i];
-        }
-        require(sum == WAD, "Targets must sum to 100%");
-        
+    function vote(uint[] calldata _targets) external {
+        uint epoch = block.timestamp / 1 weeks;
+        require(_targets.length == stables.length 
+        && lastVoteEpoch[msg.sender] < epoch, "mismatch");
+        uint sum; // Verify targets sum to 100%
+        for (uint i = 0; i < _targets.length; i++) {
+            sum += _targets[i];
+        } require(sum == WAD, 
+        "Targets must sum to 100%");
         lastVoteEpoch[msg.sender] = epoch;
-        uint256 weight = totalBalances[msg.sender];
+        uint weight = totalBalances[msg.sender];
         require(weight > 0, "No voting power");
         // Record vote and update weighted median 
-        for (uint256 i = 0; i < stables.length; i++) {
-            _insertSortedVote(epoch, i, targets[i], weight);
+        for (uint i = 0; i < stables.length; i++) {
+            _insertSortedVote(epoch, i, _targets[i], weight);
         }   epochTotalWeight[epoch] += weight;
             _recomputeConcentrations(epoch);
     }
 
-    function _insertSortedVote(uint256 epoch, uint256 stableIndex, uint256 voteValue, uint256 weight) internal {
-        uint256[] storage votes = epochVotes[epoch][stableIndex];
-        uint256[] storage weights = epochVoteWeights[epoch];
+    function _insertSortedVote(uint epoch, uint stableIndex, 
+        uint voteValue, uint weight) internal {
+        uint[] storage votes = epochVotes[epoch][stableIndex];
+        uint[] storage weights = epochVoteWeights[epoch];
         
-        // Find insertion position (keep sorted by vote value)
-        uint256 insertPos = votes.length;
-        for (uint256 i = 0; i < votes.length; i++) {
+        uint insertPos = votes.length;
+        for (uint i = 0; i < votes.length; i++) {
             if (voteValue <= votes[i]) {
                 insertPos = i;
                 break;
             }
         }
-        
-        // Insert vote maintaining sorted order
         votes.push();
-        weights.push();
-        
+        weights.push();  
         // Shift elements
-        for (uint256 i = votes.length - 1; i > insertPos; i--) {
+        for (uint i = votes.length - 1; i > insertPos; i--) {
             votes[i] = votes[i - 1];
             weights[i] = weights[i - 1];
         }
-        
         votes[insertPos] = voteValue;
         weights[insertPos] = weight;
     }
 
-     function _recomputeConcentrations(uint256 epoch) internal {
-        uint256[] memory newConcentrations = new uint256[](stables.length);
-        
-        for (uint256 i = 0; i < stables.length; i++) {
-            newConcentrations[i] = _computeWeightedMedian(epoch, i);
-            targetConcentrations[stables[i]] = newConcentrations[i];
+    function _recomputeConcentrations(uint epoch) internal {
+        uint[] memory newConcentrations = new uint[](stables.length);
+        // Only recompute if there are votes for this epoch
+        if (epochTotalWeight[epoch] == 0) {
+            return; // Skip if no votes
         }
-        
-        // (exponential moving average)
-        for (uint256 i = 0; i < stables.length; i++) {
-            uint256 alpha = 2e17; // 0.2 smoothing factor
-            currentConcentrations[stables[i]] = 
-                (targetConcentrations[stables[i]] * alpha + 
-                 currentConcentrations[stables[i]] * (WAD - alpha)) / WAD;
+        for (uint i = 0; i < stables.length; i++) {
+            newConcentrations[i] = _computeWeightedMedian(epoch, i);
+            targets[stables[i]] = newConcentrations[i];
+        }
+        for (uint i = 0; i < stables.length; i++) {
+            uint alpha = 2e17; // Exponential moving average smoothing factor
+            currentConcentrations[stables[i]] = (targets[stables[i]] * alpha + 
+            currentConcentrations[stables[i]] * (WAD - alpha)) / WAD;
         }
     }
 
-    function _computeWeightedMedian(uint256 epoch, uint256 stableIndex) internal view returns (uint256) {
-        uint256[] storage votes = epochVotes[epoch][stableIndex];
-        uint256[] storage weights = epochVoteWeights[epoch];
+    function _computeWeightedMedian(uint epoch,
+        uint stableIndex) internal view returns (uint) {
+        uint[] storage votes = epochVotes[epoch][stableIndex];
+        uint[] storage weights = epochVoteWeights[epoch];
         
         if (votes.length == 0) {
             return WAD / stables.length; 
         } // Default to equal distribution
         
-        uint256 totalWeight = epochTotalWeight[epoch];
-        uint256 halfWeight = totalWeight / 2;
-        uint256 cumulativeWeight = 0;
+        uint totalWeight = epochTotalWeight[epoch];
+        uint halfWeight = totalWeight / 2;
+        uint cumulativeWeight = 0;
         
-        // Find weighted median
-        for (uint256 i = 0; i < votes.length; i++) {
+        for (uint i = 0; i < votes.length; i++) {
             cumulativeWeight += weights[i];
             if (cumulativeWeight >= halfWeight) {
                 // Check if we're exactly at the midpoint
@@ -544,82 +543,56 @@ contract Basket is ERC6909 { // extended
                 }
                 return votes[i];
             }
-        }
-        
-        return votes[votes.length - 1]; // Fallback
+        } return votes[votes.length - 1]; 
     }
 
-    function sigmoidFee(uint256 actual, uint256 target, uint256 multiplier) public pure returns (uint256 fee18) {
-        if (target == 0 || actual == 0) return 0;
-
+    function sigmoidFee(uint actual, 
+        uint target, uint multiplier) public pure returns (uint fee18) {
         // Manhattan distance approach for multi-dimensional optimization
-        int256 deviation = int256(actual) - int256(target);
-        int256 rel = (deviation * int256(WAD)) / int256(target);
-
-        // Sigmoid-like curve with sharper penalty further from target
-        int256 expTerm = rel * 5e17; // Slope parameter
+        int deviation = int(actual) - int(target);
+        int rel = (deviation * int(WAD)) / int(target);
+        // Sigmoid-like, more off-target is sharper penalty 
+        int expTerm = rel * 5e17; // Slope parameter
         if (expTerm > 100e18) expTerm = 100e18;
         if (expTerm < -100e18) expTerm = -100e18;
-
         // Using approximation for exp function
-        uint256 penalty;
+        uint penalty;
         if (expTerm >= 0) {
-            penalty = uint256(1e18 + expTerm + (expTerm * expTerm) / (2 * 1e18));
+            penalty = uint(1e18 + expTerm + 
+            (expTerm * expTerm) / (2 * 1e18));
         } else {
-            uint256 absExp = uint256(-expTerm);
-            uint256 denominator = 1e18 + absExp + (absExp * absExp) / (2 * 1e18);
+            uint absExp = uint(-expTerm);
+            uint denominator = 1e18 + absExp + 
+            (absExp * absExp) / (2 * 1e18);
             penalty = (1e36) / denominator;
-        }
-        // Remove baseline 1.0,
+        } // Remove baseline 1.0,
         // multiply by multiplier
         if (penalty > 1e18) {
             fee18 = ((penalty - 1e18) *
                  multiplier) / 1e18;
-        } else {
-            fee18 = 0;
-        }
+        } else { fee18 = 0; }
     }
 
     function getFee(address stable, 
-        bool isMinting, uint256 amount) 
-        public view returns (uint256 fee18) {
+        bool isMinting, uint amount) 
+        public view returns (uint fee18) {
+        uint totalValue = get_deposits()[0];
+        if (totalValue == 0) return 0;
         address vault = vaults[stable];
-        uint256 actual = perVault[vault].cash;
-        uint256 target = (targetConcentrations[stable] * 
-                            get_deposits()[0]) / WAD;
-        uint256 multiplier = isMinting ? 2e16 : 1e16; 
-        // 2% mint, 1% redeem baseline
-        return sigmoidFee(actual, 
-            target, multiplier);
+        uint actual = (perVault[vault].cash * WAD) / totalValue;
+        uint target = currentConcentrations[stable]; // smoothed 
+        
+        // For minting: higher fee if overweight
+        // For redeeming: lower fee if overweight
+        uint multiplier = isMinting ? 2e16 : 1e16; 
+        if (isMinting) {
+            return sigmoidFee(actual,
+                 target, multiplier);
+        } else {
+            if (actual > target) {
+                uint baseFee = sigmoidFee(target, actual, multiplier);
+                return baseFee > multiplier ? 0 : multiplier - baseFee;
+            } else { return sigmoidFee(target, actual, multiplier); }
+        }
     }
-
-    function priceIn(address stable,
-        uint256 notional) external
-        view returns (uint256 sharesIn) {
-        address vault = vaults[stable];
-        uint256 pps = perVault[vault].shares > 0 ? 
-            (perVault[vault].cash * WAD) / 
-           perVault[vault].shares : WAD;
-        
-        uint256 fee = getFee(stable, 
-                    true, notional);
-        
-        sharesIn = FullMath.mulDiv(notional *
-                     (1e18 + fee), 1e18, pps);
-    }
-
-    function priceOut(address stable,
-        uint256 notional) external
-        view returns (uint256 sharesOut) {
-        address vault = vaults[stable];
-        uint256 pps = perVault[vault].shares > 0 ? 
-            (perVault[vault].cash * WAD) / 
-           perVault[vault].shares : WAD;
-        
-        uint256 fee = getFee(stable, 
-                    false, notional);
-        
-        sharesOut = FullMath.mulDiv(notional * 
-                    (1e18 - fee), 1e18, pps);
-    }
-} // TODO call priceOut and priceIn with take, _turn, _deposit
+} 

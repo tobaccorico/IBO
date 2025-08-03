@@ -216,10 +216,11 @@ contract Auxiliary is Ownable {
         _clearSwaps(sqrtPriceX96, price);
     }
 
-    function _clearSwaps(uint160 sqrtPriceX96, uint price) internal {
+    function _clearSwaps(uint160 sqrtPriceX96, uint price) internal { 
         if (lastBlock == block.number) return;
         (Types.Batch memory forZero, 
          Types.Batch memory forOne) = V4.getSwaps(lastBlock);
+        
         uint swapping; uint value; uint remains; 
         uint splitForZero; uint splitForOne;
         uint gotForOne; uint gotForZero;
@@ -273,7 +274,7 @@ contract Auxiliary is Ownable {
                 gotForZero, gotForOne);
 
             uint forGas = _takeWETH(swapping); WETH.withdraw(forGas);
-            // because of the way we do this low-level call, our swap entrypoint
+            // because the way we do this low-level call, our swap entrypoint
             // has to be AUX (not the router, which would otherwise make sense)
             (bool success,) = address(V4).call{ gas: forGas + gasleft()}(payload);
         }
@@ -295,11 +296,7 @@ contract Auxiliary is Ownable {
         require(totalValue > 500 * WAD, "$500");
         uint took = QUID.take(address(this),
             totalValue / 1e12, address(USDC), false); 
-        // TODO as part of take(), it's worthwhile 
-        // to integrate Curve's StableSwap as first
-        // order logic, and use the following only
-        // as a last resort (we don't want to unpend
-        // unless it's the only inevitable route)...
+      
         if (totalValue / 1e12 > took + 1) {
             uint needed = totalValue / 1e12 - took;
             uint selling = FullMath.mulDiv(needed, 
