@@ -3,7 +3,6 @@ package twitter
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"

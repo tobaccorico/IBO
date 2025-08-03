@@ -22,7 +22,8 @@
 /thuggable/Thuggable.zip
 /thuggable/thuggable-go.app
 /thuggable/wasm/*
-
+/thuggable/models/*
+/thuggable/third_party/*
 /thuggable/release-key.jks
 /thuggable/thuggable_go.aab
 /thuggable/repo-structure.txt

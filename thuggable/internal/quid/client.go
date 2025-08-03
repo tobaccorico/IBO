@@ -32,8 +32,10 @@ type AssetInfo struct {
 }
 
 type Client struct {
-	rpc       *rpc.Client
-	programID solana.PublicKey
+    endpoint  string
+    rpcClient *rpc.Client
+    wallet    string
+    programID solana.PublicKey
 }
 
 func NewClient(rpcURL string) *Client {
@@ -41,6 +43,13 @@ func NewClient(rpcURL string) *Client {
 		rpc:       rpc.New(rpcURL),
 		programID: QuidProgramID,
 	}
+}
+
+// Helper to convert uint64 to bytes
+func (id uint64) Bytes() []byte {
+    b := make([]byte, 8)
+    binary.LittleEndian.PutUint64(b, id)
+    return b
 }
 
 // GetDepositorAccount derives the PDA for a user's depositor account
@@ -150,33 +159,69 @@ func (c *Client) BuildWithdrawInstruction(
 func (c *Client) FinalizeBattleWithMPC(
     ctx context.Context,
     battleID uint64,
-    challengerBroke bool,
-    defenderBroke bool,
+    winnerIsChallenger bool,
     challengerSig []byte,
     defenderSig []byte,
     judgeSig []byte,
 ) (*solana.Transaction, error) {
-    // Build instruction to call finalize_battle_mpc
-    instruction := &Instruction{
-        Program: c.programID,
-        Accounts: []AccountMeta{
+    // Get the battle account PDA
+    battleAccount, _, err := solana.FindProgramAddress(
+        [][]byte{
+            []byte("battle"),
+            battleID.Bytes(),
+        },
+        c.programID,
+    )
+    if err != nil {
+        return nil, err
+    }
+
+    // Get other required accounts
+    // You'll need to fetch these from the battle account
+    // For now, using placeholders
+    var challengerDepositor solana.PublicKey
+    var defenderDepositor solana.PublicKey
+    var depository solana.PublicKey
+    var config solana.PublicKey
+    
+    // Build instruction data
+    data := []byte{10} // Instruction discriminator for finalize_battle_mpc
+    if winnerIsChallenger {
+        data = append(data, 1)
+    } else {
+        data = append(data, 0)
+    }
+    data = append(data, challengerSig...)
+    data = append(data, defenderSig...)
+    data = append(data, judgeSig...)
+    
+    instruction := &solana.Instruction{
+        ProgramID: c.programID,
+        Accounts: []solana.AccountMeta{
             {PublicKey: battleAccount, IsSigner: false, IsWritable: true},
             {PublicKey: challengerDepositor, IsSigner: false, IsWritable: true},
             {PublicKey: defenderDepositor, IsSigner: false, IsWritable: true},
             {PublicKey: depository, IsSigner: false, IsWritable: true},
             {PublicKey: config, IsSigner: false, IsWritable: false},
-            {PublicKey: randomnessAccount, IsSigner: false, IsWritable: false},
+            {PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
         },
-        Data: SerializeFinalizeBattleMPC(
-            challengerBroke,
-            defenderBroke, 
-            challengerSig,
-            defenderSig,
-            judgeSig,
-        ),
+        Data: data,
     }
     
-    return c.buildTransaction(ctx, instruction)
+    // Get recent blockhash
+    recent, err := c.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Build transaction
+    tx, err := solana.NewTransaction(
+        []solana.Instruction{instruction},
+        recent.Value.Blockhash,
+        solana.TransactionPayer(c.wallet),
+    )
+    
+    return tx, nil
 }
 
 // Helper to encode instruction data
