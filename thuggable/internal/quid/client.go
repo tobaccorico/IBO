@@ -2,16 +2,17 @@ package quid
 
 import (
 	"context"
-    "encoding/binary"
-    "fmt"
-    "math/big"
+	"encoding/binary"
+	"fmt"
+	"math"
+	"math/big"
 
-	"github.com/gagliardetto/binary"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/gagliardetto/solana-go"
-	
-	"github.com/gagliardetto/solana-go/rpc"
-	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
 	"github.com/gagliardetto/solana-go/programs/system"
+	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/tobaccorico/IBO/thuggable/internal/ethereum"
 )
 
 // Program addresses from the svm/programs/quid/src/lib.rs
@@ -24,16 +25,16 @@ var (
 		"XAU": {Symbol: "XAU", Decimals: 6},
 		"BTC": {Symbol: "BTC", Decimals: 8},
 		"SOL": {Symbol: "SOL", Decimals: 9},
+		"JTO": {Symbol: "JTO", Decimals: 9},
+		"JUP": {Symbol: "JUP", Decimals: 6},
+	}
+
+	// Pyth price feed addresses from etc.rs
+	PythPriceFeeds = map[string]solana.PublicKey{
+		"XAU": solana.MustPublicKeyFromBase58("2uPQGpm8X4ZkxMHxrAW1QuhXcse1AHEgPih6Xp9NuEWW"),
+		"BTC": solana.MustPublicKeyFromBase58("4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo"),
 	}
 )
-
-type BattleID uint64
-
-func (b BattleID) Bytes() []byte {
-    buf := make([]byte, 8)
-    binary.LittleEndian.PutUint64(buf, uint64(b))
-    return buf
-}
 
 type AssetInfo struct {
 	Symbol   string
@@ -41,203 +42,44 @@ type AssetInfo struct {
 }
 
 type Client struct {
-    rpcClient *rpc.Client
-    wallet    solana.PrivateKey
-    programID solana.PublicKey
+	rpcClient    *rpc.Client
+	wallet       solana.PrivateKey
+	programID    solana.PublicKey
+	
+	// EVM integration
+	evmClient    *ethereum.EthereumClient
+	auxiliaryAddr common.Address
+	routerAddr    common.Address
 }
 
-type BattleState struct {
-    ID          uint64
-    Creator     solana.PublicKey
-    Opponent    solana.PublicKey
-    Status      uint8
-    Winner      solana.PublicKey
+// NewClient creates a new Quid client with optional wallet
+func NewClient(rpcURL string, walletKey ...string) *Client {
+	client := &Client{
+		rpcClient: rpc.New(rpcURL),
+		programID: QuidProgramID,
+	}
+	
+	// If wallet key provided, set it
+	if len(walletKey) > 0 && walletKey[0] != "" {
+		if privKey, err := solana.PrivateKeyFromBase58(walletKey[0]); err == nil {
+			client.wallet = privKey
+		}
+	}
+	
+	return client
 }
 
-func DeserializeBattleState(data []byte, state *BattleState) error {
-    if len(data) < 105 { // 8 + 32 + 32 + 1 + 32
-        return fmt.Errorf("insufficient data for battle state")
-    }
-    
-    state.ID = binary.LittleEndian.Uint64(data[0:8])
-    copy(state.Creator[:], data[8:40])
-    copy(state.Opponent[:], data[40:72])
-    state.Status = data[72]
-    copy(state.Winner[:], data[73:105])
-    
-    return nil
-}
-
-
-func (c *Client) JoinBattle(ctx context.Context, battleID uint64) (*solana.Signature, error) {
-    // Instruction discriminator for join_battle
-    discriminator := []byte{2} // Assuming 2 is the join_battle instruction
-    
-    // Create battle ID bytes
-    battleIDBytes := make([]byte, 8)
-    binary.LittleEndian.PutUint64(battleIDBytes, battleID)
-    
-    // Combine discriminator and battle ID
-    data := append(discriminator, battleIDBytes...)
-    
-    // Derive battle PDA
-    seeds := [][]byte{
-        []byte("battle"),
-        battleIDBytes,
-    }
-    battlePDA, _, err := solana.FindProgramAddress(seeds, c.programID)
-    if err != nil {
-        return nil, fmt.Errorf("failed to derive battle PDA: %w", err)
-    }
-    
-    // Build instruction
-    instruction := &solana.GenericInstruction{
-        ProgID: c.programID,
-        AccountValues: solana.AccountMetaSlice{
-            {PublicKey: c.wallet.PublicKey(), IsSigner: true, IsWritable: true},
-            {PublicKey: battlePDA, IsSigner: false, IsWritable: true},
-        },
-        DataBytes: data,
-    }
-    
-    // Get recent blockhash
-    recent, err := c.rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentFinalized)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get recent blockhash: %w", err)
-    }
-    
-    // Build and sign transaction
-    tx, err := solana.NewTransaction(
-        []solana.Instruction{instruction},
-        recent.Value.Blockhash,
-        solana.TransactionPayer(c.wallet.PublicKey()),
-    )
-    if err != nil {
-        return nil, fmt.Errorf("failed to create transaction: %w", err)
-    }
-    
-    _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
-        if key.Equals(c.wallet.PublicKey()) {
-            return &c.wallet
-        }
-        return nil
-    })
-    if err != nil {
-        return nil, fmt.Errorf("failed to sign transaction: %w", err)
-    }
-    
-    // Send transaction
-    sig, err := c.rpcClient.SendTransactionWithOpts(
-        ctx,
-        tx,
-        rpc.TransactionOpts{
-            SkipPreflight: false,
-            PreflightCommitment: rpc.CommitmentFinalized,
-        },
-    )
-    if err != nil {
-        return nil, fmt.Errorf("failed to send transaction: %w", err)
-    }
-    
-    return &sig, nil
-}
-
-func (c *Client) CreateBattle(ctx context.Context, battleID BattleID) (*solana.Signature, error) {
-    // Get recent blockhash
-    recent, err := c.rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentFinalized)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get recent blockhash: %w", err)
-    }
-    
-    // Build instruction
-    instruction := solana.NewInstruction(
-        c.programID,
-        solana.AccountMetaSlice{
-            {PublicKey: c.wallet.PublicKey(), IsSigner: true, IsWritable: true},
-        },
-        battleID.Bytes(),
-    )
-    
-    // Build transaction
-    tx, err := solana.NewTransaction(
-        []solana.Instruction{instruction},
-        recent.Value.Blockhash,
-        solana.TransactionPayer(c.wallet.PublicKey()),
-    )
-    if err != nil {
-        return nil, fmt.Errorf("failed to create transaction: %w", err)
-    }
-    
-    // Sign transaction
-    _, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
-        if key.Equals(c.wallet.PublicKey()) {
-            return &c.wallet
-        }
-        return nil
-    })
-    if err != nil {
-        return nil, fmt.Errorf("failed to sign transaction: %w", err)
-    }
-    
-    // Send transaction
-    sig, err := c.rpcClient.SendTransactionWithOpts(
-        ctx,
-        tx,
-        rpc.TransactionOpts{
-            SkipPreflight: false,
-            PreflightCommitment: rpc.CommitmentFinalized,
-        },
-    )
-    if err != nil {
-        return nil, fmt.Errorf("failed to send transaction: %w", err)
-    }
-    
-    return &sig, nil
-}
-
-func (c *Client) GetBattleState(ctx context.Context,
-	battleID BattleID) (*BattleState, error) {
-   
-    seeds := [][]byte{
-        []byte("battle"),
-        battleID.Bytes(),
-    }
-    
-    battlePDA, _, err := solana.FindProgramAddress(seeds, c.programID)
-    if err != nil {
-        return nil, fmt.Errorf("failed to derive battle PDA: %w", err)
-    }
-    
-    account, err := c.rpcClient.GetAccountInfo(ctx, battlePDA)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get battle account: %w", err)
-    }
-    
-    var state BattleState
-    if err := DeserializeBattleState(account.Value.Data.GetBinary(), &state); err != nil {
-        return nil, fmt.Errorf("failed to deserialize battle state: %w", err)
-    }
-    
-    return &state, nil
-}
-
-func NewClient(rpcURL string,
-	walletKey string, programID string) (*Client, error) {
-    wallet, err := solana.PrivateKeyFromBase58(walletKey)
-    if err != nil {
-        return nil, fmt.Errorf("invalid wallet key: %w", err)
-    }
- 
-    program, err := solana.PublicKeyFromBase58(programID)
-    if err != nil {
-        return nil, fmt.Errorf("invalid program ID: %w", err)
-    }
-    
-    return &Client{
-        rpcClient: rpc.New(rpcURL),
-        wallet:    wallet,
-        programID: program,
-    }, nil
+// InitializeEVM connects to Ethereum contracts
+func (c *Client) InitializeEVM(evmRPC, routerAddr, auxAddr string) error {
+	evmClient, err := ethereum.NewEthereumClient(evmRPC, routerAddr, auxAddr, "")
+	if err != nil {
+		return fmt.Errorf("failed to create EVM client: %w", err)
+	}
+	
+	c.evmClient = evmClient
+	c.routerAddr = common.HexToAddress(routerAddr)
+	c.auxiliaryAddr = common.HexToAddress(auxAddr)
+	return nil
 }
 
 // GetDepositorAccount derives the PDA for a user's depositor account
@@ -297,7 +139,11 @@ func (c *Client) BuildDepositInstruction(
 		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
 	}
 	
-	return solana.NewInstruction(c.programID, accounts, data), nil
+	return &solana.GenericInstruction{
+		ProgID: c.programID,
+		AccountValues: accounts,
+		DataBytes: data,
+	}, nil
 }
 
 // BuildWithdrawInstruction creates a withdraw instruction
@@ -341,111 +187,175 @@ func (c *Client) BuildWithdrawInstruction(
 		})
 	}
 	
-	return solana.NewInstruction(c.programID, accounts, data), nil
+	return &solana.GenericInstruction{
+		ProgID: c.programID,
+		AccountValues: accounts,
+		DataBytes: data,
+	}, nil
 }
 
-func (c *Client) FinalizeBattleWithMPC(
-    ctx context.Context,
-    battleID uint64,
-    winnerIsChallenger bool,
-    challengerSig []byte,
-    defenderSig []byte,
-    judgeSig []byte,
-) (*solana.Transaction, error) {
-    // Get the battle account PDA
-    battleAccount, _, err := solana.FindProgramAddress(
-        [][]byte{
-            []byte("battle"),
-            battleID.Bytes(),
-        },
-        c.programID,
-    )
-    if err != nil {
-        return nil, err
-    }
+// Casa Battle instructions
+func (c *Client) CreateBattle(ctx context.Context, stakeAmount uint64, ticker, tweetURI string) (*solana.Transaction, error) {
+	battleAccount, bump, err := solana.FindProgramAddress(
+		[][]byte{[]byte("battle"), c.wallet.PublicKey().Bytes()},
+		c.programID,
+	)
+	if err != nil {
+		return nil, err
+	}
 
-    // Get other required accounts
-    // You'll need to fetch these from the battle account
-    // For now, using placeholders
-    var challengerDepositor solana.PublicKey
-    var defenderDepositor solana.PublicKey
-    var depository solana.PublicKey
-    var config solana.PublicKey
-    
-    // Build instruction data
-    data := []byte{10} // Instruction discriminator for finalize_battle_mpc
-    if winnerIsChallenger {
-        data = append(data, 1)
-    } else {
-        data = append(data, 0)
-    }
-    data = append(data, challengerSig...)
-    data = append(data, defenderSig...)
-    data = append(data, judgeSig...)
-    
-    instruction := &solana.Instruction{
-        ProgramID: c.programID,
-        Accounts: []solana.AccountMeta{
-            {PublicKey: battleAccount, IsSigner: false, IsWritable: true},
-            {PublicKey: challengerDepositor, IsSigner: false, IsWritable: true},
-            {PublicKey: defenderDepositor, IsSigner: false, IsWritable: true},
-            {PublicKey: depository, IsSigner: false, IsWritable: true},
-            {PublicKey: config, IsSigner: false, IsWritable: false},
-            {PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
-        },
-        Data: data,
-    }
-    
-    // Get recent blockhash
-    recent, err := c.rpcClient.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
-    if err != nil {
-        return nil, err
-    }
-    
-    // Build transaction
-    tx, err := solana.NewTransaction(
-        []solana.Instruction{instruction},
-        recent.Value.Blockhash,
-        solana.TransactionPayer(c.wallet),
-    )
-    
-    return tx, nil
+	challengerDepositor, _ := c.GetDepositorAccount(c.wallet.PublicKey())
+	depository, _ := c.GetDepositoryAccount(USDStarMint)
+	
+	// Get config PDA
+	config, _, _ := solana.FindProgramAddress([][]byte{[]byte("config")}, c.programID)
+
+	data := []byte{3} // create_battle instruction discriminator
+	data = append(data, encodeU64(stakeAmount)...)
+	data = append(data, encodeString(ticker)...)
+	data = append(data, encodeString(tweetURI)...)
+
+	instruction := &solana.GenericInstruction{
+		ProgID: c.programID,
+		AccountValues: []*solana.AccountMeta{
+			{PublicKey: c.wallet.PublicKey(), IsSigner: true, IsWritable: true},
+			{PublicKey: battleAccount, IsSigner: false, IsWritable: true},
+			{PublicKey: challengerDepositor, IsSigner: false, IsWritable: true},
+			{PublicKey: depository, IsSigner: false, IsWritable: true},
+			{PublicKey: config, IsSigner: false, IsWritable: false},
+			{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
+		},
+		DataBytes: data,
+	}
+
+	recent, err := c.rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentFinalized)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{instruction},
+		recent.Value.Blockhash,
+		solana.TransactionPayer(c.wallet.PublicKey()),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
 }
 
-// Helper to encode instruction data
+func (c *Client) AcceptBattle(ctx context.Context, battleID uint64, ticker, tweetURI string) (*solana.Transaction, error) {
+	// Derive battle PDA
+	battleSeeds := [][]byte{
+		[]byte("battle"),
+		make([]byte, 8),
+	}
+	binary.LittleEndian.PutUint64(battleSeeds[1], battleID)
+	
+	battleAccount, _, err := solana.FindProgramAddress(battleSeeds, c.programID)
+	if err != nil {
+		return nil, err
+	}
+
+	defenderDepositor, _ := c.GetDepositorAccount(c.wallet.PublicKey())
+	depository, _ := c.GetDepositoryAccount(USDStarMint)
+
+	data := []byte{4} // accept_battle instruction discriminator
+	data = append(data, encodeString(ticker)...)
+	data = append(data, encodeString(tweetURI)...)
+
+	instruction := &solana.GenericInstruction{
+		ProgID: c.programID,
+		AccountValues: []*solana.AccountMeta{
+			{PublicKey: c.wallet.PublicKey(), IsSigner: true, IsWritable: true},
+			{PublicKey: battleAccount, IsSigner: false, IsWritable: true},
+			{PublicKey: defenderDepositor, IsSigner: false, IsWritable: true},
+			{PublicKey: depository, IsSigner: false, IsWritable: true},
+		},
+		DataBytes: data,
+	}
+
+	recent, err := c.rpcClient.GetRecentBlockhash(ctx, rpc.CommitmentFinalized)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{instruction},
+		recent.Value.Blockhash,
+		solana.TransactionPayer(c.wallet.PublicKey()),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+// Bridge calls between SVM and EVM
+func (c *Client) BridgeToEVM(svmTx *solana.Transaction) error {
+	if c.evmClient == nil {
+		return fmt.Errorf("EVM client not initialized")
+	}
+	
+	// Wait for SVM transaction confirmation
+	sig := svmTx.Signatures[0]
+	_, err := c.rpcClient.GetTransaction(context.Background(), sig, &rpc.GetTransactionOpts{
+		Commitment: rpc.CommitmentFinalized,
+	})
+	if err != nil {
+		return fmt.Errorf("SVM transaction failed: %w", err)
+	}
+	
+	// Mirror the action on EVM through Auxiliary.sol
+	// This would call the appropriate function on Auxiliary.sol
+	// based on the SVM transaction type
+	
+	return nil
+}
+
+// Helper functions for encoding
 func encodeDepositData(amount uint64, ticker string) ([]byte, error) {
-	buf := new(binary.Encoder)
-	
-	// Instruction discriminator for deposit (simplified - you'll need the actual discriminator)
-	buf.WriteUint8(0) // deposit instruction
-	buf.WriteUint64(amount, binary.LE)
-	
-	// Encode ticker as string
-	buf.WriteUint32(uint32(len(ticker)), binary.LE)
-	buf.WriteBytes([]byte(ticker))
-	
-	return buf.Bytes(), nil
+	data := []byte{0} // deposit instruction discriminator
+	data = append(data, encodeU64(amount)...)
+	data = append(data, encodeString(ticker)...)
+	return data, nil
 }
 
 func encodeWithdrawData(amount int64, ticker string, exposure bool) ([]byte, error) {
-	buf := new(binary.Encoder)
-	
-	// Instruction discriminator for withdraw
-	buf.WriteUint8(1) // withdraw instruction
-	buf.WriteInt64(amount, binary.LE)
-	
-	// Encode ticker
-	buf.WriteUint32(uint32(len(ticker)), binary.LE)
-	buf.WriteBytes([]byte(ticker))
-	
-	// Encode exposure flag
+	data := []byte{1} // withdraw instruction discriminator
+	data = append(data, encodeI64(amount)...)
+	data = append(data, encodeString(ticker)...)
 	if exposure {
-		buf.WriteUint8(1)
+		data = append(data, 1)
 	} else {
-		buf.WriteUint8(0)
+		data = append(data, 0)
 	}
-	
-	return buf.Bytes(), nil
+	return data, nil
+}
+
+func encodeU64(val uint64) []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, val)
+	return buf
+}
+
+func encodeI64(val int64) []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(val))
+	return buf
+}
+
+func encodeString(s string) []byte {
+	lenBytes := encodeU32(uint32(len(s)))
+	return append(lenBytes, []byte(s)...)
+}
+
+func encodeU32(val uint32) []byte {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, val)
+	return buf
 }
 
 // CalculateExposureAmount converts a USD amount to the exposure amount for a given asset
@@ -462,4 +372,85 @@ func CalculateExposureAmount(usdAmount float64, ticker string, increase bool) in
 		return int64(smallestUnits)
 	}
 	return -int64(smallestUnits)
+}
+
+// GetBattles fetches all battles (placeholder - needs actual implementation)
+func (c *Client) GetBattles(ctx context.Context) ([]Battle, error) {
+	// This would use getProgramAccounts with proper filters
+	return []Battle{}, nil
+}
+
+// Battle struct for UI
+type Battle struct {
+	ID                 uint64
+	Challenger         string
+	Defender           string
+	StakeAmount        uint64
+	ChallengerTicker   string
+	DefenderTicker     string
+	ChallengerTweetURI string
+	DefenderTweetURI   string
+	Phase              string
+	CreatedAt          time.Time
+	Winner             *string
+}
+
+// SendTransaction helper
+func (c *Client) SendTransaction(ctx context.Context, tx *solana.Transaction) (*solana.Signature, error) {
+	// Sign transaction
+	_, err := tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+		if key.Equals(c.wallet.PublicKey()) {
+			return &c.wallet
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	
+	// Send transaction
+	sig, err := c.rpcClient.SendTransactionWithOpts(
+		ctx,
+		tx,
+		rpc.TransactionOpts{
+			SkipPreflight: false,
+			PreflightCommitment: rpc.CommitmentFinalized,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &sig, nil
+}
+
+// GetUserPositions returns user's positions (mock for now)
+func (c *Client) GetUserPositions() []string {
+	return []string{"SOL", "BTC", "XAU", "JTO", "JUP"}
+}
+
+// FinalizeBattle for MPC signing
+func (c *Client) FinalizeBattle(ctx context.Context, battleID uint64, result OracleResult) (*solana.Transaction, error) {
+	// This is called by each party with their signature
+	// The actual implementation would coordinate through the UI
+	return nil, fmt.Errorf("use FinalizeBattleWithMPC instead")
+}
+
+// OracleResult for battle outcomes
+type OracleResult struct {
+	ChallengerBrokeStreak bool
+	DefenderBrokeStreak   bool
+}
+
+// FinalizeBattleWithMPC with all signatures
+func (c *Client) FinalizeBattleWithMPC(
+	battleID uint64,
+	result OracleResult,
+	challengerSig []byte,
+	defenderSig []byte,
+	judgeSig []byte,
+) (*solana.Transaction, error) {
+	// Implementation would create the finalize_battle_mpc instruction
+	// with all three signatures
+	return nil, fmt.Errorf("not implemented")
 }
