@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
@@ -77,6 +76,9 @@ contract Basket is ERC6909 { // extended
     mapping(uint => mapping(uint => uint)) public medianK; 
     // epoch => stableIndex => current median position
 
+    // Add fee toggle for testing
+    bool public feesEnabled = false;
+
     modifier onlyUs { 
         address sender = msg.sender;
         require(sender == V4 || 
@@ -99,7 +101,6 @@ contract Basket is ERC6909 { // extended
     function decimals() public view virtual returns (uint8) {
         return 18;
     }
-
 
     function totalSupply() public 
         view returns (uint) {
@@ -135,7 +136,7 @@ contract Basket is ERC6909 { // extended
         AUX = Auxiliary(payable(_aux));
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
-        uint256 equalWeight = WAD / _stables.length;
+        uint equalWeight = WAD / _stables.length;
         for (uint i = 0; i < _vaults.length; i++) {
             stable = _stables[i]; vault = _vaults[i];
             isVault[vault] = true; vaults[stable] = vault;
@@ -143,6 +144,11 @@ contract Basket is ERC6909 { // extended
             targets[stable] = equalWeight;
             isStable[stable] = true;
         }   V4 = payable(_router);
+    }
+
+    // Enable/disable fees (for testing)
+    function setFeesEnabled(bool _enabled) external onlyUs {
+        feesEnabled = _enabled;
     }
 
     // if force is false we just return
@@ -210,14 +216,27 @@ contract Basket is ERC6909 { // extended
             max -= (token == stables[0] && !strict) ? 
                  AUX.untouchable() : 0; // bonded...
 
+            // Apply fee if enabled
+            if (feesEnabled) {
+                uint fee = getFee(token, false, amount);
+                amount = FullMath.mulDiv(amount, WAD + fee, WAD); // Increase amount to account for fee
+            }
+
             if (max >= amount) { // can be covered wholly
                 uint withdrawn = withdraw(who, vault, amount);
-                return FullMath.mulDiv(withdrawn, WAD - getFee(
-                                    token, false, amount), WAD);
+                if (feesEnabled) {
+                    uint fee = getFee(token, false, withdrawn);
+                    return FullMath.mulDiv(withdrawn, WAD - fee, WAD);
+                }
+                return withdrawn;
             } 
             else { uint withdrawn = withdraw(who, vault, max);
-                sent = FullMath.mulDiv(withdrawn, WAD - getFee(
-                                        token, false, max), WAD);
+                if (feesEnabled) {
+                    uint fee = getFee(token, false, max);
+                    sent = FullMath.mulDiv(withdrawn, WAD - fee, WAD);
+                } else {
+                    sent = withdrawn;
+                }
                 amount -= withdrawn;
                 if (!strict) {
                     uint scale = 18 - IERC20(token).decimals();
@@ -273,37 +292,35 @@ contract Basket is ERC6909 { // extended
             uint allowed = IERC4626(token).allowance(from, address(this));
             amount = Math.min(allowed, IERC4626(token).convertToShares(amount));
             usd = IERC4626(token).convertToAssets(amount);
-            uint feeInShares = FullMath.mulDiv(amount,
-                 getFee(token, true, usd), WAD);
             
-            uint totalShares = amount + feeInShares;
-            require(totalShares <= allowed, 
-                                "allowance");
-
-            IERC4626(token).transferFrom(msg.sender,
-                        address(this), totalShares);
+            uint totalNeeded = amount;
+            if (feesEnabled) {
+                uint fee = getFee(token, true, usd);
+                uint feeInShares = FullMath.mulDiv(amount, fee, WAD);
+                totalNeeded = amount + feeInShares;
+                require(totalNeeded <= allowed, "allowance");
+            }
             
-            require(usd >= 50 * 
-            (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
-            perVault[token].shares += amount; // Not totalShares!
+            IERC4626(token).transferFrom(msg.sender, address(this), totalNeeded);
+            
+            require(usd >= 50 * (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
+            perVault[token].shares += amount; // Not totalNeeded!
             perVault[token].cash += usd;
         }    
         else if (isStable[token] || token == SGHO) {
-            uint allowed = IERC20(token).allowance(
-                                from, address(this));
+            uint allowed = IERC20(token).allowance(from, address(this));
             usd = Math.min(amount, allowed);
-            uint fee = getFee(token, true, usd);
-            uint totalNeeded = FullMath.mulDiv(usd, 
-                                WAD + fee, WAD);
             
-            require(totalNeeded <= allowed, 
-            "insufficient allowance for fee");
+            uint totalNeeded = usd;
+            if (feesEnabled) {
+                uint fee = getFee(token, true, usd);
+                totalNeeded = FullMath.mulDiv(usd, WAD + fee, WAD);
+                require(totalNeeded <= allowed, "insufficient allowance for fee");
+            }
             
-            IERC20(token).transferFrom(from, 
-                address(this), totalNeeded);                
+            IERC20(token).transferFrom(from, address(this), totalNeeded);                
 
-            require(usd >= 50 * (10 ** 
-                IERC20(token).decimals()), "grant");
+            require(usd >= 50 * (10 ** IERC20(token).decimals()), "grant");
 
             if (token == GHO) { vault = SGHO;
                 IERC20(token).approve(vault, usd);
@@ -313,8 +330,7 @@ contract Basket is ERC6909 { // extended
             else if (token != SGHO) { 
                 vault = vaults[token];
                 IERC20(token).approve(vault, usd);
-                amount = IERC4626(vault).deposit(usd, 
-                                    address(this));
+                amount = IERC4626(vault).deposit(usd, address(this));
             } 
             perVault[vault].shares += amount;
             perVault[vault].cash += usd;
@@ -364,9 +380,10 @@ contract Basket is ERC6909 { // extended
 
             uint paid = deposit(pledge, token, depositing);
             (uint total, uint yield) = get_metrics(false);
-            paid += FullMath.mulDiv(paid * yield, month 
-                            - currentMonth(), WAD * 12);
-                             _mint(pledge, month, paid);
+            amount += FullMath.mulDiv(amount * yield,
+                    month - currentMonth(), WAD * 12);
+
+            _mint(pledge, month, amount);
         }
     } 
 
@@ -455,10 +472,10 @@ contract Basket is ERC6909 { // extended
         uint oldBalanceTo = totalBalances[to];
         uint value = _transferHelper(from, 
                           to, amount); 
-                          return true;
-        if (update) {
+        if (update && feesEnabled) {
             _recomputeConcentrations(block.timestamp / 1 weeks);
         }
+        return true;
     }
 
     function vote(uint[] calldata _targets) external {
@@ -576,6 +593,8 @@ contract Basket is ERC6909 { // extended
     function getFee(address stable, 
         bool isMinting, uint amount) 
         public view returns (uint fee18) {
+        if (!feesEnabled) return 0; // Fees disabled
+        
         uint totalValue = get_deposits()[0];
         if (totalValue == 0) return 0;
         address vault = vaults[stable];
@@ -595,4 +614,4 @@ contract Basket is ERC6909 { // extended
             } else { return sigmoidFee(target, actual, multiplier); }
         }
     }
-} 
+}

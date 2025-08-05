@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -35,14 +36,17 @@ const (
 
 func main() {
 	if len(os.Args) < 4 {
-		fmt.Println("Usage: go run sign_client.go <session_id> <party_id> <share_file> [initiate]")
+		fmt.Println("Usage: go run sign_client.go <session_id> <party_id> <share_file> [initiate|battle]")
 		return
 	}
 
 	sessionID := os.Args[1]
 	partyID := os.Args[2]
 	filename := os.Args[3]
-	isInitiator := len(os.Args) > 4 && os.Args[4] == "initiate"
+	mode := ""
+	if len(os.Args) > 4 {
+		mode = os.Args[4]
+	}
 
 	// Load the share file and convert it to KeyGenOutput
 	kgOutput, err := loadKeyGenOutput(filename)
@@ -51,63 +55,261 @@ func main() {
 		return
 	}
 
-	// Get the total number of parties from the number of shares
-	//totalParties := len(kgOutput.Shares.Shares)
+	// Handle different modes
+	switch mode {
+	case "battle":
+		// Battle signing mode
+		if len(os.Args) < 7 {
+			fmt.Println("Battle mode requires: <session_id> <party_id> <share_file> battle <battle_id> <winner_is_challenger>")
+			return
+		}
+		battleID, err := strconv.ParseUint(os.Args[5], 10, 64)
+		if err != nil {
+			fmt.Printf("Invalid battle ID: %v\n", err)
+			return
+		}
+		winnerIsChallenger := os.Args[6] == "true"
+		
+		signature, err := SignBattleResult(sessionID, partyID, kgOutput, battleID, winnerIsChallenger)
+		if err != nil {
+			fmt.Printf("Error signing battle result: %v\n", err)
+			return
+		}
+		fmt.Printf("Battle signature: %x\n", signature)
+		
+	case "initiate":
+		// Original transaction signing mode
+		err = performTransactionSigning(sessionID, partyID, kgOutput, true)
+		if err != nil {
+			fmt.Printf("Error in transaction signing: %v\n", err)
+			return
+		}
+		
+	default:
+		// Default transaction signing mode (not initiator)
+		err = performTransactionSigning(sessionID, partyID, kgOutput, false)
+		if err != nil {
+			fmt.Printf("Error in transaction signing: %v\n", err)
+			return
+		}
+	}
+}
 
+// SignBattleResult creates a signature for a battle result
+func SignBattleResult(sessionID, partyID string, kgOutput *KeyGenOutput, battleID uint64, winnerIsChallenger bool) ([]byte, error) {
 	// Join the signing session
-	err = joinSigningSession(sessionID, partyID)
+	err := joinSigningSession(sessionID, partyID)
 	if err != nil {
-		fmt.Printf("Error joining signing session: %v\n", err)
-		return
+		return nil, fmt.Errorf("error joining signing session: %v", err)
 	}
 
 	// Wait for the threshold number of parties to join
 	err = waitForAllParties(sessionID)
 	if err != nil {
-		fmt.Printf("Error waiting for parties: %v\n", err)
-		return
+		return nil, fmt.Errorf("error waiting for parties: %v", err)
 	}
 
-	// If this is the session initiator, create and broadcast the transaction
+	// Create the message to sign (battleID + winner)
+	message := make([]byte, 9)
+	binary.LittleEndian.PutUint64(message[:8], battleID)
+	if winnerIsChallenger {
+		message[8] = 1
+	} else {
+		message[8] = 0
+	}
+
+	// Broadcast the message to all parties
+	err = broadcastBattleMessage(sessionID, message)
+	if err != nil {
+		return nil, fmt.Errorf("error broadcasting battle message: %v", err)
+	}
+
+	// Perform MPC signing
+	currentPartyID := party.ID(atoi(partyID))
+	signature, err := performMPCSigning(sessionID, partyID, kgOutput, message, currentPartyID)
+	if err != nil {
+		return nil, fmt.Errorf("error performing MPC signing: %v", err)
+	}
+
+	return signature, nil
+}
+
+// broadcastBattleMessage broadcasts the battle result message to sign
+func broadcastBattleMessage(sessionID string, message []byte) error {
+	url := fmt.Sprintf("%s/sign/%s/message", apiURL, sessionID)
+
+	reqBody := map[string]interface{}{
+		"message": base64.StdEncoding.EncodeToString(message),
+		"type": "battle_result",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("error broadcasting message: %s", string(bodyBytes))
+	}
+
+	return nil
+}
+
+// BattleSignatureCoordinator helps coordinate battle signature collection
+type BattleSignatureCoordinator struct {
+	BattleID           uint64
+	WinnerIsChallenger bool
+	ChallengerSig      []byte
+	DefenderSig        []byte
+	JudgeSig           []byte
+	CollectedCount     int
+}
+
+// CoordinateBattleSignatures collects all three signatures for battle settlement
+func CoordinateBattleSignatures(battleID uint64, winnerIsChallenger bool) (*BattleSignatureCoordinator, error) {
+	coordinator := &BattleSignatureCoordinator{
+		BattleID:           battleID,
+		WinnerIsChallenger: winnerIsChallenger,
+	}
+	
+	// In production, this would:
+	// 1. Create three separate signing sessions (one for each party)
+	// 2. Wait for each party to complete their signature
+	// 3. Collect all signatures
+	// 4. Return when all three are ready
+	
+	// For now, return a placeholder
+	fmt.Println("Waiting for all battle signatures...")
+	
+	return coordinator, nil
+}
+
+// performTransactionSigning handles the original transaction signing flow
+func performTransactionSigning(sessionID, partyID string, kgOutput *KeyGenOutput, isInitiator bool) error {
+	// Join the signing session
+	err := joinSigningSession(sessionID, partyID)
+	if err != nil {
+		return fmt.Errorf("error joining signing session: %v", err)
+	}
+
+	// Wait for all parties
+	err = waitForAllParties(sessionID)
+	if err != nil {
+		return fmt.Errorf("error waiting for parties: %v", err)
+	}
+
+	// If initiator, create and broadcast transaction
 	if isInitiator {
 		tx, err := createSolanaTransaction(kgOutput.Shares.GroupKey.ToEd25519())
 		if err != nil {
-			fmt.Printf("Error creating Solana transaction: %v\n", err)
-			return
+			return fmt.Errorf("error creating Solana transaction: %v", err)
 		}
 		err = broadcastTransaction(sessionID, tx)
 		if err != nil {
-			fmt.Printf("Error broadcasting transaction: %v\n", err)
-			return
+			return fmt.Errorf("error broadcasting transaction: %v", err)
 		}
-	}
-
-	// If this is not the session initiator, wait a bit to ensure the transaction is broadcasted
-	if !isInitiator {
+	} else {
 		fmt.Println("Waiting for initiator to broadcast transaction...")
 		time.Sleep(5 * time.Second)
 	}
 
-	// Perform the signing process
-	signature, err := performSigning(sessionID, partyID, kgOutput)
+	// Get transaction message and perform signing
+	message, err := getTransactionMessage(sessionID)
 	if err != nil {
-		fmt.Printf("Error performing signing: %v\n", err)
-		return
+		return fmt.Errorf("error getting transaction message: %v", err)
+	}
+
+	currentPartyID := party.ID(atoi(partyID))
+	signature, err := performMPCSigning(sessionID, partyID, kgOutput, message, currentPartyID)
+	if err != nil {
+		return fmt.Errorf("error performing signing: %v", err)
 	}
 
 	fmt.Printf("Signature: %x\n", signature)
 
-	// If this is the session initiator, finalize the transaction
+	// If initiator, finalize transaction
 	if isInitiator {
 		err = finalizeTransaction(sessionID, signature)
 		if err != nil {
-			fmt.Printf("Error finalizing transaction: %v\n", err)
-			return
+			return fmt.Errorf("error finalizing transaction: %v", err)
 		}
 		fmt.Println("Transaction signed and finalized successfully.")
 	} else {
 		fmt.Println("Signing process completed successfully.")
 	}
+
+	return nil
+}
+
+// performMPCSigning executes the MPC signing protocol
+func performMPCSigning(sessionID, partyID string, kgOutput *KeyGenOutput, message []byte, currentPartyID party.ID) ([]byte, error) {
+	fmt.Printf("Starting MPC signing for message: %x\n", message)
+
+	// Initialize signing state
+	state, output, err := frost.NewSignState(kgOutput.Shares.PartyIDs, kgOutput.Secrets[currentPartyID], kgOutput.Shares, message, 0)
+	if err != nil {
+		return nil, fmt.Errorf("error creating sign state: %v", err)
+	}
+
+	// Get threshold from status
+	status, err := getSigningStatus(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error getting signing status: %v", err)
+	}
+	threshold := status.T
+
+	// Perform MPC signing rounds
+	for round := 1; round <= 3; round++ {
+		fmt.Printf("Performing MPC signing round %d...\n", round)
+
+		var inMessages [][]byte
+		if round > 1 {
+			inMessages, err = retrieveMessages(sessionID, partyID, round-1)
+			if err != nil {
+				return nil, fmt.Errorf("error retrieving messages for round %d: %v", round, err)
+			}
+			fmt.Printf("Retrieved %d messages for round %d\n", len(inMessages), round-1)
+		}
+
+		outMessages, err := helpers.PartyRoutine(inMessages, state)
+		if err != nil {
+			return nil, fmt.Errorf("error in MPC round %d: %v", round, err)
+		}
+		fmt.Printf("Generated %d outgoing messages for round %d\n", len(outMessages), round)
+
+		if round < 3 {
+			err = submitMessages(sessionID, partyID, round, outMessages)
+			if err != nil {
+				return nil, fmt.Errorf("error submitting messages for round %d: %v", round, err)
+			}
+			fmt.Printf("Submitted messages for round %d\n", round)
+		}
+
+		// Wait for round completion
+		err = waitForRoundCompletion(sessionID, round, threshold)
+		if err != nil {
+			return nil, fmt.Errorf("error waiting for round completion: %v", err)
+		}
+		fmt.Printf("Round %d completed\n", round)
+	}
+
+	// Get the signature
+	sig := output.Signature
+	if sig == nil {
+		return nil, fmt.Errorf("null signature")
+	}
+
+	// Verify the signature
+	fmt.Println("Verifying MPC signature...")
+	if !kgOutput.Shares.GroupKey.Verify(message, sig) {
+		return nil, fmt.Errorf("signature verification failed")
+	}
+	fmt.Println("MPC signature verified successfully.")
+
+	return sig.ToEd25519(), nil
 }
 
 func loadKeyGenOutput(filename string) (*KeyGenOutput, error) {
@@ -127,7 +329,7 @@ func loadKeyGenOutput(filename string) (*KeyGenOutput, error) {
 func joinSigningSession(sessionID, partyID string) error {
 	url := fmt.Sprintf("%s/sign/%s/join", apiURL, sessionID)
 	reqBody := map[string]interface{}{
-		"partyID": atoi(partyID), // Convert partyID to int
+		"partyID": atoi(partyID),
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
@@ -243,94 +445,6 @@ func broadcastTransaction(sessionID string, tx *solana.Transaction) error {
 
 	fmt.Println("Transaction broadcasted successfully")
 	return nil
-}
-
-func performSigning(sessionID, partyID string, kgOutput *KeyGenOutput) ([]byte, error) {
-	currentPartyID := party.ID(atoi(partyID))
-
-	// Wait for the transaction to be broadcasted
-	fmt.Println("Waiting for transaction to be broadcasted...")
-	for {
-		status, err := getSigningStatus(sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("error getting signing status: %v", err)
-		}
-		if status.HasTransaction {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	// Get the transaction message from the server
-	message, err := getTransactionMessage(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("error getting transaction message: %v", err)
-	}
-
-	fmt.Printf("Received transaction message: %x\n", message)
-
-	// Initialize signing state for this party
-	state, output, err := frost.NewSignState(kgOutput.Shares.PartyIDs, kgOutput.Secrets[currentPartyID], kgOutput.Shares, message, 0)
-	if err != nil {
-		return nil, fmt.Errorf("error creating sign state for party %s: %v", partyID, err)
-	}
-
-	// Get the threshold from the signing status
-	status, err := getSigningStatus(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("error getting signing status: %v", err)
-	}
-	threshold := status.T
-
-	// Perform MPC signing rounds
-	for round := 1; round <= 3; round++ {
-		fmt.Printf("Performing MPC signing round %d...\n", round)
-
-		var inMessages [][]byte
-		if round > 1 {
-			inMessages, err = retrieveMessages(sessionID, partyID, round-1)
-			if err != nil {
-				return nil, fmt.Errorf("error retrieving messages for round %d: %v", round, err)
-			}
-			fmt.Printf("Retrieved %d messages for round %d\n", len(inMessages), round-1)
-		}
-
-		outMessages, err := helpers.PartyRoutine(inMessages, state)
-		if err != nil {
-			return nil, fmt.Errorf("error in MPC round %d: %v", round, err)
-		}
-		fmt.Printf("Generated %d outgoing messages for round %d\n", len(outMessages), round)
-
-		if round < 3 {
-			err = submitMessages(sessionID, partyID, round, outMessages)
-			if err != nil {
-				return nil, fmt.Errorf("error submitting messages for round %d: %v", round, err)
-			}
-			fmt.Printf("Submitted messages for round %d\n", round)
-		}
-
-		// Wait for threshold number of parties to complete this round
-		err = waitForRoundCompletion(sessionID, round, threshold)
-		if err != nil {
-			return nil, fmt.Errorf("error waiting for round completion: %v", err)
-		}
-		fmt.Printf("Round %d completed\n", round)
-	}
-
-	// Get the signature
-	sig := output.Signature
-	if sig == nil {
-		return nil, fmt.Errorf("null signature")
-	}
-
-	// Verify the signature
-	fmt.Println("Verifying MPC signature...")
-	if !kgOutput.Shares.GroupKey.Verify(message, sig) {
-		return nil, fmt.Errorf("signature verification failed")
-	}
-	fmt.Println("MPC signature verified successfully.")
-
-	return sig.ToEd25519(), nil
 }
 
 func getTransactionMessage(sessionID string) ([]byte, error) {
@@ -501,7 +615,7 @@ func getSigningStatus(sessionID string) (*SigningStatus, error) {
 type SigningStatus struct {
 	PartyIDs       []int       `json:"partyIDs"`
 	JoinedParties  []int       `json:"joinedParties"`
-	Messages       map[int]int `json:"messages"` // Change this to int
+	Messages       map[int]int `json:"messages"`
 	T              int         `json:"t"`
 	N              int         `json:"n"`
 	HasTransaction bool        `json:"hasTransaction"`

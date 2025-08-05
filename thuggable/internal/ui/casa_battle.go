@@ -5,6 +5,7 @@ import (
     "fmt"
     "strings"
     "time"
+    "net/url"
     
     "fyne.io/fyne/v2"
     "fyne.io/fyne/v2/container"
@@ -136,13 +137,6 @@ func (c *CasaBattleScreen) initializeClients() {
     // Initialize Quid client
     endpoint := "https://api.devnet.solana.com"
     c.quidClient = quid.NewClient(endpoint)
-    
-    // Initialize EVM connection
-    c.quidClient.InitializeEVM(
-        "https://mainnet.infura.io/v3/YOUR_KEY",
-        "0xRouterAddress",
-        "0xAuxiliaryAddress",
-    )
     
     // Initialize Twitter client for battle verification
     c.twitterClient = twitter.NewClient()
@@ -280,10 +274,10 @@ func (c *CasaBattleScreen) viewBattle(battle quid.Battle) {
             fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
     }
     
-    // If battle is active and user is authority, show finalize button
-    if battle.Phase == "Active" && c.isAuthority() {
-        finalizeBtn := widget.NewButton("Finalize Battle", func() {
-            c.finalizeBattle(battle)
+    // If battle is active and user is participant, show MPC signing UI
+    if battle.Phase == "Active" && (c.selectedWallet == battle.Challenger || c.selectedWallet == battle.Defender || c.isJudge()) {
+        finalizeBtn := widget.NewButton("Sign Battle Result", func() {
+            c.signBattleResult(battle)
         })
         finalizeBtn.Importance = widget.HighImportance
         content.Add(finalizeBtn)
@@ -352,47 +346,137 @@ func (c *CasaBattleScreen) submitAcceptBattle(battleID uint64, ticker, tweetURI 
     c.refreshBattles()
 }
 
-func (c *CasaBattleScreen) finalizeBattle(battle quid.Battle) {
-    // Show dialog to determine winner based on verse quality
+func (c *CasaBattleScreen) signBattleResult(battle quid.Battle) {
+    // Show dialog to determine winner
     content := container.NewVBox(
-        widget.NewLabel("Judge battle outcome:"),
+        widget.NewLabel("Sign your decision on the battle outcome:"),
         widget.NewRadioGroup([]string{
-            "Challenger broke defender's streak",
-            "Defender broke challenger's streak", 
-            "Both maintained streak (coin flip)",
+            "Challenger won",
+            "Defender won", 
         }, nil),
     )
     
-    dialog.ShowCustomConfirm("Judge Battle", "Sign Decision", "Cancel", content, func(submit bool) {
+    dialog.ShowCustomConfirm("Sign Battle Result", "Sign", "Cancel", content, func(submit bool) {
         if submit {
             radio := content.Objects[1].(*widget.RadioGroup)
-            var result quid.OracleResult
-            
-            switch radio.Selected {
-            case "Challenger broke defender's streak":
-                result.ChallengerBrokeStreak = true
-                result.DefenderBrokeStreak = false
-            case "Defender broke challenger's streak":
-                result.ChallengerBrokeStreak = false
-                result.DefenderBrokeStreak = true
-            default:
-                result.ChallengerBrokeStreak = false
-                result.DefenderBrokeStreak = false
+            if radio.Selected == "" {
+                dialog.ShowError(fmt.Errorf("Please select a winner"), c.window)
+                return
             }
             
-            // Start MPC signing process
-            c.coordinateMPCSettlement(battle, result)
+            winnerIsChallenger := radio.Selected == "Challenger won"
+            
+            // In production, this would:
+            // 1. Create the message to sign (battleID + winner)
+            // 2. Sign with local wallet
+            // 3. Store signature locally
+            // 4. Wait for other signatures or submit if all collected
+            c.coordinateMPCSignature(battle, winnerIsChallenger)
         }
     }, c.window)
 }
 
-func (c *CasaBattleScreen) coordinateMPCSettlement(battle quid.Battle, result quid.OracleResult) {
-    // In a real implementation, this would coordinate MPC signing
-    // For now, we'll simulate the process
-    dialog.ShowInformation("MPC Signing", 
-        "Battle settlement requires signatures from challenger, defender, and judge.\n" +
-        "This would trigger the MPC signing process in production.", 
+func (c *CasaBattleScreen) coordinateMPCSignature(battle quid.Battle, winnerIsChallenger bool) {
+    // Determine user's role in the battle
+    var role string
+    if c.selectedWallet == battle.Challenger {
+        role = "challenger"
+    } else if c.selectedWallet == battle.Defender {
+        role = "defender"
+    } else if c.isJudge() {
+        role = "judge"
+    } else {
+        dialog.ShowError(fmt.Errorf("You are not a participant in this battle"), c.window)
+        return
+    }
+    
+    // Initialize MPC client
+    mpcClient := NewBattleMPCClient()
+    
+    // Start or join signing session
+    progress := dialog.NewProgressInfinite("Coordinating signatures...", "Please wait", c.window)
+    progress.Show()
+    
+    go func() {
+        defer progress.Hide()
+        
+        // Try to initiate a new session
+        sessionID, err := mpcClient.InitiateBattleSigning(battle.ID, winnerIsChallenger, role, c.selectedWallet)
+        if err != nil {
+            // Session might already exist, try to get existing session ID
+            // In production, this would be coordinated through a shared service
+            sessionID = fmt.Sprintf("battle-%d", battle.ID)
+            
+            // Try to join existing session
+            err = mpcClient.JoinBattleSigning(sessionID, role, c.selectedWallet)
+            if err != nil {
+                dialog.ShowError(fmt.Errorf("Failed to join signing session: %v", err), c.window)
+                return
+            }
+        }
+        
+        // Create and sign the message locally
+        message := CreateBattleMessage(battle.ID, winnerIsChallenger)
+        
+        // In production, this would use the actual MPC signing process
+        // For now, create a mock signature
+        signature := make([]byte, 64)
+        copy(signature, []byte("mock_signature_for_"+role))
+        
+        // Submit signature
+        err = mpcClient.SubmitSignature(sessionID, role, signature)
+        if err != nil {
+            dialog.ShowError(fmt.Errorf("Failed to submit signature: %v", err), c.window)
+            return
+        }
+        
+        // Wait for all signatures
+        dialog.ShowInformation("Signature Submitted", 
+            "Your signature has been submitted. Waiting for other parties...", 
+            c.window)
+        
+        // Poll for completion
+        signatures, err := mpcClient.WaitForCompletion(sessionID, 5*time.Minute)
+        if err != nil {
+            dialog.ShowError(fmt.Errorf("Failed to collect all signatures: %v", err), c.window)
+            return
+        }
+        
+        // Submit final transaction with all signatures
+        c.submitFinalizedBattle(signatures)
+    }()
+}
+
+func (c *CasaBattleScreen) submitFinalizedBattle(sigs *BattleSignatures) {
+    ctx := context.Background()
+    
+    // Create finalize transaction with all signatures
+    tx, err := c.quidClient.FinalizeBattleWithMPC(
+        ctx,
+        sigs.BattleID,
+        sigs.WinnerIsChallenger,
+        sigs.ChallengerSig,
+        sigs.DefenderSig,
+        sigs.JudgeSig,
+    )
+    if err != nil {
+        dialog.ShowError(fmt.Errorf("Failed to create finalize transaction: %v", err), c.window)
+        return
+    }
+    
+    // Send transaction
+    sig, err := c.quidClient.SendTransaction(ctx, tx)
+    if err != nil {
+        dialog.ShowError(fmt.Errorf("Failed to send transaction: %v", err), c.window)
+        return
+    }
+    
+    dialog.ShowInformation("Battle Settled", 
+        fmt.Sprintf("Battle has been settled!\nTransaction: %s", sig.String()), 
         c.window)
+    
+    // Refresh battles
+    c.refreshBattles()
 }
 
 func (c *CasaBattleScreen) refreshBattles() {
@@ -423,14 +507,9 @@ func (c *CasaBattleScreen) validateReplyTweet(replyURL, originalURL string) bool
     return strings.Contains(replyURL, "x.com/") || strings.Contains(replyURL, "twitter.com/")
 }
 
-func (c *CasaBattleScreen) isAuthority() bool {
-    // Check if current wallet is the battle authority
-    // In production, this would check against the program's authority
-    return false
-}
-
 func (c *CasaBattleScreen) isJudge() bool {
     // Check if current wallet is an authorized judge
+    // This would check against a list of authorized judges
     return false
 }
 
@@ -444,4 +523,11 @@ func shortenHash(hash string) string {
         return hash
     }
     return fmt.Sprintf("%s...%s", hash[:6], hash[len(hash)-6:])
+}
+
+func shortenAddress(addr string) string {
+    if len(addr) <= 12 {
+        return addr
+    }
+    return fmt.Sprintf("%s...%s", addr[:6], addr[len(addr)-4:])
 }

@@ -184,12 +184,11 @@ func (bot *CalypsoBot) executeQuidRebalance(strategies []RebalanceStrategy) erro
 // GetQuidPositions fetches current positions from quid
 func (bot *CalypsoBot) getQuidPositions() (map[string]decimal.Decimal, error) {
 	// This would fetch and decode the depositor account
-	// For now, return mock data
+	// For now, return mock data without JTO/JUP
 	positions := map[string]decimal.Decimal{
 		"SOL": decimal.NewFromFloat(10.5),
-		"JTO": decimal.NewFromFloat(1000),
-		"JUP": decimal.NewFromFloat(500),
-		"JLP": decimal.NewFromFloat(100),
+		"BTC": decimal.NewFromFloat(0.25),
+		"XAU": decimal.NewFromFloat(5.0),
 	}
 	
 	return positions, nil

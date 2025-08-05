@@ -1,327 +1,402 @@
-// internal/ethereum/client.go
 package ethereum
 
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/hex"
 	"fmt"
 	"math/big"
-	"strings"
 
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// MetaMaskSigner handles MetaMask-style message signing
-type MetaMaskSigner struct {
-	client     *ethclient.Client
-	chainID    *big.Int
-	address    common.Address
-	privateKey *ecdsa.PrivateKey // Optional for local signing
+// Contract interfaces (these would be generated from ABIs)
+type RouterContract interface {
+	Deposit(opts *bind.TransactOpts) (*types.Transaction, error)
+	Withdraw(opts *bind.TransactOpts, amount *big.Int) (*types.Transaction, error)
+	OutOfRange(opts *bind.TransactOpts, amount *big.Int, token common.Address, distance *big.Int, rangeWidth *big.Int) (*types.Transaction, error)
+	Reclaim(opts *bind.TransactOpts, id *big.Int, percent *big.Int) (*types.Transaction, error)
 }
 
-// EthereumClient wraps ethereum operations
+type AuxiliaryContract interface {
+	Swap(opts *bind.TransactOpts, token common.Address, zeroForOne bool, amount *big.Int, waitable *big.Int) (*types.Transaction, error)
+	LeverOneForZero(opts *bind.TransactOpts, amount *big.Int) (*types.Transaction, error)
+	LeverZeroForOne(opts *bind.TransactOpts, amount *big.Int, token common.Address) (*types.Transaction, error)
+	Redeem(opts *bind.TransactOpts, amount *big.Int) (*types.Transaction, error)
+	Unwind(opts *bind.TransactOpts, whose []common.Address, oneForZero []bool) (*types.Transaction, error)
+}
+
+type BasketContract interface {
+	// Note: Users should NEVER call take() directly
+	Deposit(opts *bind.TransactOpts, from common.Address, token common.Address, amount *big.Int) (*types.Transaction, error)
+	Mint(opts *bind.TransactOpts, pledge common.Address, amount *big.Int, token common.Address, when *big.Int) (*types.Transaction, error)
+}
+
 type EthereumClient struct {
-	client        *ethclient.Client
-	rpcClient     *rpc.Client
-	signer        *MetaMaskSigner
-	routerAddress common.Address
-	auxAddress    common.Address
-	basketAddress common.Address
-	chainID       *big.Int
-}
-
-// PreSignedCall represents a pre-signed function call
-type PreSignedCall struct {
-	Target       common.Address
-	FunctionSig  string
-	Params       []interface{}
-	Nonce        *big.Int
-	ValidUntil   *big.Int
-	Signature    []byte
+	client      *ethclient.Client
+	chainID     *big.Int
+	privateKey  *ecdsa.PrivateKey
+	publicKey   common.Address
+	
+	// Contract instances
+	router      RouterContract
+	auxiliary   AuxiliaryContract
+	basket      BasketContract
+	
+	// Contract addresses
+	routerAddr    common.Address
+	auxiliaryAddr common.Address
+	basketAddr    common.Address
+	
+	// Constants from contracts
+	swapCost    *big.Int
+	unwindCost  *big.Int
 }
 
 // NewEthereumClient creates a new Ethereum client
-func NewEthereumClient(rpcURL string, routerAddr, auxAddr, basketAddr string) (*EthereumClient, error) {
+func NewEthereumClient(rpcURL, routerAddr, auxiliaryAddr, privateKeyHex string) (*EthereumClient, error) {
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to ethereum node: %v", err)
+		return nil, fmt.Errorf("failed to connect to Ethereum node: %w", err)
 	}
-
-	rpcClient, err := rpc.Dial(rpcURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RPC: %v", err)
-	}
-
+	
 	chainID, err := client.NetworkID(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get network ID: %v", err)
+		return nil, fmt.Errorf("failed to get network ID: %w", err)
 	}
-
-	return &EthereumClient{
-		client:        client,
-		rpcClient:     rpcClient,
-		routerAddress: common.HexToAddress(routerAddr),
-		auxAddress:    common.HexToAddress(auxAddr),
-		basketAddress: common.HexToAddress(basketAddr),
-		chainID:       chainID,
-	}, nil
-}
-
-// ConnectMetaMask simulates MetaMask connection (in real app, this would use web3 provider)
-func (ec *EthereumClient) ConnectMetaMask(address string) error {
-	ec.signer = &MetaMaskSigner{
-		client:  ec.client,
-		chainID: ec.chainID,
-		address: common.HexToAddress(address),
-	}
-	return nil
-}
-
-// SignMessage signs a message using EIP-712 typed data
-func (ms *MetaMaskSigner) SignMessage(message []byte) ([]byte, error) {
-	// EIP-712 domain separator
-	domainSeparator := crypto.Keccak256(
-		[]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-		[]byte("QUID Protocol"),
-		[]byte("1"),
-		ms.chainID.Bytes(),
-		ms.address.Bytes(),
-	)
-
-	// Message hash
-	messageHash := crypto.Keccak256(
-		[]byte("\x19\x01"),
-		domainSeparator,
-		crypto.Keccak256(message),
-	)
-
-	// In production, this would request signature from MetaMask
-	// For now, we'll simulate with local key if available
-	if ms.privateKey != nil {
-		return crypto.Sign(messageHash, ms.privateKey)
-	}
-
-	// Simulate MetaMask signing request
-	return nil, fmt.Errorf("MetaMask signing not implemented in CLI mode")
-}
-
-// CreatePreSignedClearSwaps creates a pre-signed clearSwaps call
-func (ec *EthereumClient) CreatePreSignedClearSwaps(validForBlocks uint64) (*PreSignedCall, error) {
-	if ec.signer == nil {
-		return nil, fmt.Errorf("no signer connected")
-	}
-
-	// Get current block number
-	blockNumber, err := ec.client.BlockNumber(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	// Get nonce
-	nonce, err := ec.client.PendingNonceAt(context.Background(), ec.signer.address)
-	if err != nil {
-		return nil, err
-	}
-
-	preSignedCall := &PreSignedCall{
-		Target:       ec.auxAddress,
-		FunctionSig:  "clearSwaps()",
-		Params:       []interface{}{},
-		Nonce:        big.NewInt(int64(nonce)),
-		ValidUntil:   big.NewInt(int64(blockNumber + validForBlocks)),
-	}
-
-	// Create message to sign
-	message := ec.encodePreSignedCall(preSignedCall)
 	
-	// Sign the message
-	signature, err := ec.signer.SignMessage(message)
-	if err != nil {
-		return nil, err
+	ec := &EthereumClient{
+		client:        client,
+		chainID:       chainID,
+		routerAddr:    common.HexToAddress(routerAddr),
+		auxiliaryAddr: common.HexToAddress(auxiliaryAddr),
+		swapCost:      big.NewInt(637000 * 2), // From Auxiliary.sol
+		unwindCost:    big.NewInt(3524821),    // From Auxiliary.sol
 	}
-
-	preSignedCall.Signature = signature
-	return preSignedCall, nil
-}
-
-// ExecutePreSignedCall executes a pre-signed function call
-func (ec *EthereumClient) ExecutePreSignedCall(call *PreSignedCall) (*types.Transaction, error) {
-	// Verify signature is still valid
-	blockNumber, err := ec.client.BlockNumber(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	if big.NewInt(int64(blockNumber)).Cmp(call.ValidUntil) > 0 {
-		return nil, fmt.Errorf("pre-signed call has expired")
-	}
-
-	// Build transaction data
-	data, err := ec.encodeFunctionCall(call.FunctionSig, call.Params...)
-	if err != nil {
-		return nil, err
-	}
-
-	// Execute via meta-transaction pattern
-	// This would call a forwarder contract that verifies the signature
-	// and executes the call on behalf of the signer
-	return ec.sendMetaTransaction(call, data)
-}
-
-// ClearSwapsWithRepack calls clearSwaps which triggers _repack in the background
-func (ec *EthereumClient) ClearSwapsWithRepack() (*types.Transaction, error) {
-	// Load contract ABI
-	auxABI, err := abi.JSON(strings.NewReader(AuxiliaryABI))
-	if err != nil {
-		return nil, err
-	}
-
-	// Pack the clearSwaps call
-	data, err := auxABI.Pack("clearSwaps")
-	if err != nil {
-		return nil, err
-	}
-
-	// Get gas price
-	gasPrice, err := ec.client.SuggestGasPrice(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	// Create transaction
-	tx := types.NewTransaction(
-		0, // nonce will be set by signer
-		ec.auxAddress,
-		big.NewInt(0), // no ETH value
-		300000,        // gas limit
-		gasPrice,
-		data,
-	)
-
-	// Send transaction
-	return ec.sendTransaction(tx)
-}
-
-// MonitorLiquidations monitors for liquidation opportunities
-func (ec *EthereumClient) MonitorLiquidations(ctx context.Context, callback func(event *LiquidationEvent)) error {
-	// Set up event filter
-	query := ethereum.FilterQuery{
-		Addresses: []common.Address{ec.basketAddress, ec.auxAddress},
-		Topics:    [][]common.Hash{{LiquidationEventHash}},
-	}
-
-	logs := make(chan types.Log)
-	sub, err := ec.client.SubscribeFilterLogs(ctx, query, logs)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		for {
-			select {
-			case err := <-sub.Err():
-				fmt.Printf("Subscription error: %v\n", err)
-				return
-			case vLog := <-logs:
-				event, err := parseLiquidationEvent(vLog)
-				if err != nil {
-					fmt.Printf("Failed to parse event: %v\n", err)
-					continue
-				}
-				callback(event)
-			case <-ctx.Done():
-				return
-			}
+	
+	// Setup private key if provided
+	if privateKeyHex != "" {
+		privateKey, err := crypto.HexToECDSA(privateKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid private key: %w", err)
 		}
-	}()
+		ec.privateKey = privateKey
+		ec.publicKey = crypto.PubkeyToAddress(privateKey.PublicKey)
+	}
+	
+	// TODO: Initialize contract instances from ABIs
+	// ec.router = NewRouter(routerAddr, client)
+	// ec.auxiliary = NewAuxiliary(auxiliaryAddr, client)
+	// ec.basket = NewBasket(basketAddr, client)
+	
+	return ec, nil
+}
 
+// Router Functions
+
+// DepositETH deposits ETH into the Router for auto-managed liquidity
+func (c *EthereumClient) DepositETH(amount *big.Int) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	auth.Value = amount // Send ETH with the transaction
+	
+	tx, err := c.router.Deposit(auth)
+	if err != nil {
+		return fmt.Errorf("failed to deposit: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
 	return nil
 }
 
-// Helper functions
-
-func (ec *EthereumClient) encodePreSignedCall(call *PreSignedCall) []byte {
-	// EIP-712 structured data encoding
-	return crypto.Keccak256(
-		[]byte("PreSignedCall(address target,string functionSig,uint256 nonce,uint256 validUntil)"),
-		call.Target.Bytes(),
-		[]byte(call.FunctionSig),
-		call.Nonce.Bytes(),
-		call.ValidUntil.Bytes(),
-	)
-}
-
-func (ec *EthereumClient) encodeFunctionCall(functionSig string, params ...interface{}) ([]byte, error) {
-	// Parse function signature
-	method, err := abi.NewMethod(functionSig, functionSig, abi.Function, "", false, false, nil, nil)
+// WithdrawETH withdraws liquidity from the Router
+func (c *EthereumClient) WithdrawETH(amount *big.Int) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to create transactor: %w", err)
 	}
-
-	// Pack arguments
-	return method.Inputs.Pack(params...)
-}
-
-func (ec *EthereumClient) sendTransaction(tx *types.Transaction) (*types.Transaction, error) {
-	// In production, this would use MetaMask provider
-	// For now, simulate sending
-	return tx, nil
-}
-
-func (ec *EthereumClient) sendMetaTransaction(call *PreSignedCall, data []byte) (*types.Transaction, error) {
-	// Meta-transaction would be sent to a forwarder contract
-	// that verifies the signature and executes on behalf of signer
-	return nil, fmt.Errorf("meta-transaction forwarding not yet implemented")
-}
-
-// Event definitions
-
-var (
-	LiquidationEventHash = crypto.Keccak256Hash([]byte("Liquidation(address,address,uint256)"))
-)
-
-type LiquidationEvent struct {
-	User   common.Address
-	Asset  common.Address
-	Amount *big.Int
-}
-
-func parseLiquidationEvent(log types.Log) (*LiquidationEvent, error) {
-	// Parse event data
-	event := &LiquidationEvent{
-		User:   common.HexToAddress(hex.EncodeToString(log.Topics[1].Bytes())),
-		Asset:  common.HexToAddress(hex.EncodeToString(log.Topics[2].Bytes())),
-		Amount: new(big.Int).SetBytes(log.Data),
+	
+	tx, err := c.router.Withdraw(auth, amount)
+	if err != nil {
+		return fmt.Errorf("failed to withdraw: %w", err)
 	}
-	return event, nil
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
 }
 
-// Contract ABIs (simplified)
-const AuxiliaryABI = `[
-	{
-		"inputs": [],
-		"name": "clearSwaps",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{"internalType": "uint256", "name": "howMuch", "type": "uint256"},
-			{"internalType": "address", "name": "toWhom", "type": "address"}
-		],
-		"name": "sendETH",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+// CreateOutOfRangePosition creates a self-managed liquidity position
+func (c *EthereumClient) CreateOutOfRangePosition(amount *big.Int, token common.Address, distance int32, rangeWidth uint32) (uint64, error) {
+	if c.privateKey == nil {
+		return 0, fmt.Errorf("no private key configured")
 	}
-]`
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	// If token is zero address, we're depositing ETH
+	if token == (common.Address{}) {
+		auth.Value = amount
+	}
+	
+	tx, err := c.router.OutOfRange(auth, amount, token, big.NewInt(int64(distance)), big.NewInt(int64(rangeWidth)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create position: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return 0, fmt.Errorf("transaction failed")
+	}
+	
+	// TODO: Extract position ID from logs
+	// For now, return a mock ID
+	return 1, nil
+}
+
+// ReclaimPosition reclaims liquidity from a self-managed position
+func (c *EthereumClient) ReclaimPosition(id uint64, percent int32) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	tx, err := c.router.Reclaim(auth, big.NewInt(int64(id)), big.NewInt(int64(percent)))
+	if err != nil {
+		return fmt.Errorf("failed to reclaim: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
+}
+
+// Auxiliary Functions
+
+// Swap performs a swap through the Auxiliary contract
+func (c *EthereumClient) Swap(token common.Address, zeroForOne bool, amount *big.Int, waitable uint64) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	// For swaps over $5000, need to pay gas compensation
+	// This is handled in the contract based on msg.value
+	sensitive := false
+	if amount.Cmp(big.NewInt(5000000000)) >= 0 { // $5000 in 6 decimals
+		sensitive = true
+		auth.Value = c.swapCost
+	}
+	
+	tx, err := c.auxiliary.Swap(auth, token, zeroForOne, amount, big.NewInt(int64(waitable)))
+	if err != nil {
+		return fmt.Errorf("failed to swap: %w", err)
+	}
+	
+	if sensitive {
+		// Large swaps are batched and may not execute immediately
+		fmt.Printf("Swap queued for batch execution in block %s\n", tx.Hash().Hex())
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
+}
+
+// LeverageETH creates a leveraged ETH position (borrow USDC against ETH)
+func (c *EthereumClient) LeverageETH(amount *big.Int) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	// Must send ETH amount + unwind cost
+	totalValue := new(big.Int).Add(amount, c.unwindCost)
+	auth.Value = totalValue
+	
+	tx, err := c.auxiliary.LeverOneForZero(auth, amount)
+	if err != nil {
+		return fmt.Errorf("failed to leverage: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
+}
+
+// LeverageUSD creates a leveraged USD position (borrow ETH against stables)
+func (c *EthereumClient) LeverageUSD(amount *big.Int, token common.Address) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	// Must send unwind cost in ETH
+	auth.Value = c.unwindCost
+	
+	tx, err := c.auxiliary.LeverZeroForOne(auth, amount, token)
+	if err != nil {
+		return fmt.Errorf("failed to leverage: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
+}
+
+// Redeem redeems QD tokens for underlying assets
+func (c *EthereumClient) Redeem(amount *big.Int) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	tx, err := c.auxiliary.Redeem(auth, amount)
+	if err != nil {
+		return fmt.Errorf("failed to redeem: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
+}
+
+// UnwindPositions unwinds leveraged positions when price moves significantly
+func (c *EthereumClient) UnwindPositions(addresses []common.Address, oneForZero []bool) error {
+	if c.privateKey == nil {
+		return fmt.Errorf("no private key configured")
+	}
+	
+	if len(addresses) != len(oneForZero) {
+		return fmt.Errorf("addresses and oneForZero arrays must have same length")
+	}
+	
+	auth, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("failed to create transactor: %w", err)
+	}
+	
+	tx, err := c.auxiliary.Unwind(auth, addresses, oneForZero)
+	if err != nil {
+		return fmt.Errorf("failed to unwind: %w", err)
+	}
+	
+	receipt, err := bind.WaitMined(context.Background(), c.client, tx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+	
+	if receipt.Status != 1 {
+		return fmt.Errorf("transaction failed")
+	}
+	
+	return nil
+}
+
+// Utility Functions
+
+// GetBalance returns the ETH balance of an address
+func (c *EthereumClient) GetBalance(address common.Address) (*big.Int, error) {
+	return c.client.BalanceAt(context.Background(), address, nil)
+}
+
+// GetGasPrice returns the current gas price
+func (c *EthereumClient) GetGasPrice() (*big.Int, error) {
+	return c.client.SuggestGasPrice(context.Background())
+}
+
+// WaitForTransaction waits for a transaction to be mined
+func (c *EthereumClient) WaitForTransaction(txHash common.Hash) (*types.Receipt, error) {
+	return bind.WaitMined(context.Background(), c.client, &types.Transaction{})
+}

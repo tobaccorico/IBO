@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/taurusgroup/frost-ed25519/pkg/frost/party"
@@ -33,20 +36,35 @@ type Session struct {
 	Mutex         sync.Mutex
 }
 
+// Battle signing session structure
+type BattleSigningSession struct {
+	SessionID          string
+	BattleID           uint64
+	WinnerIsChallenger bool
+	Participants       map[string]string // role -> partyID (challenger, defender, judge)
+	Signatures         map[string][]byte // role -> signature
+	Message            []byte            // The message being signed (battleID + winner)
+	CreatedAt          time.Time
+	Status             string // "pending", "signing", "complete"
+	Mutex              sync.Mutex
+}
+
 var sessions = make(map[string]*Session)
 var signingessions = make(map[string]*Session)
+var battleSessions = make(map[string]*BattleSigningSession)
 var sessionsMutex sync.Mutex
+var battleSessionsMutex sync.Mutex
 
 func main() {
 	router := mux.NewRouter()
 
-	// Existing key generation endpoints
+	// Key generation endpoints
 	router.HandleFunc("/keygen/initiate", InitiateKeygen).Methods("POST")
 	router.HandleFunc("/keygen/{sessionID}/join", JoinSession).Methods("POST")
 	router.HandleFunc("/keygen/{sessionID}/messages", MessagesHandler).Methods("POST", "GET")
 	router.HandleFunc("/keygen/{sessionID}/status", StatusHandler).Methods("GET")
 
-	// Signing endpoints
+	// Regular signing endpoints
 	router.HandleFunc("/sign/initiate", InitiateSigning).Methods("POST")
 	router.HandleFunc("/sign/{sessionID}/join", JoinSigningSession).Methods("POST")
 	router.HandleFunc("/sign/{sessionID}/broadcast", BroadcastTransaction).Methods("POST")
@@ -55,9 +73,23 @@ func main() {
 	router.HandleFunc("/sign/{sessionID}/transaction", GetTransactionHandler).Methods("GET")
 	router.HandleFunc("/sign/{sessionID}/finalize", FinalizeTransaction).Methods("POST")
 
-	log.Println("Server started on port 8080")
+	// Battle signing endpoints
+	router.HandleFunc("/battle/{battleID}/init", InitBattleSigningHandler).Methods("POST")
+	router.HandleFunc("/battle/{sessionID}/join", JoinBattleSigningHandler).Methods("POST")
+	router.HandleFunc("/battle/{sessionID}/message", BroadcastBattleMessageHandler).Methods("POST")
+	router.HandleFunc("/battle/{sessionID}/signature", SubmitBattleSignatureHandler).Methods("POST")
+	router.HandleFunc("/battle/{sessionID}/status", GetBattleSigningStatusHandler).Methods("GET")
+	router.HandleFunc("/battle/{sessionID}/finalize", FinalizeBattleHandler).Methods("GET")
+
+	log.Println("MPC API Server started on port 8080")
+	log.Println("Endpoints available:")
+	log.Println("  - Key Generation: /keygen/*")
+	log.Println("  - Regular Signing: /sign/*")
+	log.Println("  - Battle Signing: /battle/*")
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
+
+// Key Generation Handlers
 
 func InitiateKeygen(w http.ResponseWriter, r *http.Request) {
 	type Request struct {
@@ -266,6 +298,8 @@ func StatusHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// Regular Signing Handlers
+
 func InitiateSigning(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID string `json:"sessionID"`
@@ -394,45 +428,6 @@ func BroadcastTransaction(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"message": "Transaction broadcasted successfully",
-	}
-	json.NewEncoder(w).Encode(response)
-}
-
-func AuthenticateParty(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	sessionID := vars["sessionID"]
-
-	sessionsMutex.Lock()
-	session, exists := signingessions[sessionID]
-	sessionsMutex.Unlock()
-	if !exists {
-		http.Error(w, "Signing session not found", http.StatusNotFound)
-		return
-	}
-
-	var req struct {
-		PartyID  int    `json:"partyID"`
-		GroupKey string `json:"groupKey"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	session.Mutex.Lock()
-	defer session.Mutex.Unlock()
-
-	if session.GroupKey == "" {
-		session.GroupKey = req.GroupKey
-	} else if session.GroupKey != req.GroupKey {
-		http.Error(w, "Group key mismatch", http.StatusBadRequest)
-		return
-	}
-
-	session.Authenticated[party.ID(req.PartyID)] = true
-
-	response := map[string]interface{}{
-		"message": "Party authenticated successfully",
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -590,6 +585,7 @@ func GetTransactionHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"transaction": base64.StdEncoding.EncodeToString(session.Transaction),
+		"message":     base64.StdEncoding.EncodeToString(session.Transaction), // For compatibility
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -653,8 +649,267 @@ func FinalizeTransaction(w http.ResponseWriter, r *http.Request) {
 	sessionsMutex.Unlock()
 }
 
-// Helper function to convert string to int
-func atoi(s string) int {
-	i, _ := strconv.Atoi(s)
-	return i
+// Battle Signing Handlers
+
+func InitBattleSigningHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	battleID, err := strconv.ParseUint(vars["battleID"], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid battle ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		WinnerIsChallenger bool   `json:"winnerIsChallenger"`
+		Role               string `json:"role"` // "challenger", "defender", "judge"
+		PartyID            string `json:"partyID"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sessionID := fmt.Sprintf("battle-%d-%d", battleID, time.Now().Unix())
+	
+	// Create the message to be signed (battleID + winner)
+	message := make([]byte, 9)
+	binary.LittleEndian.PutUint64(message[:8], battleID)
+	if req.WinnerIsChallenger {
+		message[8] = 1
+	} else {
+		message[8] = 0
+	}
+	
+	battleSessionsMutex.Lock()
+	session := &BattleSigningSession{
+		SessionID:          sessionID,
+		BattleID:           battleID,
+		WinnerIsChallenger: req.WinnerIsChallenger,
+		Participants:       make(map[string]string),
+		Signatures:         make(map[string][]byte),
+		Message:            message,
+		CreatedAt:          time.Now(),
+		Status:             "pending",
+	}
+	session.Participants[req.Role] = req.PartyID
+	battleSessions[sessionID] = session
+	battleSessionsMutex.Unlock()
+
+	log.Printf("Battle signing session created: %s for battle %d\n", sessionID, battleID)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"sessionID": sessionID,
+		"status":    "created",
+		"message":   base64.StdEncoding.EncodeToString(message),
+	})
+}
+
+func JoinBattleSigningHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["sessionID"]
+
+	var req struct {
+		Role    string `json:"role"`
+		PartyID string `json:"partyID"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	battleSessionsMutex.Lock()
+	session, exists := battleSessions[sessionID]
+	if !exists {
+		battleSessionsMutex.Unlock()
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+	battleSessionsMutex.Unlock()
+
+	session.Participants[req.Role] = req.PartyID
+	
+	// Check if all parties have joined
+	if len(session.Participants) == 3 {
+		session.Status = "signing"
+		log.Printf("All parties joined battle session %s\n", sessionID)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       session.Status,
+		"participants": len(session.Participants),
+		"message":      base64.StdEncoding.EncodeToString(session.Message),
+	})
+}
+
+func BroadcastBattleMessageHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["sessionID"]
+
+	var req struct {
+		Message string `json:"message"` // base64 encoded
+		Type    string `json:"type"`    // "battle_result"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	message, err := base64.StdEncoding.DecodeString(req.Message)
+	if err != nil {
+		http.Error(w, "Invalid message encoding", http.StatusBadRequest)
+		return
+	}
+
+	battleSessionsMutex.Lock()
+	session, exists := battleSessions[sessionID]
+	if !exists {
+		battleSessionsMutex.Unlock()
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+	battleSessionsMutex.Unlock()
+
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+
+	// Verify the message matches what we expect
+	if !bytes.Equal(message, session.Message) {
+		http.Error(w, "Message mismatch", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Battle message broadcasted for session %s\n", sessionID)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "message_received",
+	})
+}
+
+func SubmitBattleSignatureHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["sessionID"]
+
+	var req struct {
+		Role      string `json:"role"`
+		Signature string `json:"signature"` // base64 encoded
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sig, err := base64.StdEncoding.DecodeString(req.Signature)
+	if err != nil {
+		http.Error(w, "Invalid signature encoding", http.StatusBadRequest)
+		return
+	}
+
+	if len(sig) != 64 {
+		http.Error(w, "Invalid signature length (expected 64 bytes)", http.StatusBadRequest)
+		return
+	}
+
+	battleSessionsMutex.Lock()
+	session, exists := battleSessions[sessionID]
+	if !exists {
+		battleSessionsMutex.Unlock()
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+	battleSessionsMutex.Unlock()
+
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+
+	session.Signatures[req.Role] = sig
+	log.Printf("Received %s signature for battle session %s\n", req.Role, sessionID)
+	
+	// Check if all signatures collected
+	if len(session.Signatures) == 3 {
+		session.Status = "complete"
+		log.Printf("All signatures collected for battle session %s\n", sessionID)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":               session.Status,
+		"signatures_collected": len(session.Signatures),
+	})
+}
+
+func GetBattleSigningStatusHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["sessionID"]
+
+	battleSessionsMutex.Lock()
+	session, exists := battleSessions[sessionID]
+	if !exists {
+		battleSessionsMutex.Unlock()
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+	battleSessionsMutex.Unlock()
+
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+
+	signatures := make(map[string]bool)
+	for role := range session.Signatures {
+		signatures[role] = true
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"sessionID":          session.SessionID,
+		"battleID":           session.BattleID,
+		"winnerIsChallenger": session.WinnerIsChallenger,
+		"status":             session.Status,
+		"participants":       len(session.Participants),
+		"signatures":         signatures,
+		"complete":           session.Status == "complete",
+	})
+}
+
+func FinalizeBattleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["sessionID"]
+
+	battleSessionsMutex.Lock()
+	session, exists := battleSessions[sessionID]
+	if !exists {
+		battleSessionsMutex.Unlock()
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+	battleSessionsMutex.Unlock()
+
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+
+	if session.Status != "complete" {
+		http.Error(w, "Not all signatures collected", http.StatusBadRequest)
+		return
+	}
+
+	// Return all three signatures for on-chain submission
+	response := map[string]interface{}{
+		"battleID":           session.BattleID,
+		"winnerIsChallenger": session.WinnerIsChallenger,
+		"challengerSig":      base64.StdEncoding.EncodeToString(session.Signatures["challenger"]),
+		"defenderSig":        base64.StdEncoding.EncodeToString(session.Signatures["defender"]),
+		"judgeSig":           base64.StdEncoding.EncodeToString(session.Signatures["judge"]),
+	}
+
+	log.Printf("Battle %d finalized with all signatures\n", session.BattleID)
+
+	json.NewEncoder(w).Encode(response)
+
+	// Clean up the session after successful finalization
+	go func() {
+		time.Sleep(5 * time.Minute) // Keep session for 5 minutes in case needed
+		battleSessionsMutex.Lock()
+		delete(battleSessions, sessionID)
+		battleSessionsMutex.Unlock()
+	}()
 }

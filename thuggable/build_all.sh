@@ -84,20 +84,6 @@ EOF
     export CGO_LDFLAGS="-L${PWD}/${WHISPER_DIR}/build-host/src -lwhisper"
 }
 
-# Fix Go compilation errors
-fix_go_errors() {
-    log_info "Fixing Go compilation errors..."
-    
-    # Fix the client.go errors
-    if [[ -f "internal/quid/client.go" ]]; then
-        # Add missing imports
-        sed -i '1s/^/package quid\n\nimport (\n    "encoding\/binary"\n    "math"\n    "github.com\/gagliardetto\/solana-go"\n)\n\n/' internal/quid/client.go 2>/dev/null || true
-        
-        # Fix battleID.Bytes() - assuming battleID is uint64
-        sed -i 's/battleID\.Bytes/binary.BigEndian.PutUint64(make(\[\]byte, 8), battleID)/' internal/quid/client.go 2>/dev/null || true
-    fi
-}
-
 # Main build process
 main() {
     log_info "🛠  Starting optimized multi-platform build..."
@@ -125,7 +111,6 @@ main() {
     
     # Setup Go environment
     setup_go_whisper_env
-    fix_go_errors
     
     # Build for Linux
     log_info "📦 Building for Linux..."
