@@ -20,7 +20,7 @@ pub static ACCOUNT_MAP: phf::Map<&'static str, &'static str> = phf_map! {
     // ...
 };
 
-pub const MAX_LEN: usize = 8;
+pub const MAX_LEN: usize = 200;
 pub const MAX_AGE: u64 = 300; 
 
 #[constant] 
@@ -104,8 +104,10 @@ pub fn fetch_multiple_prices(positions: &[Position], remaining_accounts: &[Accou
 }
 
 /// Update exponential moving average
-/// alpha is the smoothing factor (higher = faster response)
-pub fn update_ema(old_value: u64, new_value: u64, alpha: u8) -> u64 {
+/// alpha is the smoothing factor 
+/// (higher = faster response)
+pub fn update_ema(old_value: u64, 
+        new_value: u64, alpha: u8) -> u64 {
     // EMA = α * new_value + (1 - α) * old_value
     // Using fixed point math to avoid floats
     let alpha_q16 = ((alpha as u64) << 16) / 10; // Convert to Q16 fixed point
@@ -115,7 +117,8 @@ pub fn update_ema(old_value: u64, new_value: u64, alpha: u8) -> u64 {
     ema_q16 >> 16 // Convert back from Q16
 }
 
-/// Compute raw interest rate based on utilization and payout metrics
+/// Compute raw interest rate based 
+/// on utilization and payout metrics
 /// Returns rate in basis points (bps)
 pub fn compute_rate_raw(
     util_q32: u64,      // Current utilization in Q32 fixed point

@@ -75,10 +75,11 @@ impl Depository {
             payout_q32 as u64, // Current payout ratio
             self.ma_util,      // Historical utilization EMA
             self.ma_payout,    // Historical payout EMA
-            self.dyn_rate_bps, // Current rate for self-scaling
+            self.dyn_rate_bps, 
         );
 
-        // Velocity damping – halve rate change on direction flip to prevent oscillation
+        // Velocity damping – halve rate change
+        // on direction flip to prevent oscillation
         let delta = raw as i16 - self.dyn_rate_bps as i16;
         let new_rate = if delta * self.last_rate_change < 0 {
             // Direction changed, dampen the movement
@@ -88,7 +89,7 @@ impl Depository {
         };
         self.last_rate_change = delta;
         self.dyn_rate_bps = new_rate;
-        self.interest_rate = new_rate as u64; // Update the actual interest rate used
+        self.interest_rate = new_rate as u64; 
     }
     
     /// Update take profit tracking when a position is closed profitably
@@ -101,14 +102,13 @@ impl Depository {
     }
     
     /// Update utilization when positions are opened/closed
-    /// This tracks the total amount at risk (value of all open positions)
-    pub fn update_utilization(&mut self, drawn_change: i64) {
+    /// tracks total amount at risk (value of all positions)
+    pub fn utilisation(&mut self, drawn_change: i64) {
         if drawn_change > 0 {
             self.total_drawn += drawn_change as u64;
         } else {
             self.total_drawn = self.total_drawn.saturating_sub((-drawn_change) as u64);
         }
-        // Trigger repricing since utilization changed
         self.reprice();
     }
 }
@@ -159,7 +159,12 @@ impl Depositor {
         // the ticker must already be present in depositor's balances...
         if let Some(pod) = self.balances.iter_mut().find(
                              |pod| pod.ticker == padded) {
-            
+            // Instead of fixed calculation, base it on system utilization
+            let util_factor = if depository.total_deposits > 0 {
+                let util_pct = (depository.total_drawn * 100) / depository.total_deposits;
+                // Scale liquidation: 1% at low util, up to 10% at high util
+                    1 + (util_pct.min(90) / 10)
+            } else { 1 }; // default is 1%       
             let mut exposure: u64 = pod.exposure.abs() as u64;
             let time_elapsed: f32 = (current_time - pod.updated) as f32;
             let mut accrued_interest = Self::calculate_accrued_interest(
@@ -189,7 +194,7 @@ impl Depositor {
                         pod.pledged += delta - delta / 250;
                         pod.updated = current_time;
                         // Update utilization for new exposure
-                        depository.update_utilization(delta as i64);
+                        depository.utilisation(delta as i64);
                         return Ok((delta as i64, accrued_interest));
                     } // need to burn ^ from depository's shares...
                     else if amount != 0 { // caller is not liquidator;
@@ -207,8 +212,12 @@ impl Depositor {
                     // is actually getting appropriated by all depositors, slowly, 
                     // giving the depositor time to react and close their position
                         require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                        delta = ((pod.exposure as f32 * // amortised over 4 days...
-                             (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
+                        // delta = ((pod.exposure as f32 * // amortised over 4 days...
+                        //     (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
+
+                        delta = ((pod.exposure.abs() as f32 * 
+                            (time_elapsed / MAX_AGE as f32)) / 
+                            (1152 as f32 / util_factor as f32)) as u64;
                         
                         pod.exposure -= delta as i64; 
                         delta *= price; // to dollars;
@@ -216,9 +225,9 @@ impl Depositor {
                         pod.updated = current_time;
                         
                         // Update utilization (position size decreased)
-                        depository.update_utilization(-(delta as i64));
-                        // Don't record take profit here - happens in calling instruction
-                        // to avoid double-counting
+                        depository.utilisation(-(delta as i64));
+                        // Don't record take profit, happens when 
+                        // calling instruction (avoids double-count)
                         
                         return Ok(((delta as i64 * -1), accrued_interest));
                     } // ^ (-) indicates amount is (+) to Banks.total_deposits
@@ -237,20 +246,24 @@ impl Depositor {
                                                             / price as f32) as i64;          
                             pod.updated = current_time;
                             // Track increased exposure
-                            depository.update_utilization(delta as i64);
+                            depository.utilisation(delta as i64);
                             return Ok((delta as i64, 
                                 accrued_interest));
                         } 
                         else if amount == 0 {
                             require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                            delta = ((pod.exposure as f32 * // amortised over 4 days...
-                                (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
+                            // delta = ((pod.exposure as f32 * // amortised over 4 days...
+                            //    (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
+                            
+                            delta = ((pod.exposure.abs() as f32 * 
+                                (time_elapsed / MAX_AGE as f32)) / 
+                                (1152 as f32 / util_factor as f32)) as u64;
                             
                             pod.updated = current_time;
                             pod.exposure -= delta as i64; 
                             delta *= price; // to dollars;
                             pod.pledged -= delta; // deduct liquidated value...
-                            depository.update_utilization(-(delta as i64));
+                            depository.utilisation(-(delta as i64));
                             return Ok(((delta as i64 * -1), accrued_interest));
                         } else { // ^ total deposits ^ incremented plus ^
                             return Err(PithyQuip::Undercollateralised.into());
@@ -286,7 +299,7 @@ impl Depositor {
                             // Note: record_take_profit happens in instruction handler
                         } 
                         pod.updated = current_time; // reduces total_deposits
-                        depository.update_utilization(-(-amount as i64 * price as i64));
+                        depository.utilisation(-(-amount as i64 * price as i64));
                         return Ok((((delta as i64) * -1), accrued_interest));
                     // interest represents amount to transfer...this includes 
                     // both what was pledged and remainder from total_deposits
@@ -313,7 +326,7 @@ impl Depositor {
                         } // exposure is less than 10% above pledged...
                         // but not less than 10% below pledged (valid)
                         pod.updated = current_time; // no burn shares
-                        depository.update_utilization(amount * price as i64);
+                        depository.utilisation(amount * price as i64);
                         return Ok((delta as i64, accrued_interest));
                     } 
                 }
@@ -339,7 +352,7 @@ impl Depositor {
                         pod.exposure += (((delta - delta / 250) as f32) 
                                                          / price as f32) as i64;
                         pod.updated = current_time; // track position adjustment
-                        depository.update_utilization(delta as i64);
+                        depository.utilisation(delta as i64);
                         return Ok((delta as i64, 
                                 accrued_interest)); 
                     }
@@ -363,7 +376,7 @@ impl Depositor {
                         // so they get paid pro rata
                         // to cancel out (ceteris...)
                         pod.pledged -= delta * price;
-                        depository.update_utilization(-(delta as i64 * price as i64));
+                        depository.utilisation(-(delta as i64 * price as i64));
                         return Ok(((delta as i64 * -1), 
                                     accrued_interest));
                     }
@@ -377,19 +390,22 @@ impl Depositor {
                             self.deposited_usd_star -= delta;
                             pod.pledged += delta - delta / 250;
                             pod.updated = current_time;
-                            depository.update_utilization(delta as i64);
+                            depository.utilisation(delta as i64);
                             return Ok((delta as i64, 
                                     accrued_interest));
                         } 
                         else if amount == 0 {
                             require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                            delta = ((pod.exposure.abs() as f32 * // amortised over 4 days
-                                (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
-                        
+                            // delta = ((pod.exposure.abs() as f32 * // amortised over 4 days
+                            //    (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64;
+                            delta = ((pod.exposure.abs() as f32 * 
+                                (time_elapsed / MAX_AGE as f32)) / 
+                                (1152 as f32 / util_factor as f32)) as u64;
+                            
                             pod.exposure += delta as i64;
                             pod.pledged -= delta * price;
                             pod.updated = current_time;
-                            depository.update_utilization(-(delta as i64 * price as i64));
+                            depository.utilisation(-(delta as i64 * price as i64));
                             return Ok(((delta as i64 * -1), 
                                         accrued_interest));
                         }
@@ -416,7 +432,7 @@ impl Depositor {
                         amount = (pod.pledged as f32 * amt) as i64;
                         pod.pledged -= amount as u64;
                         pod.updated = current_time;
-                        depository.update_utilization(-(amount as i64 * price as i64));
+                        depository.utilisation(-(amount as i64 * price as i64));
                         return Ok(((delta as i64) * -1, 
                         (delta as i64 + amount) as u64));
                     } 
@@ -435,7 +451,7 @@ impl Depositor {
                                 pod.exposure -= (delta as f32 / price as f32) as i64;
                                 // ^ we are selling against ourselves, buying to burn
                                 pod.updated = current_time; 
-                                depository.update_utilization(delta as i64);
+                                depository.utilisation(delta as i64);
                                 return Ok((delta as i64, 
                                                                     accrued_interest));
                             } else { return Err(PithyQuip::UnderExposed.into()); }
@@ -443,7 +459,7 @@ impl Depositor {
                             // adding positive number shrinks negative exposure
                             pod.exposure += (((exposure - delta) as f32) 
                                                          / price as f32) as i64;
-                            depository.update_utilization(-((exposure - delta) as i64));
+                            depository.utilisation(-((exposure - delta) as i64));
                         } 
                     } pod.updated = current_time; // why wouldn't a depositor just: 
                     return Ok((0, accrued_interest)); // select the smallest distance,
@@ -453,6 +469,28 @@ impl Depositor {
         } else { return Err(PithyQuip::DepositFirst.into()); } 
         Ok((0,0)) 
     } 
+
+     pub fn adjust_deposit_seconds(&mut self, amount_reduced: u64, current_time: i64) {
+        if self.deposited_usd_star > 0 && amount_reduced > 0 {
+            // Update time-weighted balance before adjustment
+            let time_delta = (current_time - self.last_updated) as u64;
+            self.deposit_seconds = self.deposit_seconds
+                .saturating_add((time_delta * self.deposited_usd_star) as u128);
+            
+            // Reduce deposit_seconds proportionally
+            // let reduction_ratio = amount_reduced.min(self.deposited_usd_star) as u128;
+            let remaining_ratio = self.deposited_usd_star.saturating_sub(amount_reduced) as u128;
+            
+            if self.deposited_usd_star > 0 {
+                self.deposit_seconds = self.deposit_seconds
+                    .checked_mul(remaining_ratio)
+                    .and_then(|v| v.checked_div(self.deposited_usd_star as u128))
+                    .unwrap_or(0);
+            }
+            
+            self.last_updated = current_time;
+        }
+    }
 
     /* This function handles collateral adjustments (adding or removing pledged dollars
      * or deposited); safety-first: ensures collateralisation constraints are respected. */
@@ -577,18 +615,29 @@ impl Depositor {
 pub fn stake_from_depositor_cpi<'info>(
     depositor_account: &Account<'info, Depositor>,
     depository_account: &Account<'info, Depository>,
-    amount: u64, use_time_weighted: bool) -> Result<u64> {
+    amount: u64,
+    use_time_weighted: bool,
+) -> Result<u64> {
     let stake_value = if use_time_weighted {
-        let share = depositor_account.deposit_seconds
-            .saturating_mul(depository_account.total_deposits as u128)
+        // Calculate the depositor's proportional share based on time-weighted contribution
+        let depositor_share_ratio = depositor_account.deposit_seconds
             .checked_div(depository_account.total_deposit_seconds)
-            .unwrap_or(0).min(amount as u128) as u64; share
-    } else {
-        let total_pledged: u64 = depositor_account.balances
-            .iter().map(|pos| pos.pledged).sum();
+            .unwrap_or(0);
         
-        total_pledged.min(amount)
-    };  Ok(stake_value)
+        // Apply ratio to current total deposits to get available stake
+        let available_stake = (depository_account.total_deposits as u128)
+            .saturating_mul(depositor_share_ratio)
+            .checked_div(1_000_000) // Normalize if using fixed point math
+            .unwrap_or(0)
+            .min(depositor_account.deposited_usd_star as u128) // Can't exceed actual deposits
+            .min(amount as u128) as u64;
+      
+        available_stake
+    } else {
+        // Simple current balance check
+        depositor_account.deposited_usd_star.min(amount)
+    };   
+    Ok(stake_value)
 }
 
 pub fn deduct_battle_stake<'info>(

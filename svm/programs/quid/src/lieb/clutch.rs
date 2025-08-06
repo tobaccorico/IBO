@@ -112,7 +112,7 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
     // totally within boundaries, and no need to be touched
     Banks.total_deposits += interest;
     
-    // Calculate liquidator commission (just over 0.5%)
+    // Calculate liquidator commission (~0.5%)
     interest = (delta.abs() as u64 / 250) as u64;
     
     if delta < 0 { 
@@ -137,7 +137,7 @@ pub fn amortise(ctx: Context<Liquidate>, ticker: String) -> Result<()> {
         Banks.total_deposits -= remainder as u64;
     }   Banks.reprice(); 
     
-    // Pay liquidator commission
+    // TODO pay liquidator commission or instead deposit it depending on flag
     token_interface::transfer_checked(cpi_ctx, interest, decimals)?;
     Ok(())
 }

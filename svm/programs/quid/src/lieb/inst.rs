@@ -1,12 +1,10 @@
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::ed25519_program::ID as ED25519_ID;
 use anchor_lang::solana_program::sysvar::instructions::{
-    load_instruction_at_checked,
     ID as SYSVAR_INSTRUCTIONS_ID};
 
 use crate::state::*;
-use crate::casa::*;
+use crate::case::*;
 #[derive(Accounts)]
 pub struct CreateBattle<'info> {
     #[account(mut)]
@@ -66,6 +64,16 @@ pub struct FinalizeBattle<'info> {
     
     #[account(mut)]
     pub depository: Account<'info, crate::stay::Depository>,
+    
+    #[account(
+        seeds = [b"config"],
+        bump
+    )]
+    pub config: Account<'info, BattleConfig>,
+    
+    /// CHECK: Instruction sysvar for Ed25519 verification
+    #[account(address = SYSVAR_INSTRUCTIONS_ID)]
+    pub instruction_sysvar: AccountInfo<'info>,
 }
 
 pub fn create_battle_challenge(
@@ -149,19 +157,55 @@ pub fn finalize_battle_with_mpc(
         &[winner_is_challenger as u8],
     ].concat();
     
-    // Ed25519 signatures must be verified via the Ed25519 program precompile
-    // For simplicity, we'll just check that signatures are non-zero
-    // In production, you'd verify via CPI to Ed25519 program
-    require!(challenger_sig != [0u8; 64], PithyQuip::UnauthorizedAction);
-    require!(defender_sig != [0u8; 64], PithyQuip::UnauthorizedAction);
-    require!(judge_sig != [0u8; 64], PithyQuip::UnauthorizedAction);
-
+    // Verify Ed25519 signatures via precompile
+    let clock = Clock::get()?;
+    
+    // 1. Verify challenger signature
+    verify_ed25519_signature(
+        &battle.challenger,
+        &message,
+        &challenger_sig,
+        &ctx.accounts.instruction_sysvar,
+    )?;
+    
+    // 2. Verify defender signature  
+    verify_ed25519_signature(
+        &battle.defender,
+        &message,
+        &defender_sig,
+        &ctx.accounts.instruction_sysvar,
+    )?;
+    
+    // 3. Verify judge signature (must be from authorized judge)
+    let config = &ctx.accounts.config;
+    let judge_pubkey = recover_pubkey_from_signature(&message, &judge_sig)?;
+    require!(
+        config.judge_pubkeys.contains(&judge_pubkey),
+        PithyQuip::UnauthorizedAction
+    );
+    
+    // 4. Aggregate signatures to form MPC signature
+    let aggregated_signature = aggregate_signatures(
+        &challenger_sig,
+        &defender_sig,
+        &judge_sig,
+    );
+    
+    // 5. Verify aggregated signature matches authority
+    verify_aggregated_authority(
+        &config.authority,
+        &message,
+        &aggregated_signature,
+    )?;
+    
+    // Set winner and settle
     battle.winner = Some(if winner_is_challenger { 
         battle.challenger 
     } else { 
         battle.defender 
     });
     battle.phase = BattlePhase::Completed;
+    
     settle_battle(battle,
         &mut ctx.accounts.challenger_depositor,
         &mut ctx.accounts.defender_depositor,

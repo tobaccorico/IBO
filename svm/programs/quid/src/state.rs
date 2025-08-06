@@ -1,5 +1,8 @@
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::ed25519_program::ID as ED25519_ID;
+use anchor_lang::solana_program::sysvar::instructions::{
+    load_instruction_at_checked};
 
 #[account]
 #[derive(InitSpace)]
@@ -43,9 +46,11 @@ pub enum BattlePhase {
 #[account]
 #[derive(InitSpace)]
 pub struct BattleConfig {
-    pub authority: Pubkey,
+    pub authority: Pubkey,  // This will be the aggregated MPC public key
     pub min_stake: u64,
     pub battle_timeout: i64,
+    #[max_len(12)] 
+    pub judge_pubkeys: Vec<Pubkey>, // List of authorized judges
 }
 
 #[error_code]
@@ -64,4 +69,68 @@ pub enum PithyQuip {
     
     #[msg("No authority to make that call, you're not the one who rules it all")]
     UnauthorizedAction,
+}
+
+pub fn verify_ed25519_signature(
+    pubkey: &Pubkey,
+    message: &[u8],
+    signature: &[u8; 64],
+    instruction_sysvar: &AccountInfo,
+) -> Result<()> {
+    // The Ed25519 program precompile expects the signature verification
+    // to be done in the previous instruction
+    let ix = load_instruction_at_checked(0, instruction_sysvar)?;
+    
+    // Verify the instruction is for Ed25519 verification
+    require_keys_eq!(ix.program_id, ED25519_ID, PithyQuip::UnauthorizedAction);
+    
+    // Verify the signature data matches
+    let expected_data = [
+        &[1u8][..], // Number of signatures
+        &[0u8; 16][..], // Padding
+        &signature[..], // Convert array reference to slice
+        pubkey.as_ref(),
+        message,
+    ].concat();
+    
+    require!(ix.data == expected_data, PithyQuip::UnauthorizedAction);
+    Ok(())
+}
+
+// Aggregate three signatures using simple XOR (in production, use proper MPC scheme)
+pub fn aggregate_signatures(
+    sig1: &[u8; 64],
+    sig2: &[u8; 64],
+    sig3: &[u8; 64],
+) -> [u8; 64] {
+    let mut result = [0u8; 64];
+    for i in 0..64 {
+        result[i] = sig1[i] ^ sig2[i] ^ sig3[i];
+    }
+    result
+}
+
+// Verify the aggregated signature represents the authority
+pub fn verify_aggregated_authority(
+    authority: &Pubkey,
+    message: &[u8],
+    aggregated_sig: &[u8; 64],
+) -> Result<()> {
+    // In a real MPC implementation, this would verify that the
+    // aggregated signature is valid under the combined public key
+    // For now, we use a simplified check
+    
+    // The authority pubkey should be derived from the MPC setup
+    // This is a placeholder - implement actual MPC verification
+    Ok(())
+}
+
+// Function to recover public key from signature (placeholder)
+pub fn recover_pubkey_from_signature(
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<Pubkey> {
+    // In production, implement Ed25519 public key recovery
+    // For now, return a placeholder
+    Ok(Pubkey::default())
 }

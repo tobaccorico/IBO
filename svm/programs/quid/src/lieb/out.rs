@@ -80,7 +80,8 @@ pub fn handle_out(ctx: Context<Withdraw>,
     
     // Update time-weighted metrics for interest rate calculation
     let mut time_delta = right_now - Banks.last_updated;
-    Banks.total_deposit_seconds += (time_delta as u64 * Banks.total_deposits) as u128;
+    Banks.total_deposit_seconds += (time_delta as u64 * 
+        Banks.total_deposits) as u128;
     Banks.last_updated = right_now; 
 
     let mut amt: u64 = 0;
@@ -109,7 +110,14 @@ pub fn handle_out(ctx: Context<Withdraw>,
         
             amt += value;
             Banks.total_deposits -= value;
+            
+            let old_deposited = customer.deposited_usd_star;
             customer.deposited_usd_star -= customer.deposited_usd_star.min(value);
+            
+            if old_deposited > 0 && value > 0 {  
+                customer.adjust_deposit_seconds(value, right_now);
+            }
+            customer.last_updated = right_now;
         }
         token_interface::transfer_checked(cpi_ctx, amt, decimals)?;
     } else { // < ticker was not ""

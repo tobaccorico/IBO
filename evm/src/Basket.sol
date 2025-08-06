@@ -216,13 +216,12 @@ contract Basket is ERC6909 { // extended
             max -= (token == stables[0] && !strict) ? 
                  AUX.untouchable() : 0; // bonded...
 
-            // Apply fee if enabled
             if (feesEnabled) {
                 uint fee = getFee(token, false, amount);
-                amount = FullMath.mulDiv(amount, WAD + fee, WAD); // Increase amount to account for fee
-            }
+                amount = FullMath.mulDiv(amount, WAD + fee, WAD); 
+            } // Increase amount to account for fee
 
-            if (max >= amount) { // can be covered wholly
+            if (max >= amount) { // can be covered wholly...
                 uint withdrawn = withdraw(who, vault, amount);
                 if (feesEnabled) {
                     uint fee = getFee(token, false, withdrawn);
@@ -300,9 +299,7 @@ contract Basket is ERC6909 { // extended
                 totalNeeded = amount + feeInShares;
                 require(totalNeeded <= allowed, "allowance");
             }
-            
             IERC4626(token).transferFrom(msg.sender, address(this), totalNeeded);
-            
             require(usd >= 50 * (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
             perVault[token].shares += amount; // Not totalNeeded!
             perVault[token].cash += usd;
@@ -317,9 +314,7 @@ contract Basket is ERC6909 { // extended
                 totalNeeded = FullMath.mulDiv(usd, WAD + fee, WAD);
                 require(totalNeeded <= allowed, "insufficient allowance for fee");
             }
-            
             IERC20(token).transferFrom(from, address(this), totalNeeded);                
-
             require(usd >= 50 * (10 ** IERC20(token).decimals()), "grant");
 
             if (token == GHO) { vault = SGHO;
