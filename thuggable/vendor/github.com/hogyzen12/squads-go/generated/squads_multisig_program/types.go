@@ -662,7 +662,7 @@ type MultisigCreateArgsV2 struct {
 	TimeLock uint32
 
 	// The address where the rent for the accounts related to executed, rejected, or cancelled
-	// transactions can be reclaimed. If set to `None`, the rent reclamation feature is turned off.
+	// transactions can be pulled. If set to `None`, the rent reclamation feature is turned off.
 	RentCollector *ag_solanago.PublicKey `bin:"optional"`
 
 	// Memo is used for indexing only.

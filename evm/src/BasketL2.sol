@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Router} from  "./Router.sol";
-import {Auxiliary} from  "./Auxiliary.sol";
+import {Rover} from  "./Rover.sol";
+import {Aux} from  "./Aux.sol";
 
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
@@ -31,7 +31,7 @@ contract BasketL2 is ERC6909 { // Base
     uint private _deployed;
     uint private _totalSupply;
     address[] public STABLES;
-    Auxiliary public AUX; 
+    Aux public AUX; 
     
     Metrics public coreMetrics;
     IDSROracle internal DSR;
@@ -66,7 +66,7 @@ contract BasketL2 is ERC6909 { // Base
     
     mapping(address => SortedSetLib.Set) private perMonth;
     mapping(address => mapping( // legacy IERC20 version
-            address => uint256)) private _allowances;
+            address => uint)) private _allowances;
 
     modifier onlyUs {
         address sender = msg.sender;
@@ -117,7 +117,7 @@ contract BasketL2 is ERC6909 { // Base
     }
 
     function approve(address spender, 
-        uint256 value) public returns (bool) {
+        uint value) public returns (bool) {
         require(spender != address(0), "suspender");
         _allowances[msg.sender][spender] = value;
         return true;
@@ -157,7 +157,7 @@ contract BasketL2 is ERC6909 { // Base
         STABLES.push(crvusd);
         STABLES.push(srcvusd);
         
-        AUX = Auxiliary(payable(_aux));
+        AUX = Aux(payable(_aux));
         V4 = payable(_router);
         
         // the following oracles are needed on L2 in absence of 4626
@@ -336,7 +336,7 @@ contract BasketL2 is ERC6909 { // Base
 
     // overriding standard 6909 code
     function _mint(address receiver,
-        uint256 id, uint256 amount
+        uint id, uint amount
     ) internal override {
         _totalSupply += amount; 
         totalSupplies[id] += amount;
@@ -387,8 +387,8 @@ contract BasketL2 is ERC6909 { // Base
             if (to == V4) {
                 require(msg.sender == V4, "403");
             }
-            uint256 allowed = _allowances[from][msg.sender];
-            if (allowed != type(uint256).max) {
+            uint allowed = _allowances[from][msg.sender];
+            if (allowed != type(uint).max) {
                 _allowances[from][msg.sender] = allowed - amount;
             }
         } return _transfer(from, to, amount);

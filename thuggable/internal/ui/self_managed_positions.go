@@ -75,7 +75,7 @@ func NewSelfManagedPositionsScreen(window fyne.Window, app fyne.App) fyne.Canvas
                 cont.Objects[2].(*widget.Label).SetText(fmt.Sprintf("Amount: %.4f", pos.Amount))
                 cont.Objects[3].(*widget.Label).SetText(fmt.Sprintf("Status: %s", pos.Status))
                 cont.Objects[4].(*widget.Button).OnTapped = func() {
-                    s.reclaimPosition(pos)
+                    s.pullPosition(pos)
                 }
             }
         },
@@ -206,9 +206,9 @@ func (s *SelfManagedPositionsScreen) addETHLiquidity() {
     }, s.window)
 }
 
-func (s *SelfManagedPositionsScreen) reclaimPosition(pos SelfManagedPosition) {
+func (s *SelfManagedPositionsScreen) pullPosition(pos SelfManagedPosition) {
     percentEntry := widget.NewEntry()
-    percentEntry.SetPlaceHolder("Percentage to reclaim (1-100)")
+    percentEntry.SetPlaceHolder("Percentage to pull (1-100)")
     
     content := container.NewVBox(
         widget.NewLabel(fmt.Sprintf("Position ID: %d", pos.ID)),
@@ -217,8 +217,8 @@ func (s *SelfManagedPositionsScreen) reclaimPosition(pos SelfManagedPosition) {
         percentEntry,
     )
     
-    dialog.ShowCustomConfirm("Reclaim Position", "Reclaim", "Cancel", content, func(reclaim bool) {
-        if reclaim {
+    dialog.ShowCustomConfirm("Reclaim Position", "Reclaim", "Cancel", content, func(pull bool) {
+        if pull {
             percent, err := strconv.ParseInt(percentEntry.Text, 10, 32)
             if err != nil || percent < 1 || percent > 100 {
                 dialog.ShowError(fmt.Errorf("Invalid percentage"), s.window)
@@ -270,10 +270,10 @@ func (s *SelfManagedPositionsScreen) submitReclaimPosition(id uint64, percent in
     progress.Show()
     defer progress.Hide()
     
-    // Call Router.reclaim through ethereum client
+    // Call Router.pull through ethereum client
     err := s.evmClient.ReclaimPosition(id, percent)
     if err != nil {
-        dialog.ShowError(fmt.Errorf("Failed to reclaim: %v", err), s.window)
+        dialog.ShowError(fmt.Errorf("Failed to pull: %v", err), s.window)
         return
     }
     

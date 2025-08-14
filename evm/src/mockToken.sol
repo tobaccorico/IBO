@@ -4,18 +4,18 @@ pragma solidity >=0.8.4 <0.9.0;
 import {ERC20} from "solmate/src/tokens/ERC20.sol";
 
 contract mockToken is ERC20 {
-    address public router;
-    modifier onlyRouter {
-        require(msg.sender == address(router), "403"); _;
+    address public rover;
+    modifier onlyRover {
+        require(msg.sender == address(rover), "403"); _;
     }
-    constructor(address _router, uint8 _decimals) 
+    constructor(address _rover, uint8 _decimals) 
         ERC20("mock", "mock", _decimals) {
-        router = _router;
+        rover = _rover;
     }
-    function mint(uint amount) onlyRouter external {
+    function mint(uint amount) onlyRover external {
         _mint(msg.sender, amount);
     }
-    function burn(uint amount) onlyRouter external {
+    function burn(uint amount) onlyRover external {
         _burn(msg.sender, amount);   
     }
 }

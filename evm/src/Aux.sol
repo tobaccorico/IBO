@@ -5,7 +5,7 @@ pragma solidity ^0.8.24;
 
 import {Types} from "./imports/Types.sol";
 import {Basket} from "./Basket.sol";
-import {Router} from "./Router.sol";
+import {Rover} from "./Rover.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {stdMath} from "forge-std/StdMath.sol";
@@ -27,11 +27,11 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 import "lib/forge-std/src/console.sol"; // TODO remove
 
-contract Auxiliary is Ownable { 
+contract Aux is Ownable { 
     bool public token1isWETH;
     IERC20 USDC; WETH9 public WETH;
     IUniswapV3Pool v3Pool;
-    Router V4; IPool AAVE;
+    Rover V4; IPool AAVE;
     IUiPoolDataProviderV3 DATA;
     IPoolAddressesProvider ADDR;
     ISwapRouter v3Router; 
@@ -51,7 +51,7 @@ contract Auxiliary is Ownable {
     // of change of LEVER_YIELD
 
     bytes4 immutable SWAP_SELECTOR;
-    // ^ just for calling the Router
+    // ^ just for calling the Rover
 
     mapping(address => Types.viaAAVE) pledgesOneForZero;
     mapping(address => Types.viaAAVE) pledgesZeroForOne;
@@ -65,8 +65,8 @@ contract Auxiliary is Ownable {
     uint lastBlock; 
     // ^ for ASS...
 
-    modifier onlyRouter {
-        require(msg.sender == address(V4), "403"); _;
+    modifier onlyRover {
+        require(msg.sender == address(V4), "404"); _;
     }
 
     constructor(address _router, address _v3pool, 
@@ -87,7 +87,7 @@ contract Auxiliary is Ownable {
         } else { token1isWETH = false;
             WETH = WETH9(payable(token0));
             USDC = IERC20(token1);
-        }   V4 = Router(_router);    
+        }   V4 = Rover(_router);    
             AAVE = IPool(_aave);
             
         DATA = IUiPoolDataProviderV3(_data);
@@ -97,7 +97,7 @@ contract Auxiliary is Ownable {
         UNWIND_COST = 3524821; // TODO recalculate
         // ^ gas for unwind()
         SWAP_SELECTOR = bytes4(
-            keccak256("batchSwap(uint160,uint256,uint256,uint256,uint256,uint256)")
+            keccak256("batchSwap(uint160,uint,uint,uint,uint,uint)")
         );
     }
 
@@ -126,13 +126,13 @@ contract Auxiliary is Ownable {
         QUID = Basket(_quid); renounceOwnership();
         
         USDC.approve(address(QUID), 
-                type(uint256).max);                    
+                type(uint).max);                    
         USDC.approve(address(v3Router),
-                    type(uint256).max);
+                    type(uint).max);
         WETH.approve(address(wethVault),
-                    type(uint256).max);
+                    type(uint).max);
         WETH.approve(address(v3Router),
-                    type(uint256).max);
+                    type(uint).max);
 
         // ^ max approvals considered safe
         // to make as we fully control code
@@ -161,10 +161,11 @@ contract Auxiliary is Ownable {
 
     // `amount` specifies only how much to sell,
     // `token` specifies what you want to buy,
+    // `waitable` specifies 
     // returns which block trade will clear in
     function swap(address token, bool zeroForOne, uint amount, 
         uint waitable) public payable returns (uint blockNumber) { 
-        (uint160 sqrtPriceX96,,,) = V4.repack();
+        (uint160 sqrtPriceX96,,,) = V4.repack(); // TODO $ to $
         uint price = getPrice(sqrtPriceX96, false);
         bool isStable = QUID.isStable(token);
         // ^ if this is true user cares
@@ -362,7 +363,6 @@ contract Auxiliary is Ownable {
     }
 
     function redeem(uint amount) external {
-        require(amount >= WAD, "$1"); 
         amount = QUID.turn(msg.sender, amount);
         (uint total, ) = QUID.get_metrics(false);
         if (amount > 0) {
@@ -372,7 +372,7 @@ contract Auxiliary is Ownable {
             QUID.take(msg.sender, amount, address(QUID), false);
         } // TODO extremely unlikely edge case, distribute ETH if
     } // there is not suffcient dollars in the basket to cover...
-    
+
     // TODO remove (for testing purposes only)
     function set_price_eth(bool up) external {
         uint _price = getPrice(0, true);
@@ -400,9 +400,9 @@ contract Auxiliary is Ownable {
     }   fallback() external payable {} // weth.withdraw() triggers this...
 
     function sendETH(uint howMuch, address toWhom) 
-        public onlyRouter { _sendETH(howMuch, toWhom); }
+        public onlyRover{ _sendETH(howMuch, toWhom); }
 
-    function putETH(uint howMuch) public onlyRouter returns (uint) {
+    function putETH(uint howMuch) public onlyRover returns (uint) {
         WETH.transferFrom(address(V4), address(this), howMuch);
         return wethVault.deposit(howMuch, address(this));
     }
@@ -569,5 +569,5 @@ contract Auxiliary is Ownable {
                 }
             }
         } _sendETH(touched * UNWIND_COST, msg.sender); // caller's gas compensation
-    } // could repay, for instance, a contract's flash loan used to pay for gas... 
+    } 
 }

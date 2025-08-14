@@ -29,11 +29,11 @@ import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {Fixtures} from "./utils/Fixtures.sol";
-import {Auxiliary} from "../src/Auxiliary.sol";
-import {Router} from "../src/Router.sol";
+import {Aux} from "../src/Aux.sol";
+import {Rover} from "../src/Rover.sol";
 import {Basket} from "../src/Basket.sol";
 
-contract RouterTest is Test, Fixtures {
+contract RoverTest is Test, Fixtures {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
@@ -44,7 +44,7 @@ contract RouterTest is Test, Fixtures {
     address public User01 = address(0x1);
     address public User02 = address(0x2);
 
-    ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
+    ISwapRouter public V3 = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     IUniswapV3Pool public V3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
     
     address[] public STABLECOINS;
@@ -76,8 +76,8 @@ contract RouterTest is Test, Fixtures {
     IERC4626 public SCRVUSD = IERC4626(0x0655977FEb2f289A4aB78af67BAB0d17aAb84367);
 
     Basket public QUID;
-    Auxiliary public AUX;
-    Router public V4router;
+    Aux public AUX;
+    Rover public V4;
     uint SWAP_COST = 1817119;
     uint stack = 10000 * USDC_PRECISION;
     function setUp() public {
@@ -105,12 +105,12 @@ contract RouterTest is Test, Fixtures {
         vm.deal(address(this), 10000 ether);
         vm.deal(User01, 10000 ether);
         
-        V4router = new Router(manager);
-        AUX = new Auxiliary(address(V4router),
-            address(V3pool), address(V3router),
+        V4 = new Rover(manager);
+        AUX = new Aux(address(V4),
+            address(V3pool), address(V3),
             address(gauntletWETHvault), 
             aavePool, aaveData, aaveAddr);
-        QUID = new Basket(address(V4router),
+        QUID = new Basket(address(V4),
             address(AUX), STABLECOINS, VAULTS);
 
         vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
@@ -118,7 +118,7 @@ contract RouterTest is Test, Fixtures {
         USDC.transfer(User01, 1000000 * USDC_PRECISION); 
         vm.stopPrank();
         
-        V4router.setup(address(QUID),
+        V4.setup(address(QUID),
         address(AUX), address(V3pool));
         
         AUX.setQuid{value: 1 wei}(address(QUID));   
@@ -132,22 +132,22 @@ contract RouterTest is Test, Fixtures {
     function testRegularSwaps() public {    
         vm.startPrank(User01);
 
-        V4router.deposit{value: 25 ether}(0); // ADD LIQUIDITY TO POOL
+        V4.deposit{value: 25 ether}(0); // ADD LIQUIDITY TO POOL
         uint balanceBefore = User01.balance; // USDC.balanceOf(User01);
 
         // TEST OUT OF RANGE with ETH (above price)
-        uint id = V4router.outOfRange{value: 1 ether}(0,
+        uint id = V4.outOfRange{value: 1 ether}(0,
                             address(0), 400, 100);
 
         // USDC.approve(address(QUID), stack / 10);
-        /* uint id = V4router.outOfRange(stack / 10,
+        /* uint id = V4.outOfRange(stack / 10,
                         address(USDC), -4000, 100); */ // below price with USDC works!
 
         uint balanceAfter = User01.balance; // USDC.balanceOf(User01);
         // assertApproxEqAbs(balanceBefore - balanceAfter, stack/10, 100);
         assertApproxEqAbs(balanceBefore - balanceAfter, 1 ether, 100);
 
-        V4router.reclaim(id, 100);
+        V4.pull(id, 100);
 
         balanceAfter = User01.balance; // USDC.balanceOf(User01)
         assertApproxEqAbs(balanceBefore, balanceAfter, 108323224883144);
@@ -206,10 +206,10 @@ contract RouterTest is Test, Fixtures {
     // simulate a price drop inside the Univ3 pool
     function testWithdrawAndLeveragedSwaps() public {
         vm.startPrank(User01);
-        V4router.deposit{value: 25 ether}(0);
+        V4.deposit{value: 25 ether}(0);
 
         uint balanceBefore = User01.balance;
-        V4router.withdraw(1 ether);
+        V4.withdraw(1 ether);
         uint balanceAfter = User01.balance;
 
         assertApproxEqAbs(balanceAfter - balanceBefore, 1 ether, 100000);

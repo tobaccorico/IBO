@@ -190,7 +190,7 @@ func (c *EthereumClient) CreateOutOfRangePosition(amount *big.Int, token common.
 	return 1, nil
 }
 
-// ReclaimPosition reclaims liquidity from a self-managed position
+// ReclaimPosition pulls liquidity from a self-managed position
 func (c *EthereumClient) ReclaimPosition(id uint64, percent int32) error {
 	if c.privateKey == nil {
 		return fmt.Errorf("no private key configured")
@@ -203,7 +203,7 @@ func (c *EthereumClient) ReclaimPosition(id uint64, percent int32) error {
 	
 	tx, err := c.router.Reclaim(auth, big.NewInt(int64(id)), big.NewInt(int64(percent)))
 	if err != nil {
-		return fmt.Errorf("failed to reclaim: %w", err)
+		return fmt.Errorf("failed to pull: %w", err)
 	}
 	
 	receipt, err := bind.WaitMined(context.Background(), c.client, tx)

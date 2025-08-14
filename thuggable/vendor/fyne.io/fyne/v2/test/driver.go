@@ -127,7 +127,7 @@ func (d *driver) removeWindow(w *window) {
 	}
 
 	copy(d.windows[i:], d.windows[i+1:])
-	d.windows[len(d.windows)-1] = nil // Allow the garbage collector to reclaim the memory.
+	d.windows[len(d.windows)-1] = nil // Allow the garbage collector to pull the memory.
 	d.windows = d.windows[:len(d.windows)-1]
 
 	d.windowsMutex.Unlock()

@@ -6,8 +6,8 @@ import {Script} from "forge-std/Script.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 
-import {Auxiliary} from "../src/Auxiliary.sol";
-import {Router} from "../src/Router.sol";
+import {Aux} from "../src/Aux.sol";
+import {Rover} from "../src/Rover.sol";
 import {BasketL2} from "../src/BasketL2.sol";
 
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
@@ -15,9 +15,11 @@ import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
 import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol"; // < L1 and Arbi
 // import {IV3SwapRouter as ISwapRouter} from "../src/imports/V3/IV3SwapRouter.sol";
 
+// TODO morpho addresses across chains
+
 contract Deploy is Script {
     address[] public STABLECOINS;
-
+    
     // IPoolAddressesProvider
     address public aaveAddr = 0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D;
     // Ethereum : 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e
@@ -150,12 +152,11 @@ contract Deploy is Script {
 
     // Deploy contracts (Base)
     function run() public {
-        
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
-        Router V4router = new Router(poolManager);
+        Rover V4router = new Rover(poolManager);
         
-        Auxiliary AUX = new Auxiliary(address(V4router),
+        Aux AUX = new Aux(address(V4router),
             address(V3pool), address(V3router),
             address(gauntletWETHvault), aavePool);
        
@@ -177,5 +178,56 @@ contract Deploy is Script {
         console.log("V4", address(V4router));
     
         vm.stopBroadcast();
+    }
+    
+    function _saveDeployment(address factory, address registry, address helpers) internal {
+        string memory json = string(abi.encodePacked(
+            '{\n',
+            '  "factory": "', addressToString(factory), '",\n',
+            '  "registry": "', addressToString(registry), '",\n', 
+            '  "helpers": "', addressToString(helpers), '",\n',
+            '  "chainId": ', uint2str(block.chainid), ',\n',
+            '  "blockNumber": ', uint2str(block.number), '\n',
+            '}'
+        ));
+        
+        string memory filename = string(abi.encodePacked(
+            "deployments/",
+            uint2str(block.chainid),
+            "-deployment.json"
+        ));
+        
+        vm.writeFile(filename, json);
+        console.log("Deployment saved to:", filename);
+    }
+    
+    function addressToString(address addr) internal pure returns (string memory) {
+        bytes memory data = abi.encodePacked(addr);
+        bytes memory alphabet = "0123456789abcdef";
+        bytes memory str = new bytes(2 + data.length * 2);
+        str[0] = "0";
+        str[1] = "x";
+        for (uint i = 0; i < data.length; i++) {
+            str[2 + i * 2] = alphabet[uint8(data[i] >> 4)];
+            str[3 + i * 2] = alphabet[uint8(data[i] & 0x0f)];
+        }
+        return string(str);
+    }
+    
+    function uint2str(uint value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        uint temp = value;
+        uint digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
 }

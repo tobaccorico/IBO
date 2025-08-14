@@ -3,7 +3,7 @@
 pragma solidity ^0.8.24;
 
 import {Basket} from "./Basket.sol";
-import {Auxiliary} from "./Auxiliary.sol";
+import {Aux} from "./Aux.sol";
 import {mockToken} from "./mockToken.sol";
 import {Types} from "./imports/Types.sol";
 
@@ -36,7 +36,7 @@ import {stdMath} from "forge-std/StdMath.sol";
 
 import "lib/forge-std/src/console.sol"; // TODO remove
 
-contract Router is SafeCallback, Ownable {
+contract Rover is SafeCallback, Ownable {
     using TransientStateLibrary for IPoolManager;
     using BalanceDeltaLibrary for BalanceDelta;
     using StateLibrary for IPoolManager;
@@ -48,7 +48,7 @@ contract Router is SafeCallback, Ownable {
     IUniswapV3Pool v3Pool; 
     mockToken private mockETH; 
     mockToken private mockUSD;
-    Basket QUID; Auxiliary AUX;
+    Basket QUID; Aux AUX;
 
     mapping(uint => Types.Batch) swapsZeroForOne;
     mapping(uint => Types.Batch) swapsOneForZero;
@@ -116,7 +116,7 @@ contract Router is SafeCallback, Ownable {
             currency1: Currency.wrap(address(mockETH)),
             fee: 420, tickSpacing: 10,
             hooks: IHooks(address(0))}); 
-        AUX = Auxiliary(payable(_aux)); 
+        AUX = Aux(payable(_aux)); 
         
         WETH = WETH9(payable(address(AUX.WETH())));
         require(QUID.V4() == address(this), "?");
@@ -125,11 +125,11 @@ contract Router is SafeCallback, Ownable {
         tick *= AUX.token1isWETH() ? int24(1) : int24(-1);
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(tick);
         poolManager.initialize(VANILLA, sqrtPriceX96);
-        WETH.approve(address(AUX), type(uint256).max);
+        WETH.approve(address(AUX), type(uint).max);
         mockUSD.approve(address(poolManager),
-                        type(uint256).max);
+                        type(uint).max);
         mockETH.approve(address(poolManager),
-                        type(uint256).max);
+                        type(uint).max);
     }
 
     function withdraw(uint amount) external { 
@@ -308,8 +308,8 @@ contract Router is SafeCallback, Ownable {
             tickLower, tickUpper)), (BalanceDelta));
     }
 
-    // reclaim liquidity from a self-managed position
-    function reclaim(uint id, int percent) external {
+    // pull liquidity from a self-managed position
+    function pull(uint id, int percent) external {
         Types.SelfManaged memory position = selfManaged[id];
         require(position.owner == msg.sender, "403");
         require(percent > 0 && percent < 101, "%");
@@ -325,7 +325,7 @@ contract Router is SafeCallback, Ownable {
                 }
             }
         } else {    position.liq -= liquidity;
-            require(position.liq > 0, "reclaim");
+            require(position.liq > 0, "pull");
             selfManaged[id] = position;
         }
         abi.decode(poolManager.unlock(abi.encode(

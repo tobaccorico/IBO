@@ -29,31 +29,31 @@ interface IDSROracle {
      * @notice Get the current Dai Savings Rate.
      * @return The Dai Savings Rate in per-second value [ray].
      */
-    function getDSR() external view returns (uint256);
+    function getDSR() external view returns (uint);
 
     /**
      * @notice Get the last computed conversion rate.
      * @return The last computed conversion rate [ray].
      */
-    function getChi() external view returns (uint256);
+    function getChi() external view returns (uint);
 
     /**
      * @notice Get the last computed timestamp.
      * @return The last computed timestamp [seconds].
      */
-    function getRho() external view returns (uint256);
+    function getRho() external view returns (uint);
 
     /**
      * @notice Get the Annual Percentage Rate.
      * @return The APR.
      */
-    function getAPR() external view returns (uint256);
+    function getAPR() external view returns (uint);
 
     /**
      * @notice Get the conversion rate at the current timestamp.
      * @return The conversion rate.
      */
-    function getConversionRate() external view returns (uint256);
+    function getConversionRate() external view returns (uint);
 
     /**
      * @notice Get the conversion rate at a specified timestamp.
@@ -61,13 +61,13 @@ interface IDSROracle {
      * @param  timestamp The timestamp at which to retrieve the conversion rate.
      * @return The conversion rate.
      */
-    function getConversionRate(uint256 timestamp) external view returns (uint256);
+    function getConversionRate(uint timestamp) external view returns (uint);
 
     /**
      * @notice Get the binomial approximated conversion rate at the current timestamp.
      * @return The binomial approximated conversion rate.
      */
-    function getConversionRateBinomialApprox() external view returns (uint256);
+    function getConversionRateBinomialApprox() external view returns (uint);
 
     /**
      * @notice Get the binomial approximated conversion rate at a specified timestamp.
@@ -75,13 +75,13 @@ interface IDSROracle {
      * @param  timestamp The timestamp at which to retrieve the binomial approximated conversion rate.
      * @return The binomial approximated conversion rate.
      */
-    function getConversionRateBinomialApprox(uint256 timestamp) external view returns (uint256);
+    function getConversionRateBinomialApprox(uint timestamp) external view returns (uint);
 
     /**
      * @notice Get the linear approximated conversion rate at the current timestamp.
      * @return The linear approximated conversion rate.
      */
-    function getConversionRateLinearApprox() external view returns (uint256);
+    function getConversionRateLinearApprox() external view returns (uint);
 
     /**
      * @notice Get the linear approximated conversion rate at a specified timestamp.
@@ -89,6 +89,6 @@ interface IDSROracle {
      * @param  timestamp The timestamp at which to retrieve the linear approximated conversion rate.
      * @return The linear approximated conversion rate.
      */
-    function getConversionRateLinearApprox(uint256 timestamp) external view returns (uint256);
+    function getConversionRateLinearApprox(uint timestamp) external view returns (uint);
     
 }

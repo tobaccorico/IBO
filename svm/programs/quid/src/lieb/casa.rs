@@ -34,6 +34,8 @@ pub struct CreateBattle<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// my home is an instrument.
+
 #[derive(Accounts)]
 pub struct AcceptBattle<'info> {
     #[account(mut)]

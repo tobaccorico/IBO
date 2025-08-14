@@ -25,8 +25,8 @@ interface IUniswapV3PoolEvents {
         int24 indexed tickLower,
         int24 indexed tickUpper,
         uint128 amount,
-        uint256 amount0,
-        uint256 amount1
+        uint amount0,
+        uint amount1
     );
 
     /// @notice Emitted when fees are collected by the owner of a position
@@ -58,8 +58,8 @@ interface IUniswapV3PoolEvents {
         int24 indexed tickLower,
         int24 indexed tickUpper,
         uint128 amount,
-        uint256 amount0,
-        uint256 amount1
+        uint amount0,
+        uint amount1
     );
 
     /// @notice Emitted by the pool for any swaps between token0 and token1
@@ -90,10 +90,10 @@ interface IUniswapV3PoolEvents {
     event Flash(
         address indexed sender,
         address indexed recipient,
-        uint256 amount0,
-        uint256 amount1,
-        uint256 paid0,
-        uint256 paid1
+        uint amount0,
+        uint amount1,
+        uint paid0,
+        uint paid1
     );
 
     /// @notice Emitted by the pool for increases to the number of observations that can be stored

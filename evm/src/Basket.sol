@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Router} from  "./Router.sol";
-import {Auxiliary} from  "./Auxiliary.sol";
+import {Settlement} from "./Settlement.sol";
+import {Rover} from  "./Rover.sol";
+import {Aux} from  "./Aux.sol";
 
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
@@ -38,7 +39,8 @@ contract Basket is ERC6909 { // extended
     uint private _totalSupply;
     uint constant WAD = 1e18;
     address[] public stables;
-    Auxiliary public AUX; 
+    Settlement public SET;
+    Aux public AUX; 
     
     Metrics public coreMetrics;
     string private _name = "QU!D";
@@ -51,6 +53,9 @@ contract Basket is ERC6909 { // extended
     struct Pod { uint shares; uint cash; }
     mapping(address => Pod) public perVault;
     
+    uint public latest_holder = 0;
+    mapping(uint => address) public holders;
+    mapping(address => uint) public holder_to_id;
     mapping(address => bool) public isVault;
     mapping(address => bool) public isStable;
     mapping(address => address) public vaults;
@@ -81,8 +86,9 @@ contract Basket is ERC6909 { // extended
 
     modifier onlyUs { 
         address sender = msg.sender;
-        require(sender == V4 || 
-                sender == address(AUX), "403"); _;
+        require(sender == V4 
+             || sender == address(AUX) 
+             || sender == address(SET), "404"); _;
     }
 
     function currentMonth() public view returns
@@ -133,7 +139,7 @@ contract Basket is ERC6909 { // extended
         address[] memory _stables,
         address[] memory _vaults) { 
         _deployed = block.timestamp;
-        AUX = Auxiliary(payable(_aux));
+        AUX = Aux(payable(_aux));
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
         uint equalWeight = WAD / _stables.length;
@@ -151,6 +157,11 @@ contract Basket is ERC6909 { // extended
         feesEnabled = _enabled;
     }
 
+    function setSettlement(address _settlement) external onlyUs {
+        require(address(SET) == address(0), "set"); 
+        SET = Settlement(_settlement);
+    }
+
     // if force is false we just return
     // the most recent known metrics 
     // without recalculating them...
@@ -165,7 +176,7 @@ contract Basket is ERC6909 { // extended
             stats.yield = FullMath.mulDiv(WAD,
                amounts[9], amounts[0] - amounts[8]) - WAD;
             coreMetrics = stats; // exclude ^ sGHO "yield" as it goes
-        } return (stats.total, stats.yield); // to the Router's owner
+        } return (stats.total, stats.yield); // to Rover's a lien, uh?
     }
 
     // deployer's take-home...
@@ -173,7 +184,7 @@ contract Basket is ERC6909 { // extended
         address vault = vaults[
         stables[stables.length-1]];
         IStakeToken(vault).claimRewards(
-                    Router(V4).owner(),
+                    Rover(V4).owner(),
                     type(uint).max);
     }
 
@@ -369,7 +380,12 @@ contract Basket is ERC6909 { // extended
             require(msg.sender == address(AUX), "403");
             _mint(pledge, month, amount);
         } else {
-            uint scale = 18 - IERC20(token).decimals();
+            uint id = holder_to_id[msg.sender]; 
+            if (id == 0) {
+                holders[latest_holder] = msg.sender;
+                holder_to_id[msg.sender] = ++latest_holder;
+            }   uint scale = 18 - IERC20(token).decimals();
+            
             uint depositing = scale > 0 ? amount /
                             (10 ** scale) : amount;
 
@@ -379,7 +395,7 @@ contract Basket is ERC6909 { // extended
                     month - currentMonth(), WAD * 12);
 
             _mint(pledge, month, amount);
-        }
+        } 
     } 
 
     function transferFrom(address from, 

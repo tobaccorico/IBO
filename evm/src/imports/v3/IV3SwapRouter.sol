@@ -30,8 +30,8 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
         address tokenOut;
         uint24 fee;
         address recipient;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
+        uint amountIn;
+        uint amountOutMinimum;
         uint160 sqrtPriceLimitX96;
     }
 
@@ -40,13 +40,13 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// and swap the entire amount, enabling contracts to send tokens before calling this function.
     /// @param params The parameters necessary for the swap, encoded as `ExactInputSingleParams` in calldata
     /// @return amountOut The amount of the received token
-    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint amountOut);
 
     struct ExactInputParams {
         bytes path;
         address recipient;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
+        uint amountIn;
+        uint amountOutMinimum;
     }
 
     /// @notice Swaps `amountIn` of one token for as much as possible of another along the specified path
@@ -54,15 +54,15 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// and swap the entire amount, enabling contracts to send tokens before calling this function.
     /// @param params The parameters necessary for the multi-hop swap, encoded as `ExactInputParams` in calldata
     /// @return amountOut The amount of the received token
-    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+    function exactInput(ExactInputParams calldata params) external payable returns (uint amountOut);
 
     struct ExactOutputSingleParams {
         address tokenIn;
         address tokenOut;
         uint24 fee;
         address recipient;
-        uint256 amountOut;
-        uint256 amountInMaximum;
+        uint amountOut;
+        uint amountInMaximum;
         uint160 sqrtPriceLimitX96;
     }
 
@@ -70,18 +70,18 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// that may remain in the router after the swap.
     /// @param params The parameters necessary for the swap, encoded as `ExactOutputSingleParams` in calldata
     /// @return amountIn The amount of the input token
-    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
+    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint amountIn);
 
     struct ExactOutputParams {
         bytes path;
         address recipient;
-        uint256 amountOut;
-        uint256 amountInMaximum;
+        uint amountOut;
+        uint amountInMaximum;
     }
 
     /// @notice Swaps as little as possible of one token for `amountOut` of another along the specified path (reversed)
     /// that may remain in the router after the swap.
     /// @param params The parameters necessary for the multi-hop swap, encoded as `ExactOutputParams` in calldata
     /// @return amountIn The amount of the input token
-    function exactOutput(ExactOutputParams calldata params) external payable returns (uint256 amountIn);
+    function exactOutput(ExactOutputParams calldata params) external payable returns (uint amountIn);
 }

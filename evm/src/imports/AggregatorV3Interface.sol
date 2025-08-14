@@ -6,7 +6,7 @@ interface AggregatorV3Interface {
 
   function decimals() external view returns (uint8);
   function description() external view returns (string memory);
-  function version() external view returns (uint256);
+  function version() external view returns (uint);
 
   // getRoundData and latestRoundData should both raise "No data present"
   // if they do not have data to report, instead of returning unset values
@@ -17,8 +17,8 @@ interface AggregatorV3Interface {
     returns (
       uint80 roundId,
       int256 answer,
-      uint256 startedAt,
-      uint256 updatedAt,
+      uint startedAt,
+      uint updatedAt,
       uint80 answeredInRound
     );
 
@@ -28,8 +28,8 @@ interface AggregatorV3Interface {
     returns (
       uint80 roundId,
       int256 answer,
-      uint256 startedAt,
-      uint256 updatedAt,
+      uint startedAt,
+      uint updatedAt,
       uint80 answeredInRound
     );
 }

@@ -20,9 +20,9 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /// @notice A shared test contract that wraps the v4-core deployers contract and exposes basic liquidity operations on posm.
 contract Fixtures is Deployers, DeployPermit2 {
-    uint256 constant STARTING_USER_BALANCE = 10_000_000 ether;
-    uint256 constant MAX_SLIPPAGE_ADD_LIQUIDITY = type(uint256).max;
-    uint256 constant MAX_SLIPPAGE_REMOVE_LIQUIDITY = 0;
+    uint constant STARTING_USER_BALANCE = 10_000_000 ether;
+    uint constant MAX_SLIPPAGE_ADD_LIQUIDITY = type(uint).max;
+    uint constant MAX_SLIPPAGE_REMOVE_LIQUIDITY = 0;
 
     IPositionManager posm;
 
@@ -52,7 +52,7 @@ contract Fixtures is Deployers, DeployPermit2 {
     function approvePosmCurrency(Currency currency) internal {
         // Because POSM uses permit2, we must execute 2 permits/approvals.
         // 1. First, the caller must approve permit2 on the token.
-        IERC20(Currency.unwrap(currency)).approve(address(permit2), type(uint256).max);
+        IERC20(Currency.unwrap(currency)).approve(address(permit2), type(uint).max);
         // 2. Then, the caller must approve POSM as a spender of permit2. TODO: This could also be a signature.
         permit2.approve(Currency.unwrap(currency), address(posm), type(uint160).max, type(uint48).max);
     }
@@ -64,7 +64,7 @@ contract Fixtures is Deployers, DeployPermit2 {
         vm.stopPrank();
     }
 
-    function permit(uint256 privateKey, uint256 tokenId, address operator, uint256 nonce) internal {
+    function permit(uint privateKey, uint tokenId, address operator, uint nonce) internal {
         bytes32 digest = getDigest(operator, tokenId, 1, block.timestamp + 1);
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
@@ -74,7 +74,7 @@ contract Fixtures is Deployers, DeployPermit2 {
         IERC721Permit_v4(address(posm)).permit(operator, tokenId, block.timestamp + 1, nonce, signature);
     }
 
-    function getDigest(address spender, uint256 tokenId, uint256 nonce, uint256 deadline)
+    function getDigest(address spender, uint tokenId, uint nonce, uint deadline)
         internal
         view
         returns (bytes32 digest)
