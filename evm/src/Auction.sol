@@ -15,7 +15,7 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/Base64.sol";
 
-/// @title Auction - Belgian Auction with ERC404 Integration
+/// @title Auction - Belgian Auction with ERC404 Integration and MEV Protection
 /// @notice Pay-your-confidence mechanics with batch clearing and gas compensation
 /// @dev Handles both ETH (via Aux) and direct USD deposits to Basket
 contract Auction is ERC404, ReentrancyGuard, IArbitrable {
@@ -32,6 +32,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     uint private constant CLEARING_GAS_ESTIMATE = 200000;          // Gas for clearing
     uint private constant MIN_BIDS_FOR_GAS_COMP = 10;              // Minimum bids to qualify
     uint private constant MAX_BIDS_PER_EPOCH = 1000;               // DoS protection
+    uint private constant MAX_ALLOCATION_PER_ADDRESS = 2500;       // 25% max per address per epoch
     
     // ============ Structs ============
     
@@ -59,6 +60,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         bool cleared;
         bool gasCompensated;      // Track if clearer was compensated
         address clearer;          // Who cleared this epoch
+        mapping(address => uint) allocatedShares; // Track per-address allocations
         SortedSetLib.Set sortedBidIds;  // Sorted by price descending
     }
     
@@ -97,11 +99,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     // ============ State Variables ============
     
     bool private initialized;
-    bool public paused;
     AuctionParams public params;
     
     // Epoch management
-    mapping(uint => Epoch) internal epochs;  // Changed from public to internal
+    mapping(uint => Epoch) internal epochs;
     uint public currentEpochIndex;
     bool public bettingWindowClosed;
     
@@ -128,6 +129,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     // Gas compensation tracking
     uint public totalGasFeesCollected;
     uint public totalGasFeesDistributed;
+    address public protocolTreasury;
+    
+    // Content market support
+    mapping(address => bool) public authorizedContentSubmitters;
+    uint public contentSubmissionCount;
+    
+    // MEV protection
+    mapping(uint => mapping(address => uint)) public epochAllocations; // epoch => address => total shares
     
     // ============ Events ============
     
@@ -139,24 +148,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     event PayoutClaimed(address indexed user, uint amount, bool wasForceMajeur);
     event ContentSubmitted(address indexed submitter, string contentURI);
     event ParticipantAdded(address indexed participant);
-    event Paused();
-    event Unpaused();
-    
-    // ============ Modifiers ============
-    
-    modifier whenNotPaused() {
-        require(!paused, "Paused");
-        _;
-    }
-    
-    modifier onlyOwner() {
-        require(msg.sender == params.owner, "Not owner");
-        _;
-    }
     
     // ============ Constructor & Initialization ============
     
-    constructor() ERC404("", "", 18) {}
+    constructor() ERC404("", "", 18) {
+        // Set units to 1e18 to effectively disable NFT minting
+        // This makes the system work with ERC20 tokens only
+        units = 1e18;
+    }
     
     function initialize(AuctionParams memory _params) external {
         require(!initialized, "Already initialized");
@@ -165,6 +164,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         params = _params;
         settlementSystem = Settlement(_params.settlementSystem);
         auxSystem = Aux(payable(_params.aux));
+        protocolTreasury = _params.owner; // Set protocol treasury to owner
         
         name = _params.name;
         symbol = _params.symbol;
@@ -179,7 +179,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         bool requiresContent_,
         uint contentDeadline_,
         uint minParticipants_
-    ) external onlyOwner {
+    ) external {
+        require(msg.sender == params.owner, "Not owner");
         require(resolutionTime_ > block.timestamp + params.auctionDuration, "Invalid resolution");
         
         predictionConfig.question = question_;
@@ -190,24 +191,79 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         metaEvidenceId = metaEvidenceId_;
     }
     
-    // ============ Emergency Controls ============
-    
-    function pause() external onlyOwner {
-        paused = true;
-        emit Paused();
+    function setAuthorizedSubmitters(address submitter1, address submitter2) external {
+        require(msg.sender == params.owner, "Not owner");
+        require(predictionConfig.requiresContent, "Not content market");
+        authorizedContentSubmitters[submitter1] = true;
+        authorizedContentSubmitters[submitter2] = true;
     }
     
-    function unpause() external onlyOwner {
-        paused = false;
-        emit Unpaused();
-    }
+    // ============ MEV Protection State ============
+    
+    // Velocity tracking for dynamic fees
+    mapping(address => uint) public lastBidTime;
+    mapping(address => uint) public bidVelocity; // 0-1000 (0-10x multiplier)
+    
+    // Batch processing for sandwich resistance  
+    uint constant BATCH_WINDOW = 5 minutes;
+    mapping(uint => uint[]) public batchBidIds; // batchId => array of bid IDs
+    mapping(uint => bool) public batchProcessed;
+    
+    // MEV Protection: Track recent large trades
+    uint constant WHALE_WINDOW = 15 minutes;
+    mapping(uint => uint) public epochWhaleActivity; // epoch => large trade USD in last window
+    uint constant WHALE_THRESHOLD = 10000e18; // $10k USD
+    
+    // Price impact tracking
+    mapping(uint => uint) public epochPriceImpact; // epoch => cumulative price impact
     
     // ============ Core Belgian Auction Functions ============
+    
+    /// @notice Calculate minimum price based on total allocation (MEV protection)
+    function getMinimumPriceForAllocation(uint totalSharesWanted, uint epochShares) public pure returns (uint) {
+        if (epochShares == 0) return 1e18;
+        
+        uint percentOfEpoch = (totalSharesWanted * 100) / epochShares;
+        
+        // Exponential curve - the more you want, the more you pay
+        if (percentOfEpoch <= 5) return 0.01e18;   // 1¢ for ≤5%
+        if (percentOfEpoch <= 10) return 0.05e18;  // 5¢ for ≤10%
+        if (percentOfEpoch <= 20) return 0.15e18;  // 15¢ for ≤20%
+        if (percentOfEpoch <= 30) return 0.30e18;  // 30¢ for ≤30%
+        if (percentOfEpoch <= 40) return 0.50e18;  // 50¢ for ≤40%
+        if (percentOfEpoch <= 50) return 0.70e18;  // 70¢ for ≤50%
+        if (percentOfEpoch <= 75) return 0.85e18;  // 85¢ for ≤75%
+        return 0.95e18; // 95¢ for >75%
+    }
+    
+    /// @notice Calculate dynamic fee based on bidding velocity
+    function calculateDynamicGasFee(address bidder) internal returns (uint feeBps) {
+        uint timeSinceLastBid = block.timestamp - lastBidTime[bidder];
+        
+        // Update velocity
+        if (timeSinceLastBid < 1 minutes) {
+            // Rapid bidding - increase velocity
+            bidVelocity[bidder] = Math.min(bidVelocity[bidder] + 200, 1000);
+        } else if (timeSinceLastBid < 5 minutes) {
+            // Moderate speed
+            bidVelocity[bidder] = Math.min(bidVelocity[bidder] + 50, 1000);
+        } else {
+            // Decay velocity
+            uint decay = (timeSinceLastBid / 1 minutes) * 10;
+            bidVelocity[bidder] = bidVelocity[bidder] > decay ? 
+                                   bidVelocity[bidder] - decay : 0;
+        }
+        
+        lastBidTime[bidder] = block.timestamp;
+        
+        // Base fee 0.5% + velocity penalty (up to 10x = 5%)
+        return GAS_FEE_BPS + (GAS_FEE_BPS * bidVelocity[bidder] / 100);
+    }
     
     /// @notice Place a Belgian auction bid with ETH at your confidence level
     /// @param pricePerShare Your confidence expressed as price (0.01 to 1.00)
     /// @param isYes True for YES side, false for NO side
-    function placePredictionBid(uint pricePerShare, bool isYes) external payable nonReentrant whenNotPaused {
+    function placePredictionBid(uint pricePerShare, bool isYes) public payable nonReentrant {
         require(!bettingWindowClosed, "Betting closed");
         require(!predictionConfig.resolved, "Already resolved");
         require(pricePerShare >= 0.01e18 && pricePerShare <= 1e18, "Invalid price");
@@ -218,16 +274,16 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         // Track participant
         _addParticipant(msg.sender);
         
-        // Calculate gas contribution
-        uint gasContribution = (msg.value * GAS_FEE_BPS) / 10000;
+        // Calculate dynamic gas fee based on velocity
+        uint dynamicFeeBps = calculateDynamicGasFee(msg.sender);
+        uint gasContribution = (msg.value * dynamicFeeBps) / 10000;
         uint actualBetETH = msg.value - gasContribution;
         require(actualBetETH > 0, "Too small after gas");
         
-        // Swap ETH directly to Basket tokens via Aux
-        // Pass address(Basket) as the token parameter to get 6909 tokens
+        // Swap ETH to USD via Aux
         uint usdReceived = auxSystem.swap{value: actualBetETH}(
-            address(params.basket),   // Get Basket tokens directly
-            false,                    // Selling ETH
+            address(params.basket),
+            false,
             actualBetETH,
             0
         );
@@ -236,55 +292,156 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         // Calculate shares at their price
         uint sharesRequested = (usdReceived * 1e18) / pricePerShare;
         
-        // Create and store bid
-        _createBid(msg.sender, usdReceived, pricePerShare, sharesRequested, isYes);
+        // MEV Protection: Check if price meets minimum for desired allocation
+        Epoch storage currentEpoch = epochs[currentEpochIndex];
         
-        // Update gas collection
-        epochs[currentEpochIndex].totalGasCollected += gasContribution;
-        totalGasFeesCollected += gasContribution;
-    }
-    
-    /// @notice Place a Belgian auction bid with USD tokens
-    /// @param token The USD token to use (must be accepted by Basket)
-    /// @param amount Amount of tokens to bet
-    /// @param pricePerShare Your confidence expressed as price (0.01 to 1.00)
-    /// @param isYes True for YES side, false for NO side
-    function placePredictionBidWithToken(
-        address token,
-        uint amount,
-        uint pricePerShare,
-        bool isYes
-    ) external nonReentrant whenNotPaused {
-        require(!bettingWindowClosed, "Betting closed");
-        require(!predictionConfig.resolved, "Already resolved");
-        require(pricePerShare >= 0.01e18 && pricePerShare <= 1e18, "Invalid price");
-        require(Basket(params.basket).isStable(token) || Basket(params.basket).isVault(token), "Invalid token");
+        // Calculate total shares this address would have
+        uint currentShares = 0;
+        uint batchId = block.timestamp / BATCH_WINDOW;
         
-        _updateEpochIfNeeded();
-        
-        // Track participant
-        _addParticipant(msg.sender);
-        
-        // Transfer tokens from user
-        IERC20(token).transferFrom(msg.sender, address(this), amount);
-        
-        // Deposit to Basket
-        IERC20(token).approve(params.basket, amount);
-        uint deposited = Basket(params.basket).deposit(address(this), token, amount);
-        
-        // Scale to 18 decimals if needed
-        uint decimals = IERC20(token).decimals();
-        if (decimals < 18) {
-            deposited = deposited * 10**(18 - decimals);
+        // Count shares in current batch
+        uint[] storage currentBatchBids = batchBidIds[batchId];
+        for (uint i = 0; i < currentBatchBids.length; i++) {
+            Bid storage bid = allBids[currentBatchBids[i]];
+            if (bid.bidder == msg.sender) {
+                currentShares += bid.sharesRequested;
+            }
         }
         
-        require(deposited >= MIN_BET_USD, "Below minimum USD");
+        uint totalSharesWanted = currentShares + sharesRequested;
         
-        // Calculate shares
-        uint sharesRequested = (deposited * 1e18) / pricePerShare;
+        // Enforce minimum price based on total allocation
+        uint minimumPrice = getMinimumPriceForAllocation(
+            totalSharesWanted, 
+            currentEpoch.sharesAvailable
+        );
+        require(pricePerShare >= minimumPrice, "Price too low for allocation");
         
-        // Create and store bid
-        _createBid(msg.sender, deposited, pricePerShare, sharesRequested, isYes);
+        // Additional MEV protection: Detect potential sandwich attacks
+        _updateWhaleTracking(usdReceived);
+        
+        // Apply price impact for large trades
+        if (usdReceived > WHALE_THRESHOLD / 10) { // $1k+ trades
+            uint impact = (usdReceived * 100) / predictionConfig.totalPoolUSD;
+            if (impact > 5) { // >5% of pool
+                // Require higher confidence for large market impact
+                uint impactMultiplier = 100 + (impact - 5) * 2; // 2% per 1% over 5%
+                minimumPrice = (minimumPrice * impactMultiplier) / 100;
+                require(pricePerShare >= minimumPrice, "Price too low for market impact");
+            }
+        }
+        
+        // Create bid but don't process immediately (batch processing)
+        uint bidId = nextBidId++;
+        allBids[bidId] = Bid({
+            bidder: msg.sender,
+            usdAmount: usdReceived,
+            pricePerShare: pricePerShare,
+            sharesRequested: sharesRequested,
+            sharesAllocated: 0,
+            epochIndex: currentEpochIndex,
+            timestamp: block.timestamp,
+            isYes: isYes,
+            processed: false
+        });
+        
+        // Add to current batch
+        currentBatchBids.push(bidId);
+        userBidIds[msg.sender].push(bidId);
+        
+        // Update gas collection
+        currentEpoch.totalGasCollected += gasContribution;
+        totalGasFeesCollected += gasContribution;
+        
+        emit BidPlaced(msg.sender, usdReceived, pricePerShare, isYes, currentEpochIndex, bidId);
+        
+        // Try to process previous batch if ready
+        uint previousBatch = batchId - 1;
+        if (!batchProcessed[previousBatch] && batchBidIds[previousBatch].length > 0) {
+            _processBatch(previousBatch);
+        }
+        
+        // Auto-process current batch if it's getting large or time has passed
+        if (currentBatchBids.length >= 20 || 
+            (currentBatchBids.length > 0 && block.timestamp % BATCH_WINDOW > (BATCH_WINDOW - 30))) {
+            _processBatch(batchId);
+        }
+    }
+    
+    /// @notice Track whale activity for MEV protection
+    function _updateWhaleTracking(uint usdAmount) internal {
+        if (usdAmount >= WHALE_THRESHOLD) {
+            epochWhaleActivity[currentEpochIndex] += usdAmount;
+            
+            // If too much whale activity, increase batch window temporarily
+            if (epochWhaleActivity[currentEpochIndex] > WHALE_THRESHOLD * 5) {
+                // This signals potential manipulation
+                epochPriceImpact[currentEpochIndex] += 100; // basis points
+            }
+        }
+    }
+    
+    /// @notice Process a batch of bids together (MEV resistant)
+    function _processBatch(uint batchId) internal {
+        if (batchProcessed[batchId]) return;
+        
+        uint[] storage bidIds = batchBidIds[batchId];
+        if (bidIds.length == 0) return;
+        
+        // Randomize order within batch to prevent gaming
+        if (bidIds.length > 1) {
+            // Simple randomization using block data
+            uint seed = uint(keccak256(abi.encode(block.timestamp, block.prevrandao)));
+            for (uint i = bidIds.length - 1; i > 0; i--) {
+                uint j = seed % (i + 1);
+                uint temp = bidIds[i];
+                bidIds[i] = bidIds[j];
+                bidIds[j] = temp;
+                seed = uint(keccak256(abi.encode(seed)));
+            }
+        }
+        
+        // Check if batch is for current epoch
+        uint epochIndex = allBids[bidIds[0]].epochIndex;
+        if (epochIndex != currentEpochIndex && !epochs[epochIndex].cleared) {
+            // Add all bids to epoch's sorted set
+            for (uint i = 0; i < bidIds.length; i++) {
+                Bid storage bid = allBids[bidIds[i]];
+                if (bid.epochIndex == epochIndex) {
+                    // Insert into sorted set
+                    uint sortKey = (type(uint).max - bid.pricePerShare) << 32 | bidIds[i];
+                    epochs[epochIndex].sortedBidIds.insert(sortKey);
+                    epochs[epochIndex].totalBids++;
+                }
+            }
+        }
+        
+        batchProcessed[batchId] = true;
+    }
+    
+    /// @notice Place bid with content (for rap battles)
+    function placePredictionBidWithContent(
+        uint pricePerShare,
+        bool isYes,
+        string calldata contentURI
+    ) external payable nonReentrant {
+        require(predictionConfig.requiresContent, "Content not required");
+        require(authorizedContentSubmitters[msg.sender], "Not authorized submitter");
+        require(block.timestamp <= predictionConfig.contentDeadline, "Content deadline passed");
+        require(bytes(contentURI).length > 0, "Empty content");
+        require(contentSubmissionCount < 2, "Max content reached");
+        
+        // Store content
+        if (bytes(predictionConfig.contentSubmissions[msg.sender]).length == 0) {
+            predictionConfig.contentSubmitters.push(msg.sender);
+            contentSubmissionCount++;
+        }
+        predictionConfig.contentSubmissions[msg.sender] = contentURI;
+        
+        emit ContentSubmitted(msg.sender, contentURI);
+        
+        // Place the bid normally
+        placePredictionBid(pricePerShare, isYes);
     }
     
     /// @notice Internal function to create and store bid
@@ -321,98 +478,22 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         emit BidPlaced(bidder, usdAmount, pricePerShare, isYes, currentEpochIndex, bidId);
     }
     
-    /// @notice Place bid with content (for rap battles)
-    function placePredictionBidWithContent(
-        uint pricePerShare,
-        bool isYes,
-        string calldata contentURI
-    ) external payable nonReentrant whenNotPaused {
-        require(predictionConfig.requiresContent, "Content not required");
-        require(block.timestamp <= predictionConfig.contentDeadline, "Content deadline passed");
-        require(bytes(contentURI).length > 0, "Empty content");
-        
-        // Store content
-        if (bytes(predictionConfig.contentSubmissions[msg.sender]).length == 0) {
-            predictionConfig.contentSubmitters.push(msg.sender);
-        }
-        predictionConfig.contentSubmissions[msg.sender] = contentURI;
-        
-        emit ContentSubmitted(msg.sender, contentURI);
-        
-        // Place the bid
-        this.placePredictionBid{value: msg.value}(pricePerShare, isYes);
-    }
-    
-    // ============ Participant Tracking ============
-    
-    function _addParticipant(address participant) internal {
-        if (!hasParticipated[participant]) {
-            hasParticipated[participant] = true;
-            participants.push(participant);
-            participantCount++;
-            emit ParticipantAdded(participant);
-        }
-    }
-    
-    function getParticipants() external view returns (address[] memory) {
-        return participants;
-    }
-    
-    function getParticipantCount() external view returns (uint) {
-        return participantCount;
-    }
-    
-    // ============ Epoch Management ============
-    
-    function _updateEpochIfNeeded() internal {
-        if (currentEpochIndex >= params.totalEpochs) {
-            if (!bettingWindowClosed) {
-                bettingWindowClosed = true;
-                emit BettingWindowClosed(params.totalEpochs);
-            }
-            return;
-        }
-        
-        Epoch storage currentEpoch = epochs[currentEpochIndex];
-        
-        if (block.timestamp >= currentEpoch.endTime) {
-            currentEpochIndex++;
-            if (currentEpochIndex < params.totalEpochs) {
-                _startNewEpoch();
-            } else {
-                bettingWindowClosed = true;
-                emit BettingWindowClosed(params.totalEpochs);
-            }
-        }
-    }
-    
-    function _startNewEpoch() internal {
-        uint epochIndex = currentEpochIndex;
-        
-        // Calculate decreasing shares
-        uint sharesAvailable = INITIAL_SHARES_PER_EPOCH;
-        for (uint i = 0; i < epochIndex; i++) {
-            sharesAvailable = (sharesAvailable * (100 - SHARES_DECAY_RATE)) / 100;
-        }
-        
-        epochs[epochIndex].startTime = block.timestamp;
-        epochs[epochIndex].endTime = block.timestamp + EPOCH_DURATION;
-        epochs[epochIndex].sharesAvailable = sharesAvailable;
-        epochs[epochIndex].sharesAllocated = 0;
-        epochs[epochIndex].totalBids = 0;
-        epochs[epochIndex].totalGasCollected = 0;
-        epochs[epochIndex].cleared = false;
-        epochs[epochIndex].gasCompensated = false;
-    }
-    
     // ============ Belgian Auction Clearing with Gas Compensation ============
     
     /// @notice Clear epoch with Belgian mechanics - highest bidders first
-    /// @dev Caller gets gas compensation from collected fees
+    /// @dev Processes batched bids to prevent sandwich attacks
     function clearEpoch(uint epochIndex) external nonReentrant {
         Epoch storage epoch = epochs[epochIndex];
         require(!epoch.cleared, "Already cleared");
         require(epochIndex < currentEpochIndex || bettingWindowClosed, "Epoch not ended");
+        
+        // Process any remaining batches for this epoch
+        uint currentBatch = block.timestamp / BATCH_WINDOW;
+        for (uint batch = (epoch.startTime / BATCH_WINDOW); batch < currentBatch; batch++) {
+            if (!batchProcessed[batch] && batchBidIds[batch].length > 0) {
+                _processBatch(batch);
+            }
+        }
         
         uint gasStart = gasleft();
         
@@ -427,14 +508,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         uint totalSharesAllocated = 0;
         uint totalUSDUsed = 0;
         
-        // Store refunds to process after iteration (reentrancy protection)
+        // Store refunds to process after iteration
         address[] memory refundRecipients = new address[](sortedKeys.length);
         uint[] memory refundAmounts = new uint[](sortedKeys.length);
         uint refundCount = 0;
         
         // Process in sorted order (highest price first)
         for (uint i = 0; i < sortedKeys.length && sharesRemaining > 0; i++) {
-            uint bidId = uint32(sortedKeys[i]); // Extract bid ID from sort key
+            uint bidId = uint32(sortedKeys[i]);
             Bid storage bid = allBids[bidId];
             
             if (bid.processed) continue;
@@ -465,7 +546,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
                 totalSharesAllocated += sharesToAllocate;
                 totalUSDUsed += usdUsed;
                 
-                // Mint ERC404 tokens
+                // Mint ERC20 tokens only (no NFTs due to high units value)
                 _mintERC20(bid.bidder, sharesToAllocate);
                 
                 // Store refund info for partial fills
@@ -477,6 +558,12 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
                         refundCount++;
                     }
                 }
+            } else {
+                // Full refund for bids that couldn't allocate
+                refundRecipients[refundCount] = bid.bidder;
+                refundAmounts[refundCount] = bid.usdAmount;
+                refundCount++;
+                bid.processed = true;
             }
         }
         
@@ -485,12 +572,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         epoch.sharesAllocated = totalSharesAllocated;
         predictionConfig.totalPoolUSD += totalUSDUsed;
         
-        // Process refunds after all state changes (reentrancy protection)
+        // Process refunds after all state changes
         for (uint i = 0; i < refundCount; i++) {
-            Basket(params.basket).mint(refundRecipients[i], refundAmounts[i], params.basket, 0);
+            if (refundAmounts[i] > 0) {
+                Basket(params.basket).mint(refundRecipients[i], refundAmounts[i], address(params.basket), 0);
+            }
         }
         
-        // Gas compensation calculation
+        // Gas compensation with MEV protection (3-way split)
         uint gasUsed = gasStart - gasleft();
         uint compensation = 0;
         
@@ -504,9 +593,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
                 epoch.gasCompensated = true;
                 totalGasFeesDistributed += compensation;
                 
-                // Send compensation
-                (bool success,) = msg.sender.call{value: compensation}("");
-                require(success, "Gas compensation failed");
+                // Split fees: 1/3 clearer, 1/3 treasury, 1/3 burned
+                uint clearerShare = compensation / 3;
+                uint treasuryShare = compensation / 3;
+                // Remainder stays in contract (effective burn)
+                
+                (bool success1,) = msg.sender.call{value: clearerShare}("");
+                (bool success2,) = protocolTreasury.call{value: treasuryShare}("");
+                require(success1 && success2, "Fee distribution failed");
             }
         }
         
@@ -525,23 +619,12 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         }
     }
     
-    // ============ ERC404 Burn Helper ============
+    // ============ Simplified ERC20 Burn (No NFT handling) ============
     
-    /// @notice Internal function to burn ERC404 tokens
-    /// @dev Handles both ERC20 and ERC721 portions of the burn
-    function _burnERC404(address from, uint256 amount) internal {
+    function _burnERC20Only(address from, uint256 amount) internal {
         require(balanceOf[from] >= amount, "Insufficient balance");
         
-        // First handle any whole ERC721 tokens that need to be burned
-        uint256 erc721sToBurn = amount / units;
-        for (uint256 i = 0; i < erc721sToBurn; i++) {
-            if (_owned[from].length > 0) {
-                _withdrawAndStoreERC721(from);
-            }
-        }
-        
-        // Then burn the ERC20 portion
-        // This reduces balance and totalSupply
+        // Just burn ERC20 tokens
         balanceOf[from] -= amount;
         totalSupply -= amount;
         
@@ -585,13 +668,13 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         predictionConfig.userYesShares[msg.sender] = 0;
         predictionConfig.userNoShares[msg.sender] = 0;
         
-        // Burn ERC404 tokens
+        // Burn ERC20 tokens only
         if (userShares > 0) {
-            _burnERC404(msg.sender, userShares);
+            _burnERC20Only(msg.sender, userShares);
         }
         
-        // Pay from Basket
-        Basket(params.basket).mint(msg.sender, payoutUSD, params.basket, 0);
+        // Pay from Basket in 6909 tokens
+        Basket(params.basket).mint(msg.sender, payoutUSD, address(params.basket), 0);
         
         emit PayoutClaimed(msg.sender, payoutUSD, false);
     }
@@ -616,11 +699,11 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         
         // Burn tokens
         if (userTotalShares > 0) {
-            _burnERC404(msg.sender, userTotalShares);
+            _burnERC20Only(msg.sender, userTotalShares);
         }
         
         // Refund from Basket
-        Basket(params.basket).mint(msg.sender, refundUSD, params.basket, 0);
+        Basket(params.basket).mint(msg.sender, refundUSD, address(params.basket), 0);
         
         emit PayoutClaimed(msg.sender, refundUSD, true);
     }
@@ -651,17 +734,56 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         emit Ruling(IArbitrator(params.settlementSystem), _disputeID, _ruling);
     }
     
-    // ============ Content Market Functions ============
+    // ============ Helper Functions ============
     
-    /// @notice Enable refunds if content requirements not met
-    function enableContentRefunds() external {
-        require(predictionConfig.requiresContent, "Not content market");
-        require(block.timestamp > predictionConfig.contentDeadline, "Deadline not passed");
-        require(predictionConfig.contentSubmitters.length < predictionConfig.minParticipants, "Requirements met");
-        require(!forceMajeurRefunds, "Already enabled");
+    function _addParticipant(address participant) internal {
+        if (!hasParticipated[participant]) {
+            hasParticipated[participant] = true;
+            participants.push(participant);
+            participantCount++;
+            emit ParticipantAdded(participant);
+        }
+    }
+    
+    function _updateEpochIfNeeded() internal {
+        if (currentEpochIndex >= params.totalEpochs) {
+            if (!bettingWindowClosed) {
+                bettingWindowClosed = true;
+                emit BettingWindowClosed(params.totalEpochs);
+            }
+            return;
+        }
         
-        forceMajeurRefunds = true;
-        emit ForceMajeurDeclared();
+        Epoch storage currentEpoch = epochs[currentEpochIndex];
+        
+        if (block.timestamp >= currentEpoch.endTime) {
+            currentEpochIndex++;
+            if (currentEpochIndex < params.totalEpochs) {
+                _startNewEpoch();
+            } else {
+                bettingWindowClosed = true;
+                emit BettingWindowClosed(params.totalEpochs);
+            }
+        }
+    }
+    
+    function _startNewEpoch() internal {
+        uint epochIndex = currentEpochIndex;
+        
+        // Calculate decreasing shares
+        uint sharesAvailable = INITIAL_SHARES_PER_EPOCH;
+        for (uint i = 0; i < epochIndex; i++) {
+            sharesAvailable = (sharesAvailable * (100 - SHARES_DECAY_RATE)) / 100;
+        }
+        
+        epochs[epochIndex].startTime = block.timestamp;
+        epochs[epochIndex].endTime = block.timestamp + EPOCH_DURATION;
+        epochs[epochIndex].sharesAvailable = sharesAvailable;
+        epochs[epochIndex].sharesAllocated = 0;
+        epochs[epochIndex].totalBids = 0;
+        epochs[epochIndex].totalGasCollected = 0;
+        epochs[epochIndex].cleared = false;
+        epochs[epochIndex].gasCompensated = false;
     }
     
     // ============ View Functions ============
@@ -693,7 +815,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         
         timeRemaining = epoch.endTime > block.timestamp ? epoch.endTime - block.timestamp : 0;
         bidCount = epoch.totalBids;
-        isActive = !bettingWindowClosed && !epoch.cleared && !paused;
+        isActive = !bettingWindowClosed && !epoch.cleared;
     }
     
     function getUserPosition(address user) external view returns (
@@ -709,6 +831,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         if (predictionConfig.resolved && !forceMajeurRefunds) {
             estimatedPayout = this.calculatePredictionPayout(user);
         }
+    }
+    
+    function getParticipants() external view returns (address[] memory) {
+        return participants;
+    }
+    
+    function getParticipantCount() external view returns (uint) {
+        return participantCount;
     }
     
     function getPredictionSummary() external view returns (
@@ -793,7 +923,6 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         return (predictionConfig.contentSubmitters, submissions);
     }
     
-    // Add getter function for epochs
     function getEpoch(uint index) external view returns (
         uint startTime,
         uint endTime,
@@ -819,15 +948,27 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         );
     }
     
-    // ============ Receive ETH ============
+    // ============ Utility Functions ============
     
-    receive() external payable {
-        // Accept ETH for gas fees
+    function enableContentRefunds() external {
+        require(predictionConfig.requiresContent, "Not content market");
+        require(block.timestamp > predictionConfig.contentDeadline, "Deadline not passed");
+        require(contentSubmissionCount < 2, "Requirements met");
+        require(!forceMajeurRefunds, "Already enabled");
+        
+        forceMajeurRefunds = true;
+        emit ForceMajeurDeclared();
     }
     
     // ============ ERC404 tokenURI Implementation ============
     
     function tokenURI(uint256 id) public view override returns (string memory) {
         return string('');
+    }
+    
+    // ============ Receive ETH ============
+    
+    receive() external payable {
+        // Accept ETH for gas fees
     }
 }

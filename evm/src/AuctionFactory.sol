@@ -73,7 +73,7 @@ contract AuctionFactory is Ownable {
         
         settlementSystem = Settlement(_settlementSystem);
         rover = Rover(_rover);
-        aux = Aux(payable(_aux));  // Cast to payable Aux
+        aux = Aux(payable(_aux));
         basket = Basket(_basket);
         protocolFeeRecipient = msg.sender;
         
@@ -125,7 +125,7 @@ contract AuctionFactory is Ownable {
             symbol: config.symbol,
             auctionDuration: config.auctionDuration,
             totalEpochs: totalEpochs,
-            owner: msg.sender,
+            owner: protocolFeeRecipient,  // Pass protocol fee recipient as owner
             settlementSystem: address(settlementSystem),
             rover: address(rover),
             aux: address(aux),
@@ -156,8 +156,8 @@ contract AuctionFactory is Ownable {
     }
     
     /// @notice Deploy rap battle prediction market (requires content submission)
-    /// @param challenger Name of challenger
-    /// @param challenged Name of person being challenged
+    /// @param challenger Name/address of challenger
+    /// @param challenged Name/address of person being challenged
     /// @param responseDeadline Deadline for challenged person to respond with content
     /// @param config Auction configuration
     function deployRapBattleMarket(
@@ -198,7 +198,7 @@ contract AuctionFactory is Ownable {
             symbol: "D",
             auctionDuration: config.auctionDuration,
             totalEpochs: totalEpochs,
-            owner: msg.sender,
+            owner: protocolFeeRecipient,  // Pass protocol fee recipient as owner
             settlementSystem: address(settlementSystem),
             rover: address(rover),
             aux: address(aux),
@@ -232,6 +232,13 @@ contract AuctionFactory is Ownable {
             true,              // requiresContent
             responseDeadline,  // contentDeadline
             2                  // minParticipants (both must submit)
+        );
+        
+        // Set authorized content submitters
+        // In a real implementation, these would be verified addresses
+        Auction(payable(clone)).setAuthorizedSubmitters(
+            msg.sender,        // Challenger is deployer
+            address(0)         // Challenged address to be set later
         );
         
         // Register and track
@@ -273,10 +280,8 @@ contract AuctionFactory is Ownable {
         creatorAuctions[msg.sender].push(clone);
         isValidAuction[clone] = true;
         
-        // Register with other systems if they support it
-        // Using try-catch to make it optional
-        try IValidationRegistry(address(aux)).registerAuction(clone) {} catch {}
-        try IValidationRegistry(address(settlementSystem)).registerAuction(clone) {} catch {}
+        // Protocol treasury is set during initialization in Auction contract
+        // The protocolFeeRecipient is passed as the owner parameter
     }
     
     /// @notice Extract substring for naming
@@ -381,21 +386,4 @@ contract AuctionFactory is Ownable {
         
         emit ProtocolFeeUpdated(_rate, _recipient);
     }
-    
-    /// @notice Emergency pause specific auction
-    function pauseAuction(address auction) external onlyOwner {
-        require(isValidAuction[auction], "Invalid auction");
-        Auction(payable(auction)).pause();
-    }
-    
-    /// @notice Unpause specific auction
-    function unpauseAuction(address auction) external onlyOwner {
-        require(isValidAuction[auction], "Invalid auction");
-        Auction(payable(auction)).unpause();
-    }
-}
-
-// Interface for validation registry
-interface IValidationRegistry {
-    function registerAuction(address auction) external;
 }

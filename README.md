@@ -9,10 +9,7 @@ with 2 virtual machines...
 
 equity baskets on svm, and  
 stable baskets on evm with  
-prediciton markets rebuilt  
-[in a very hybrid, fresh way](http://hackmd.io/@quid/yc);    
-we rewrote the Gnosis Dutch  
-auction and made it Belgian.  
+[Belgian prediciton markets](http://hackmd.io/@quid/yc).     
   
 For pooling ETH with $,  
 Quid outperforms Bunni  
@@ -37,15 +34,9 @@ many ways (e.g. no
 hooks, aka vanilla)  
 we set a precedent.  
 
-## Why ERC404 auctions for prediction markets? 
-
-Auctions concentrate liquidity and decision-making  
-into tight windows of time. Instead of weeks, thin  
-trading; all bidders show up in the heat of the  
-moment, making it harder for MEV actors to skew  
-the result with toxic flow, disrupting everyone...  
+## Why ERC404 auctions for prediction markets?  
   
-Belgian auction mechanics are arguably fairer
+Belgian auction mechanics are arguably fairer  
 than most alternatives, especially when entry  
 timing is a strategic play. The “why” comes down  
 to how price discovery interacts with information  
@@ -77,4 +68,47 @@ or oracle, while maintaining economic incentives
 for honest participation and 2 escalation levels  
 for dispute resolution (per judicial standards).  
 We use evm-native randomness for jury selection.  
-`forge test --match-path test/Rover.t.sol`  
+
+## How does the auction work, basically?
+
+Shares in the prediction market  
+must be redeemable for $1, but  
+you can get $1 for a discount...  
+think of it like a concert where:  
+
+- People who REALLY want tickets pay $100 (no discount)  
+- People who kind of want tickets pay $30 (30% off)  
+- The $100 bidders get seats first, but they pay $100  
+- The $30 bidders get leftover seats, but only pay $30   
+
+You cannot change bids after placing them, but if you want  
+different exposure, bid in the next epoch at a new price.  
+Early epochs see rapid trading, late epochs see hoarding.  
+
+The current 404 price is set by scarcity  
+= (Shares Allocated / Total Shares) × $1  
+
+[Betting Window Opens]  
+    ↓  
+[Multiple 1-Hour Epochs]  
+    ↓  
+[Each Epoch: Bids → Clear → Allocate]  
+    ↓  
+[Betting Window Closes]  
+    ↓  
+[Wait for Resolution Time (secondary markets for 404s meanwhile)]  
+    ↓  
+[Settlement Process]  
+    ↓  
+[Payouts to Winners]  
+
+Your return depends on THREE factors:
+
+Your Confidence (entry price)
+Total Pool Size (how much everyone bet)
+Winning Share Distribution (YES vs NO shares)
+
+Eventually over time, it appears:  
+Overconfident bettors lose money   
+Underconfident miss opportunities  
+

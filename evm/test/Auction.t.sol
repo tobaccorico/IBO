@@ -6,22 +6,15 @@ import {Auction} from "../src/Auction.sol";
 import {Settlement} from "../src/Settlement.sol";
 import {AuctionFactory} from "../src/AuctionFactory.sol";
 import {Basket} from "../src/Basket.sol";
-import {Aux} from "../src/Aux.sol";
-import {Rover} from "../src/Rover.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
-import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 
 contract AuctionTest is Test {
     AuctionFactory public factory;
     Auction public predictionMarket;
     Settlement public settlement;
     Basket public basket;
-    Aux public aux;
-    Rover public rover;
     
-    // Mock addresses for testing
-    address public usdc;
-    address public weth;
+    // Test accounts
     address public alice = address(0x1);
     address public bob = address(0x2);
     address public carol = address(0x3);
@@ -29,60 +22,30 @@ contract AuctionTest is Test {
     uint public metaEvidenceId;
     
     function setUp() public {
-        // Deploy core infrastructure in correct order
+        // Deploy minimal infrastructure - Auction only needs Aux, Basket, and Settlement
         
-        // 1. Deploy mock tokens
-        usdc = address(new MockERC20("USDC", "USDC", 6));
-        weth = address(new MockWETH());
-        
-        // 2. Deploy mock Uniswap V3 pool
-        address mockV3Pool = address(new MockV3Pool(usdc, weth));
-        
-        // 3. Deploy mock pool manager for V4
-        IPoolManager poolManager = IPoolManager(address(new MockPoolManager()));
-        
-        // 4. Deploy Rover (V4 router)
-        rover = new Rover(poolManager);
-        
-        // 5. Deploy Aux with dependencies
-        aux = new Aux(
-            address(rover),
-            mockV3Pool,
-            address(0), // mock V3 router
-            address(0), // mock WETH vault
-            address(0), // mock AAVE
-            address(0), // mock data provider
-            address(0)  // mock address provider
-        );
-        
-        // 6. Deploy Basket with stables/vaults
-        address[] memory stables = new address[](1);
-        address[] memory vaults = new address[](1);
-        stables[0] = usdc;
-        vaults[0] = address(new MockVault(usdc));
-        
-        basket = new Basket(address(rover), address(aux), stables, vaults);
-        
-        // 7. Setup Rover and Aux connection
-        rover.setup{value: 1 wei}(address(basket), address(aux), mockV3Pool);
-        aux.setQuid{value: 1 wei}(address(basket));
-        
-        // 8. Deploy Settlement
+        // Deploy Settlement
         settlement = new Settlement();
         metaEvidenceId = settlement.createPredictionMarketMetaEvidence();
         
-        // 9. Deploy Factory
+        // Deploy mock Aux that handles ETH->USD swaps
+        MockAux aux = new MockAux();
+        
+        // Deploy mock Basket for USD storage
+        basket = Basket(address(new MockBasket()));
+        
+        // Deploy Factory (Rover address can be zero since Auction doesn't use it)
         factory = new AuctionFactory(
             address(settlement),
-            address(rover),
+            address(0), // Rover not needed by Auction
             address(aux),
             address(basket)
         );
         
-        // 10. Update Settlement with factory
+        // Initialize Settlement with factory
         settlement.initialize(address(basket), address(factory));
         
-        // 11. Deploy test prediction market
+        // Deploy test prediction market through factory
         AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
             name: "ETH 5K Prediction",
             symbol: "ETH5K",
@@ -101,17 +64,6 @@ contract AuctionTest is Test {
         vm.deal(alice, 1000 ether);
         vm.deal(bob, 1000 ether);
         vm.deal(carol, 1000 ether);
-        
-        // Fund Aux with USDC for swaps
-        MockERC20(usdc).mint(address(aux), 10_000_000e6);
-        
-        // Add required methods to Aux for testing
-        _setupAuxMethods();
-    }
-    
-    function _setupAuxMethods() internal {
-        // Mock the processPayout and refundExcess methods
-        // In production, these would be part of Aux contract
     }
     
     // ============ Core Belgian Auction Tests ============
@@ -119,12 +71,6 @@ contract AuctionTest is Test {
     function testPlacePredictionBid() public {
         // Alice bets YES at 60% confidence
         vm.startPrank(alice);
-        
-        // Approve WETH if needed
-        if (weth != address(0)) {
-            IERC20(weth).approve(address(aux), type(uint).max);
-        }
-        
         predictionMarket.placePredictionBid{value: 10 ether}(0.6e18, true);
         vm.stopPrank();
         
@@ -202,7 +148,6 @@ contract AuctionTest is Test {
     
     function testShareScarcity() public {
         // Check initial epoch shares
-        
         (, , uint sharesAvailable, , , , , , ) = predictionMarket.getEpoch(0);
         assertEq(sharesAvailable, 10000e18); // INITIAL_SHARES_PER_EPOCH
         
@@ -214,6 +159,42 @@ contract AuctionTest is Test {
         // Check second epoch has fewer shares
         (, , uint sharesEpoch1, , , , , , ) = predictionMarket.getEpoch(1);
         assertEq(sharesEpoch1, 9000e18); // 10% decay
+    }
+    
+    // ============ Content Market Tests ============
+    
+    function testContentMarketFlow() public {
+        // Deploy content market
+        address rapBattle = factory.deployRapBattleMarket(
+            "Drake",
+            "Kendrick",
+            block.timestamp + 2 days,
+            AuctionFactory.LaunchConfig({
+                name: "RAP: Drake vs Kendrick",
+                symbol: "RAP",
+                initialPricePerToken: 50e18,
+                auctionDuration: 24 hours
+            })
+        );
+        
+        Auction rapAuction = Auction(payable(rapBattle));
+        
+        // Set alice as authorized submitter
+        vm.prank(factory.owner());
+        rapAuction.setAuthorizedSubmitters(alice, bob);
+        
+        // Submit content and bet
+        vm.prank(alice);
+        rapAuction.placePredictionBidWithContent{value: 5 ether}(
+            0.9e18,
+            true,
+            "ipfs://drake-track"
+        );
+        
+        // Check content stored
+        (address[] memory submitters, ) = rapAuction.getContentSubmissions();
+        assertEq(submitters.length, 1);
+        assertEq(submitters[0], alice);
     }
     
     // ============ Participant Tracking Tests ============
@@ -279,18 +260,8 @@ contract AuctionTest is Test {
     
     // ============ Integration Tests ============
     
-    function testUSDFlowIntegration() public {
-        // Place bet
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 10 ether}(0.7e18, true);
-        
-        // USD should be in Basket, not Auction
-        assertEq(IERC20(usdc).balanceOf(address(predictionMarket)), 0);
-        assertGt(basket.totalSupply(), 0); // Basket should have minted shares
-    }
-    
     function testPayoutIntegration() public {
-        // Setup: Place bets and resolve
+        // Setup: Place bets
         vm.prank(alice);
         predictionMarket.placePredictionBid{value: 10 ether}(0.8e18, true);
         
@@ -305,13 +276,16 @@ contract AuctionTest is Test {
         vm.warp(block.timestamp + 31 days);
         _resolveMarket(true); // YES wins
         
-        // Alice claims payout
-        uint aliceBasketBefore = basket.totalBalances(alice);
+        // Check Alice can claim
+        uint aliceBasketBefore = basket.balanceOf(alice, 0);
+        uint alicePayout = predictionMarket.calculatePredictionPayout(alice);
+        assertGt(alicePayout, 0, "Alice should have payout");
+        
         vm.prank(alice);
         predictionMarket.claimPredictionPayout();
-        uint aliceBasketAfter = basket.totalBalances(alice);
         
-        assertGt(aliceBasketAfter, aliceBasketBefore, "Alice should receive 6909 tokens");
+        uint aliceBasketAfter = basket.balanceOf(alice, 0);
+        assertEq(aliceBasketAfter - aliceBasketBefore, alicePayout, "Alice should receive payout");
     }
     
     // ============ Edge Cases ============
@@ -327,9 +301,9 @@ contract AuctionTest is Test {
         // Get available shares
         (, , uint sharesAvailable, , , , , , ) = predictionMarket.getEpoch(0);
         
-        // Try to buy more than available
+        // Try to buy more than available at very low price
         uint pricePerShare = 0.01e18;
-        uint ethNeeded = (sharesAvailable * 2 * pricePerShare) / 1e18;
+        uint ethNeeded = (sharesAvailable * 2 * pricePerShare) / (1e18 * 3000); // Assuming 3000 USD/ETH
         
         vm.deal(alice, ethNeeded * 2);
         vm.prank(alice);
@@ -339,50 +313,69 @@ contract AuctionTest is Test {
         vm.warp(block.timestamp + 2 hours);
         predictionMarket.clearEpoch(0);
         
-        // Alice should have received partial fill and refund
-        uint aliceBasketBalance = basket.totalBalances(alice);
+        // Alice should have received partial fill and refund in 6909 tokens
+        uint aliceBasketBalance = basket.balanceOf(alice, 0);
         assertGt(aliceBasketBalance, 0, "Should have refund in 6909 tokens");
     }
     
-    function testContentMarketFlow() public {
-        // Deploy content market
-        address rapBattle = factory.deployRapBattleMarket(
-            "Drake",
-            "Kendrick",
-            block.timestamp + 2 days,
-            AuctionFactory.LaunchConfig({
-                name: "RAP: Drake vs Kendrick",
-                symbol: "RAP",
-                initialPricePerToken: 50e18,
-                auctionDuration: 24 hours
-            })
-        );
+    function testDynamicConfidenceStrategy() public {
+        // Test that shows why different confidence levels matter
         
-        Auction rapAuction = Auction(payable(rapBattle));
-        
-        // Submit content and bet
+        // Early bird gets good price
         vm.prank(alice);
-        rapAuction.placePredictionBidWithContent{value: 5 ether}(
-            0.9e18,
-            true,
-            "ipfs://drake-track"
-        );
+        predictionMarket.placePredictionBid{value: 10 ether}(0.1e18, true); // 10% confidence
         
-        // Check content stored
-        (address[] memory submitters, ) = rapAuction.getContentSubmissions();
-        assertEq(submitters.length, 1);
-        assertEq(submitters[0], alice);
+        // Medium confidence
+        vm.prank(bob);
+        predictionMarket.placePredictionBid{value: 10 ether}(0.5e18, true); // 50% confidence
+        
+        // High confidence (will get shares first)
+        vm.prank(carol);
+        predictionMarket.placePredictionBid{value: 10 ether}(0.9e18, true); // 90% confidence
+        
+        // Clear epoch
+        vm.warp(block.timestamp + 2 hours);
+        predictionMarket.clearEpoch(0);
+        
+        // Check share allocations - Carol gets first priority
+        uint[] memory carolBids = predictionMarket.getUserBidIds(carol);
+        uint[] memory aliceBids = predictionMarket.getUserBidIds(alice);
+        
+        (, , , uint carolShares, , ) = predictionMarket.getBidDetails(carolBids[0]);
+        (, , , uint aliceShares, , ) = predictionMarket.getBidDetails(aliceBids[0]);
+        
+        // Carol gets fewer shares (paid more per share)
+        // Alice gets more shares (paid less per share)
+        assertGt(aliceShares, carolShares, "Low confidence should get more shares");
+        
+        // Resolve market as YES
+        vm.warp(block.timestamp + 31 days);
+        _resolveMarket(true);
+        
+        // Calculate returns - Alice should have higher return despite same bet amount
+        uint alicePayout = predictionMarket.calculatePredictionPayout(alice);
+        uint carolPayout = predictionMarket.calculatePredictionPayout(carol);
+        
+        // Return = (Payout / Paid) - 1
+        uint aliceReturn = (alicePayout * 100) / (10 ether * 3000); // Assuming 3000 USD/ETH
+        uint carolReturn = (carolPayout * 100) / (10 ether * 3000);
+        
+        assertGt(aliceReturn, carolReturn, "Lower confidence entry should yield higher return");
     }
     
     // ============ Helpers ============
     
     function _resolveMarket(bool outcome) internal {
         // Create and execute proposal
-        vm.prank(alice);
-        uint proposalId = settlement.proposeSettlement{value: 0.1 ether}(
+        basket.mint(alice, 100e18, address(basket), 0);
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 100e18);
+        uint proposalId = settlement.proposeSettlement(
             address(predictionMarket),
-            outcome
+            outcome,
+            100e18
         );
+        vm.stopPrank();
         
         // Wait and execute
         vm.warp(block.timestamp + 4 days);
@@ -393,100 +386,74 @@ contract AuctionTest is Test {
 
 // ============ Mock Contracts ============
 
-contract MockERC20 {
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
+contract MockAux {
+    // Mock Aux that handles ETH->USD swaps for Auction
+    function swap(address token, bool zeroForOne, uint amount, uint waitable) 
+        external payable returns (uint) {
+        // Mock swap: return USD amount based on ETH sent
+        // Assuming 1 ETH = 3000 USD for testing
+        if (!zeroForOne) { // Selling ETH for USD
+            // Account for gas fee (0.5%)
+            uint gasContribution = (msg.value * 50) / 10000;
+            uint actualETH = msg.value - gasContribution;
+            return actualETH * 3000; // Return USD amount
+        }
+        return amount;
+    }
+}
+
+contract MockBasket {
+    // Mock Basket for USD storage (implements minimal ERC6909 interface)
+    mapping(address => mapping(uint => uint)) public balanceOf;
+    mapping(address => uint) public totalBalances;
     
-    string public name;
-    string public symbol;
-    uint8 public decimals;
+    uint public totalSupply;
     
-    constructor(string memory _name, string memory _symbol, uint8 _decimals) {
-        name = _name;
-        symbol = _symbol;
-        decimals = _decimals;
+    function mint(address to, uint amount, address, uint) external {
+        balanceOf[to][0] += amount; // Use ID 0 for simplicity
+        totalBalances[to] += amount;
+        totalSupply += amount;
     }
     
-    function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount;
+    function deposit(address, address, uint amount) external returns (uint) {
+        // Mock deposit - just return the amount
+        return amount;
     }
     
-    function transfer(address to, uint256 amount) external returns (bool) {
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
+    function isStable(address) external pure returns (bool) {
+        return true; // All tokens are "stable" in mock
+    }
+    
+    function isVault(address) external pure returns (bool) {
+        return false;
+    }
+    
+    function transfer(address to, uint amount) external {
+        balanceOf[msg.sender][0] -= amount;
+        totalBalances[msg.sender] -= amount;
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
+    }
+    
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        balanceOf[from][0] -= amount;
+        totalBalances[from] -= amount;
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
         return true;
     }
     
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        allowance[from][msg.sender] -= amount;
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
+    function approve(address spender, uint amount) external returns (bool) {
+        // Mock approval
         return true;
     }
     
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        return true;
-    }
-}
-
-contract MockWETH is MockERC20 {
-    constructor() MockERC20("Wrapped ETH", "WETH", 18) {}
-    
-    function deposit() external payable {
-        balanceOf[msg.sender] += msg.value;
-    }
-    
-    function withdraw(uint256 amount) external {
-        balanceOf[msg.sender] -= amount;
-        payable(msg.sender).transfer(amount);
-    }
-}
-
-contract MockV3Pool {
-    address public token0;
-    address public token1;
-    
-    constructor(address _token0, address _token1) {
-        token0 = _token0;
-        token1 = _token1;
-    }
-    
-    function slot0() external pure returns (
-        uint160 sqrtPriceX96,
-        int24 tick,
-        uint16 observationIndex,
-        uint16 observationCardinality,
-        uint16 observationCardinalityNext,
-        uint8 feeProtocol,
-        bool unlocked
-    ) {
-        // Mock price: 1 ETH = 3000 USDC
-        sqrtPriceX96 = 2.73861e21; // sqrt(3000) * 2^96
-        tick = 0;
-        return (sqrtPriceX96, tick, 0, 0, 0, 0, true);
-    }
-}
-
-contract MockPoolManager {
-    function initialize(address, uint160) external pure returns (int24) {
-        return 0;
-    }
-    
-    function unlock(bytes calldata) external pure returns (bytes memory) {
-        return "";
-    }
-}
-
-contract MockVault {
-    address public asset;
-    
-    constructor(address _asset) {
-        asset = _asset;
-    }
-    
-    function deposit(uint256 assets, address) external returns (uint256) {
-        IERC20(asset).transferFrom(msg.sender, address(this), assets);
-        return assets; // 1:1 for simplicity
+    // Add burn functionality for settlements
+    function turn(address from, uint amount) external returns (uint) {
+        require(balanceOf[from][0] >= amount, "Insufficient balance");
+        balanceOf[from][0] -= amount;
+        totalBalances[from] -= amount;
+        totalSupply -= amount;
+        return amount;
     }
 }

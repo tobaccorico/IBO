@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -12,9 +11,9 @@ import "./AuctionFactory.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @title Settlement - Simplified Resolution System
+/// @title Settlement - Simplified Resolution System with 6909 Token Staking
 /// @notice Two-phase resolution: proposals with 2:1 threshold, then jury if disputed
-/// @dev Jurors are selected from 6909 token holders, no separate staking required
+/// @dev Jurors are selected from 6909 token holders, stakes are in 6909 tokens
 contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     using RandaoLib for bytes;
     using Math for uint;
@@ -29,9 +28,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     struct Proposal {
         address proposer;
         bool outcome;
-        uint stake;
-        uint supportStake;
-        uint opposeStake;
+        uint stake;              // 6909 tokens staked
+        uint supportStake;       // 6909 tokens supporting
+        uint opposeStake;        // 6909 tokens opposing
         uint createdAt;
         ProposalStatus status;
         mapping(address => uint) supporters;
@@ -60,8 +59,8 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Constants ============
     
-    // Proposal settings
-    uint private constant MIN_PROPOSAL_STAKE = 0.1 ether;
+    // Proposal settings (in 6909 tokens)
+    uint private constant MIN_PROPOSAL_STAKE = 100e18;     // 100 6909 tokens minimum
     uint private constant PROPOSAL_VOTING_PERIOD = 3 days;
     uint private constant PROPOSAL_EXECUTION_DELAY = 1 days;
     uint private constant SUPPORT_THRESHOLD = 2; // 2:1 ratio
@@ -111,9 +110,12 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     mapping(uint => string) public metaEvidenceURIs;
     uint public metaEvidenceCount;
     
+    // MEV Protection for jury selection
+    uint private constant MIN_JUROR_POOL_SIZE = 20;  // Need at least 20 eligible jurors
+    
     // ============ Events ============
     
-    event ProposalCreated(address indexed market, uint proposalId, address proposer, bool outcome);
+    event ProposalCreated(address indexed market, uint proposalId, address proposer, bool outcome, uint stake);
     event ProposalSupported(address indexed market, uint proposalId, address supporter, uint amount);
     event ProposalOpposed(address indexed market, uint proposalId, address opposer, uint amount);
     event ProposalExecuted(address indexed market, uint proposalId);
@@ -138,53 +140,62 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         auctionFactory = _factory;
     }
     
-    // ============ Proposal System ============
+    // ============ Proposal System (6909 Token Stakes) ============
     
-    function proposeSettlement(address market, bool outcome) 
-        external payable nonReentrant returns (uint proposalId) {
-        require(msg.value >= MIN_PROPOSAL_STAKE, "Insufficient stake");
+    function proposeSettlement(address market, bool outcome, uint stakeAmount) 
+        external nonReentrant returns (uint proposalId) {
+        require(stakeAmount >= MIN_PROPOSAL_STAKE, "Insufficient stake");
         require(_isValidMarket(market), "Invalid market");
         require(_canPropose(market), "Cannot propose");
+        
+        // Transfer 6909 tokens from proposer
+        Basket(basketContract).transferFrom(msg.sender, address(this), stakeAmount);
         
         proposalId = ++proposalCount[market];
         Proposal storage proposal = proposals[market][proposalId];
         
         proposal.proposer = msg.sender;
         proposal.outcome = outcome;
-        proposal.stake = msg.value;
+        proposal.stake = stakeAmount;
         proposal.createdAt = block.timestamp;
         proposal.status = ProposalStatus.Active;
         
         activeProposalId[market] = proposalId;
         lastActivity[market] = block.timestamp;
         
-        emit ProposalCreated(market, proposalId, msg.sender, outcome);
+        emit ProposalCreated(market, proposalId, msg.sender, outcome, stakeAmount);
     }
     
-    function supportProposal(address market, uint proposalId) external payable nonReentrant {
+    function supportProposal(address market, uint proposalId, uint amount) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(_inVotingPeriod(proposal), "Voting ended");
-        require(msg.value > 0, "No stake");
+        require(amount > 0, "No stake");
         
-        proposal.supportStake += msg.value;
-        proposal.supporters[msg.sender] += msg.value;
+        // Transfer 6909 tokens from supporter
+        Basket(basketContract).transferFrom(msg.sender, address(this), amount);
+        
+        proposal.supportStake += amount;
+        proposal.supporters[msg.sender] += amount;
         lastActivity[market] = block.timestamp;
         
-        emit ProposalSupported(market, proposalId, msg.sender, msg.value);
+        emit ProposalSupported(market, proposalId, msg.sender, amount);
     }
     
-    function opposeProposal(address market, uint proposalId) external payable nonReentrant {
+    function opposeProposal(address market, uint proposalId, uint amount) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(_inVotingPeriod(proposal), "Voting ended");
-        require(msg.value > 0, "No stake");
+        require(amount > 0, "No stake");
         
-        proposal.opposeStake += msg.value;
-        proposal.opposers[msg.sender] += msg.value;
+        // Transfer 6909 tokens from opposer
+        Basket(basketContract).transferFrom(msg.sender, address(this), amount);
+        
+        proposal.opposeStake += amount;
+        proposal.opposers[msg.sender] += amount;
         lastActivity[market] = block.timestamp;
         
-        emit ProposalOpposed(market, proposalId, msg.sender, msg.value);
+        emit ProposalOpposed(market, proposalId, msg.sender, amount);
     }
     
     function executeProposal(address market, uint proposalId) external nonReentrant {
@@ -203,13 +214,16 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalExecuted(market, proposalId);
     }
     
-    function disputeProposal(address market, uint proposalId, string calldata evidence, string calldata evidenceHash) 
-        external payable nonReentrant returns (uint disputeId) {
-        require(msg.value >= MIN_PROPOSAL_STAKE, "Insufficient stake");
+    function disputeProposal(address market, uint proposalId, string calldata evidence, string calldata evidenceHash, uint disputeStake) 
+        external nonReentrant returns (uint disputeId) {
+        require(disputeStake >= MIN_PROPOSAL_STAKE, "Insufficient stake");
         
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(!_inVotingPeriod(proposal), "Still voting");
+        
+        // Transfer dispute stake
+        Basket(basketContract).transferFrom(msg.sender, address(this), disputeStake);
         
         proposal.status = ProposalStatus.Disputed;
         activeProposalId[market] = 0;
@@ -252,6 +266,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
                 eligibleCount++;
             }
         }
+        
+        // MEV Protection: Require minimum pool size
+        require(eligibleCount >= MIN_JUROR_POOL_SIZE, "Not enough eligible jurors");
         
         // Second pass: collect eligible jurors
         address[] memory eligibleJurors = new address[](eligibleCount);
@@ -378,7 +395,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         require(!lastRound.appealed, "Already appealed");
         
         uint requiredStake = MIN_PROPOSAL_STAKE * (APPEAL_MULTIPLIER ** dispute.currentRound);
-        require(msg.value >= requiredStake, "Insufficient stake");
+        
+        // Transfer appeal stake in 6909 tokens
+        Basket(basketContract).transferFrom(msg.sender, address(this), requiredStake);
         
         lastRound.appealed = true;
         dispute.currentRound++;
@@ -472,8 +491,8 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         
         require(amount > 0, "Nothing to claim");
         
-        (bool success,) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
+        // Transfer 6909 tokens back
+        Basket(basketContract).transfer(msg.sender, amount);
     }
     
     // ============ Internal Helpers ============
@@ -622,20 +641,24 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         address market,
         uint _metaEvidenceId,
         string calldata evidence,
-        string calldata evidenceHash
-    ) external payable returns (uint disputeId) {
+        string calldata evidenceHash,
+        uint stakeAmount
+    ) external returns (uint disputeId) {
         // First create a proposal to dispute
-        uint proposalId = this.proposeSettlement{value: msg.value / 2}(market, false);
+        uint proposalId = this.proposeSettlement(market, false, stakeAmount / 2);
         
         // Then immediately dispute it
-        return this.disputeProposal{value: msg.value / 2}(market, proposalId, evidence, evidenceHash);
+        return this.disputeProposal(market, proposalId, evidence, evidenceHash, stakeAmount / 2);
     }
     
     // ============ IArbitrator Implementation ============
     
     function createDispute(uint _choices, bytes calldata _extraData) external payable override returns (uint disputeID) {
-        require(msg.value >= MIN_PROPOSAL_STAKE, "Insufficient fee");
         require(_choices >= 2, "Need choices");
+        
+        // For direct dispute creation, require 6909 token transfer separately
+        uint requiredStake = MIN_PROPOSAL_STAKE;
+        Basket(basketContract).transferFrom(msg.sender, address(this), requiredStake);
         
         disputeID = ++disputeCount;
         disputes[disputeID] = Dispute({
