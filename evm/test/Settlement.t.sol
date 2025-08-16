@@ -56,7 +56,8 @@ contract SettlementTest is Test {
         // Initialize Settlement with factory
         settlement.initialize(address(basket), address(factory));
         
-        // Deploy test market through factory
+        // Deploy test market through factory - but first get ownership
+        vm.startPrank(factory.owner());
         AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
             name: "Test Market",
             symbol: "TEST",
@@ -70,6 +71,7 @@ contract SettlementTest is Test {
             config
         );
         market = Auction(payable(marketAddress));
+        vm.stopPrank();
         
         // Fund accounts
         vm.deal(alice, 100 ether);

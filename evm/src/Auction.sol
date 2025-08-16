@@ -29,10 +29,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     uint private constant GAS_FEE_BPS = 50;                        // 0.5% in basis points
     uint private constant INITIAL_SHARES_PER_EPOCH = 10000e18;
     uint private constant SHARES_DECAY_RATE = 10;                  // 10% decay per epoch
-    uint private constant CLEARING_GAS_ESTIMATE = 200000;          // Gas for clearing
     uint private constant MIN_BIDS_FOR_GAS_COMP = 10;              // Minimum bids to qualify
     uint private constant MAX_BIDS_PER_EPOCH = 1000;               // DoS protection
-    uint private constant MAX_ALLOCATION_PER_ADDRESS = 2500;       // 25% max per address per epoch
     
     // ============ Structs ============
     
@@ -60,7 +58,6 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         bool cleared;
         bool gasCompensated;      // Track if clearer was compensated
         address clearer;          // Who cleared this epoch
-        mapping(address => uint) allocatedShares; // Track per-address allocations
         SortedSetLib.Set sortedBidIds;  // Sorted by price descending
     }
     
@@ -135,9 +132,6 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     mapping(address => bool) public authorizedContentSubmitters;
     uint public contentSubmissionCount;
     
-    // MEV protection
-    mapping(uint => mapping(address => uint)) public epochAllocations; // epoch => address => total shares
-    
     // ============ Events ============
     
     event BidPlaced(address indexed bidder, uint usdAmount, uint pricePerShare, bool isYes, uint epoch, uint bidId);
@@ -148,6 +142,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     event PayoutClaimed(address indexed user, uint amount, bool wasForceMajeur);
     event ContentSubmitted(address indexed submitter, string contentURI);
     event ParticipantAdded(address indexed participant);
+    event EpochExtended(uint indexed epoch, uint newEndTime);
     
     // ============ Constructor & Initialization ============
     
@@ -204,37 +199,18 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     mapping(address => uint) public lastBidTime;
     mapping(address => uint) public bidVelocity; // 0-1000 (0-10x multiplier)
     
-    // Batch processing for sandwich resistance  
-    uint constant BATCH_WINDOW = 5 minutes;
-    mapping(uint => uint[]) public batchBidIds; // batchId => array of bid IDs
-    mapping(uint => bool) public batchProcessed;
+    // Price discovery protection
+    mapping(uint => uint) public epochMinPrice; // epoch => minimum accepted price
+    mapping(uint => uint) public epochMaxPrice; // epoch => maximum price paid
+    uint constant PRICE_INCREMENT = 0.01e18; // 1 cent increments
     
-    // MEV Protection: Track recent large trades
-    uint constant WHALE_WINDOW = 15 minutes;
-    mapping(uint => uint) public epochWhaleActivity; // epoch => large trade USD in last window
-    uint constant WHALE_THRESHOLD = 10000e18; // $10k USD
-    
-    // Price impact tracking
-    mapping(uint => uint) public epochPriceImpact; // epoch => cumulative price impact
+    // Anti-sniping: Dynamic epoch extension
+    uint constant EXTENSION_THRESHOLD = 2 minutes;
+    uint constant EXTENSION_DURATION = 5 minutes;
+    mapping(uint => uint) public epochExtensions; // epoch => number of extensions
+    uint constant MAX_EXTENSIONS = 3;
     
     // ============ Core Belgian Auction Functions ============
-    
-    /// @notice Calculate minimum price based on total allocation (MEV protection)
-    function getMinimumPriceForAllocation(uint totalSharesWanted, uint epochShares) public pure returns (uint) {
-        if (epochShares == 0) return 1e18;
-        
-        uint percentOfEpoch = (totalSharesWanted * 100) / epochShares;
-        
-        // Exponential curve - the more you want, the more you pay
-        if (percentOfEpoch <= 5) return 0.01e18;   // 1¢ for ≤5%
-        if (percentOfEpoch <= 10) return 0.05e18;  // 5¢ for ≤10%
-        if (percentOfEpoch <= 20) return 0.15e18;  // 15¢ for ≤20%
-        if (percentOfEpoch <= 30) return 0.30e18;  // 30¢ for ≤30%
-        if (percentOfEpoch <= 40) return 0.50e18;  // 50¢ for ≤40%
-        if (percentOfEpoch <= 50) return 0.70e18;  // 70¢ for ≤50%
-        if (percentOfEpoch <= 75) return 0.85e18;  // 85¢ for ≤75%
-        return 0.95e18; // 95¢ for >75%
-    }
     
     /// @notice Calculate dynamic fee based on bidding velocity
     function calculateDynamicGasFee(address bidder) internal returns (uint feeBps) {
@@ -258,6 +234,65 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         
         // Base fee 0.5% + velocity penalty (up to 10x = 5%)
         return GAS_FEE_BPS + (GAS_FEE_BPS * bidVelocity[bidder] / 100);
+    }
+    
+    /// @notice Calculate fair price based on demand curve
+    function calculateFairPrice(uint epochIndex) public view returns (uint) {
+        Epoch storage epoch = epochs[epochIndex];
+        if (epoch.totalBids == 0) return PRICE_INCREMENT;
+        
+        // Base price on fill rate and time
+        uint fillRate = epoch.sharesAvailable > 0 ? (epoch.sharesAllocated * 100) / epoch.sharesAvailable : 0;
+        uint timeElapsed = block.timestamp > epoch.startTime ? block.timestamp - epoch.startTime : 0;
+        uint timeProgress = (timeElapsed * 100) / EPOCH_DURATION;
+        
+        // Dynamic pricing: higher fill rate = higher price
+        uint basePrice = PRICE_INCREMENT + (fillRate * PRICE_INCREMENT / 10);
+        
+        // Time adjustment: prices increase as epoch progresses
+        uint timeMultiplier = 100 + (timeProgress / 2); // Up to 50% increase
+        uint fairPrice = (basePrice * timeMultiplier) / 100;
+        
+        // Apply min/max bounds
+        if (epochMinPrice[epochIndex] > 0) {
+            fairPrice = Math.max(fairPrice, epochMinPrice[epochIndex]);
+        }
+        if (epochMaxPrice[epochIndex] > 0) {
+            fairPrice = Math.min(fairPrice, epochMaxPrice[epochIndex]);
+        }
+        
+        return fairPrice;
+    }
+    
+    /// @notice Anti-sniping: Extend epoch if bid near end
+    function _checkEpochExtension(uint epochIndex) internal {
+        Epoch storage epoch = epochs[epochIndex];
+        uint timeRemaining = epoch.endTime > block.timestamp ? 
+                            epoch.endTime - block.timestamp : 0;
+        
+        if (timeRemaining < EXTENSION_THRESHOLD && 
+            epochExtensions[epochIndex] < MAX_EXTENSIONS) {
+            epoch.endTime += EXTENSION_DURATION;
+            epochExtensions[epochIndex]++;
+            emit EpochExtended(epochIndex, epoch.endTime);
+        }
+    }
+    
+    /// @notice Calculate minimum price based on total allocation (MEV protection)
+    function getMinimumPriceForAllocation(uint totalSharesWanted, uint epochShares) public pure returns (uint) {
+        if (epochShares == 0) return 1e18;
+        
+        uint percentOfEpoch = (totalSharesWanted * 100) / epochShares;
+        
+        // Exponential curve - the more you want, the more you pay
+        if (percentOfEpoch <= 5) return 0.01e18;   // 1¢ for ≤5%
+        if (percentOfEpoch <= 10) return 0.05e18;  // 5¢ for ≤10%
+        if (percentOfEpoch <= 20) return 0.15e18;  // 15¢ for ≤20%
+        if (percentOfEpoch <= 30) return 0.30e18;  // 30¢ for ≤30%
+        if (percentOfEpoch <= 40) return 0.50e18;  // 50¢ for ≤40%
+        if (percentOfEpoch <= 50) return 0.70e18;  // 70¢ for ≤50%
+        if (percentOfEpoch <= 75) return 0.85e18;  // 85¢ for ≤75%
+        return 0.95e18; // 95¢ for >75%
     }
     
     /// @notice Place a Belgian auction bid with ETH at your confidence level
@@ -292,46 +327,22 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         // Calculate shares at their price
         uint sharesRequested = (usdReceived * 1e18) / pricePerShare;
         
-        // MEV Protection: Check if price meets minimum for desired allocation
-        Epoch storage currentEpoch = epochs[currentEpochIndex];
+        // MEV Protection: Enforce fair pricing
+        uint fairPrice = calculateFairPrice(currentEpochIndex);
+        require(pricePerShare >= fairPrice, "Price below fair value");
         
-        // Calculate total shares this address would have
-        uint currentShares = 0;
-        uint batchId = block.timestamp / BATCH_WINDOW;
-        
-        // Count shares in current batch
-        uint[] storage currentBatchBids = batchBidIds[batchId];
-        for (uint i = 0; i < currentBatchBids.length; i++) {
-            Bid storage bid = allBids[currentBatchBids[i]];
-            if (bid.bidder == msg.sender) {
-                currentShares += bid.sharesRequested;
-            }
+        // Update epoch price bounds
+        if (epochMinPrice[currentEpochIndex] == 0 || pricePerShare < epochMinPrice[currentEpochIndex]) {
+            epochMinPrice[currentEpochIndex] = pricePerShare;
+        }
+        if (pricePerShare > epochMaxPrice[currentEpochIndex]) {
+            epochMaxPrice[currentEpochIndex] = pricePerShare;
         }
         
-        uint totalSharesWanted = currentShares + sharesRequested;
+        // Anti-sniping check
+        _checkEpochExtension(currentEpochIndex);
         
-        // Enforce minimum price based on total allocation
-        uint minimumPrice = getMinimumPriceForAllocation(
-            totalSharesWanted, 
-            currentEpoch.sharesAvailable
-        );
-        require(pricePerShare >= minimumPrice, "Price too low for allocation");
-        
-        // Additional MEV protection: Detect potential sandwich attacks
-        _updateWhaleTracking(usdReceived);
-        
-        // Apply price impact for large trades
-        if (usdReceived > WHALE_THRESHOLD / 10) { // $1k+ trades
-            uint impact = (usdReceived * 100) / predictionConfig.totalPoolUSD;
-            if (impact > 5) { // >5% of pool
-                // Require higher confidence for large market impact
-                uint impactMultiplier = 100 + (impact - 5) * 2; // 2% per 1% over 5%
-                minimumPrice = (minimumPrice * impactMultiplier) / 100;
-                require(pricePerShare >= minimumPrice, "Price too low for market impact");
-            }
-        }
-        
-        // Create bid but don't process immediately (batch processing)
+        // Create bid
         uint bidId = nextBidId++;
         allBids[bidId] = Bid({
             bidder: msg.sender,
@@ -345,78 +356,84 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
             processed: false
         });
         
-        // Add to current batch
-        currentBatchBids.push(bidId);
+        // Add to epoch's sorted set immediately
+        uint sortKey = (type(uint).max - pricePerShare) << 32 | bidId;
+        epochs[currentEpochIndex].sortedBidIds.insert(sortKey);
+        epochs[currentEpochIndex].totalBids++;
+        
         userBidIds[msg.sender].push(bidId);
         
         // Update gas collection
-        currentEpoch.totalGasCollected += gasContribution;
+        epochs[currentEpochIndex].totalGasCollected += gasContribution;
         totalGasFeesCollected += gasContribution;
         
         emit BidPlaced(msg.sender, usdReceived, pricePerShare, isYes, currentEpochIndex, bidId);
-        
-        // Try to process previous batch if ready
-        uint previousBatch = batchId - 1;
-        if (!batchProcessed[previousBatch] && batchBidIds[previousBatch].length > 0) {
-            _processBatch(previousBatch);
-        }
-        
-        // Auto-process current batch if it's getting large or time has passed
-        if (currentBatchBids.length >= 20 || 
-            (currentBatchBids.length > 0 && block.timestamp % BATCH_WINDOW > (BATCH_WINDOW - 30))) {
-            _processBatch(batchId);
-        }
     }
     
-    /// @notice Track whale activity for MEV protection
-    function _updateWhaleTracking(uint usdAmount) internal {
-        if (usdAmount >= WHALE_THRESHOLD) {
-            epochWhaleActivity[currentEpochIndex] += usdAmount;
+    /// @notice Pro-rata allocation to prevent gaming
+    function _allocateProRata(uint epochIndex) internal {
+        Epoch storage epoch = epochs[epochIndex];
+        uint[] memory sortedKeys = epoch.sortedBidIds.getSortedSet();
+        
+        // Group bids by price tier
+        uint currentPrice = type(uint).max;
+        uint tierStartIndex = 0;
+        
+        for (uint i = 0; i <= sortedKeys.length; i++) {
+            bool lastIteration = (i == sortedKeys.length);
+            uint bidPrice = lastIteration ? 0 : (type(uint).max - (sortedKeys[i] >> 32));
             
-            // If too much whale activity, increase batch window temporarily
-            if (epochWhaleActivity[currentEpochIndex] > WHALE_THRESHOLD * 5) {
-                // This signals potential manipulation
-                epochPriceImpact[currentEpochIndex] += 100; // basis points
+            // Process tier when price changes or at end
+            if (bidPrice != currentPrice || lastIteration) {
+                if (i > tierStartIndex) {
+                    _allocateTier(epochIndex, sortedKeys, tierStartIndex, i - 1);
+                }
+                currentPrice = bidPrice;
+                tierStartIndex = i;
             }
         }
     }
     
-    /// @notice Process a batch of bids together (MEV resistant)
-    function _processBatch(uint batchId) internal {
-        if (batchProcessed[batchId]) return;
+    function _allocateTier(
+        uint epochIndex,
+        uint[] memory sortedKeys,
+        uint startIndex,
+        uint endIndex
+    ) internal {
+        Epoch storage epoch = epochs[epochIndex];
+        uint sharesRemaining = epoch.sharesAvailable - epoch.sharesAllocated;
+        if (sharesRemaining == 0) return;
         
-        uint[] storage bidIds = batchBidIds[batchId];
-        if (bidIds.length == 0) return;
-        
-        // Randomize order within batch to prevent gaming
-        if (bidIds.length > 1) {
-            // Simple randomization using block data
-            uint seed = uint(keccak256(abi.encode(block.timestamp, block.prevrandao)));
-            for (uint i = bidIds.length - 1; i > 0; i--) {
-                uint j = seed % (i + 1);
-                uint temp = bidIds[i];
-                bidIds[i] = bidIds[j];
-                bidIds[j] = temp;
-                seed = uint(keccak256(abi.encode(seed)));
+        // Calculate total demand in this price tier
+        uint tierDemand = 0;
+        for (uint i = startIndex; i <= endIndex; i++) {
+            uint bidId = uint32(sortedKeys[i]);
+            Bid storage bid = allBids[bidId];
+            if (!bid.processed) {
+                tierDemand += bid.sharesRequested;
             }
         }
         
-        // Check if batch is for current epoch
-        uint epochIndex = allBids[bidIds[0]].epochIndex;
-        if (epochIndex != currentEpochIndex && !epochs[epochIndex].cleared) {
-            // Add all bids to epoch's sorted set
-            for (uint i = 0; i < bidIds.length; i++) {
-                Bid storage bid = allBids[bidIds[i]];
-                if (bid.epochIndex == epochIndex) {
-                    // Insert into sorted set
-                    uint sortKey = (type(uint).max - bid.pricePerShare) << 32 | bidIds[i];
-                    epochs[epochIndex].sortedBidIds.insert(sortKey);
-                    epochs[epochIndex].totalBids++;
+        if (tierDemand == 0) return;
+        
+        // Pro-rata allocation if oversubscribed
+        uint allocationRatio = tierDemand <= sharesRemaining ? 
+            1e18 : (sharesRemaining * 1e18) / tierDemand;
+        
+        // Allocate to each bid in tier
+        for (uint i = startIndex; i <= endIndex; i++) {
+            uint bidId = uint32(sortedKeys[i]);
+            Bid storage bid = allBids[bidId];
+            
+            if (!bid.processed) {
+                uint allocation = (bid.sharesRequested * allocationRatio) / 1e18;
+                if (allocation > 0) {
+                    bid.sharesAllocated = allocation;
+                    epoch.sharesAllocated += allocation;
                 }
+                bid.processed = true;
             }
         }
-        
-        batchProcessed[batchId] = true;
     }
     
     /// @notice Place bid with content (for rap battles)
@@ -444,68 +461,22 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         placePredictionBid(pricePerShare, isYes);
     }
     
-    /// @notice Internal function to create and store bid
-    function _createBid(
-        address bidder,
-        uint usdAmount,
-        uint pricePerShare,
-        uint sharesRequested,
-        bool isYes
-    ) internal {
-        // DoS protection
-        require(epochs[currentEpochIndex].totalBids < MAX_BIDS_PER_EPOCH, "Epoch full");
-        
-        uint bidId = nextBidId++;
-        allBids[bidId] = Bid({
-            bidder: bidder,
-            usdAmount: usdAmount,
-            pricePerShare: pricePerShare,
-            sharesRequested: sharesRequested,
-            sharesAllocated: 0,
-            epochIndex: currentEpochIndex,
-            timestamp: block.timestamp,
-            isYes: isYes,
-            processed: false
-        });
-        
-        // Insert into sorted set (higher prices = higher priority)
-        uint sortKey = (type(uint).max - pricePerShare) << 32 | bidId;
-        epochs[currentEpochIndex].sortedBidIds.insert(sortKey);
-        
-        userBidIds[bidder].push(bidId);
-        epochs[currentEpochIndex].totalBids++;
-        
-        emit BidPlaced(bidder, usdAmount, pricePerShare, isYes, currentEpochIndex, bidId);
-    }
-    
     // ============ Belgian Auction Clearing with Gas Compensation ============
     
-    /// @notice Clear epoch with Belgian mechanics - highest bidders first
-    /// @dev Processes batched bids to prevent sandwich attacks
+    /// @notice Clear epoch with pro-rata allocation for same price tiers
+    /// @dev This prevents gaming by treating all bids at the same price equally
     function clearEpoch(uint epochIndex) external nonReentrant {
         Epoch storage epoch = epochs[epochIndex];
         require(!epoch.cleared, "Already cleared");
         require(epochIndex < currentEpochIndex || bettingWindowClosed, "Epoch not ended");
         
-        // Process any remaining batches for this epoch
-        uint currentBatch = block.timestamp / BATCH_WINDOW;
-        for (uint batch = (epoch.startTime / BATCH_WINDOW); batch < currentBatch; batch++) {
-            if (!batchProcessed[batch] && batchBidIds[batch].length > 0) {
-                _processBatch(batch);
-            }
-        }
-        
         uint gasStart = gasleft();
         
-        uint[] memory sortedKeys = epoch.sortedBidIds.getSortedSet();
-        if (sortedKeys.length == 0) {
-            epoch.cleared = true;
-            epoch.clearer = msg.sender;
-            return;
-        }
+        // Use pro-rata allocation to prevent gaming
+        _allocateProRata(epochIndex);
         
-        uint sharesRemaining = epoch.sharesAvailable;
-        uint totalSharesAllocated = 0;
+        // Process all allocations and mint tokens
+        uint[] memory sortedKeys = epoch.sortedBidIds.getSortedSet();
         uint totalUSDUsed = 0;
         
         // Store refunds to process after iteration
@@ -513,44 +484,34 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         uint[] memory refundAmounts = new uint[](sortedKeys.length);
         uint refundCount = 0;
         
-        // Process in sorted order (highest price first)
-        for (uint i = 0; i < sortedKeys.length && sharesRemaining > 0; i++) {
+        for (uint i = 0; i < sortedKeys.length; i++) {
             uint bidId = uint32(sortedKeys[i]);
             Bid storage bid = allBids[bidId];
             
-            if (bid.processed) continue;
-            
-            uint sharesToAllocate = Math.min(bid.sharesRequested, sharesRemaining);
-            
-            if (sharesToAllocate > 0) {
-                bid.sharesAllocated = sharesToAllocate;
-                bid.processed = true;
-                
+            if (bid.sharesAllocated > 0) {
                 // Calculate actual USD used
-                uint usdUsed = (sharesToAllocate * bid.pricePerShare) / 1e18;
+                uint usdUsed = (bid.sharesAllocated * bid.pricePerShare) / 1e18;
                 
                 // Update user shares
                 if (bid.isYes) {
-                    predictionConfig.userYesShares[bid.bidder] += sharesToAllocate;
-                    predictionConfig.totalYesShares += sharesToAllocate;
+                    predictionConfig.userYesShares[bid.bidder] += bid.sharesAllocated;
+                    predictionConfig.totalYesShares += bid.sharesAllocated;
                 } else {
-                    predictionConfig.userNoShares[bid.bidder] += sharesToAllocate;
-                    predictionConfig.totalNoShares += sharesToAllocate;
+                    predictionConfig.userNoShares[bid.bidder] += bid.sharesAllocated;
+                    predictionConfig.totalNoShares += bid.sharesAllocated;
                 }
                 
                 // Update weighted average strike price
-                _updateUserStrikePrice(bid.bidder, bid.pricePerShare, sharesToAllocate);
+                _updateUserStrikePrice(bid.bidder, bid.pricePerShare, bid.sharesAllocated);
                 
                 // Track totals
-                sharesRemaining -= sharesToAllocate;
-                totalSharesAllocated += sharesToAllocate;
                 totalUSDUsed += usdUsed;
                 
                 // Mint ERC20 tokens only (no NFTs due to high units value)
-                _mintERC20(bid.bidder, sharesToAllocate);
+                _mintERC20(bid.bidder, bid.sharesAllocated);
                 
                 // Store refund info for partial fills
-                if (sharesToAllocate < bid.sharesRequested) {
+                if (bid.sharesAllocated < bid.sharesRequested) {
                     uint usdRefund = bid.usdAmount - usdUsed;
                     if (usdRefund > 0) {
                         refundRecipients[refundCount] = bid.bidder;
@@ -558,18 +519,16 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
                         refundCount++;
                     }
                 }
-            } else {
+            } else if (bid.processed) {
                 // Full refund for bids that couldn't allocate
                 refundRecipients[refundCount] = bid.bidder;
                 refundAmounts[refundCount] = bid.usdAmount;
                 refundCount++;
-                bid.processed = true;
             }
         }
         
         epoch.cleared = true;
         epoch.clearer = msg.sender;
-        epoch.sharesAllocated = totalSharesAllocated;
         predictionConfig.totalPoolUSD += totalUSDUsed;
         
         // Process refunds after all state changes
@@ -579,7 +538,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
             }
         }
         
-        // Gas compensation with MEV protection (3-way split)
+        // Gas compensation
         uint gasUsed = gasStart - gasleft();
         uint compensation = 0;
         
@@ -596,7 +555,6 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
                 // Split fees: 1/3 clearer, 1/3 treasury, 1/3 burned
                 uint clearerShare = compensation / 3;
                 uint treasuryShare = compensation / 3;
-                // Remainder stays in contract (effective burn)
                 
                 (bool success1,) = msg.sender.call{value: clearerShare}("");
                 (bool success2,) = protocolTreasury.call{value: treasuryShare}("");
@@ -604,7 +562,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
             }
         }
         
-        emit EpochCleared(epochIndex, totalSharesAllocated, msg.sender, compensation);
+        emit EpochCleared(epochIndex, epoch.sharesAllocated, msg.sender, compensation);
     }
     
     function _updateUserStrikePrice(address user, uint newPrice, uint newShares) internal {

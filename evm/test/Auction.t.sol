@@ -8,6 +8,85 @@ import {AuctionFactory} from "../src/AuctionFactory.sol";
 import {Basket} from "../src/Basket.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
+// ============ Mock Contracts ============
+
+contract MockRover {
+    // Minimal Rover mock
+    receive() external payable {}
+}
+
+contract MockAux {
+    // Mock Aux that handles ETH->USD swaps for Auction
+    function swap(address token, bool zeroForOne, uint amount, uint waitable) 
+        external payable returns (uint) {
+        // Mock swap: return USD amount based on ETH sent
+        // Assuming 1 ETH = 3000 USD for testing
+        if (!zeroForOne) { // Selling ETH for USD
+            // Account for gas fee (0.5%)
+            uint gasContribution = (msg.value * 50) / 10000;
+            uint actualETH = msg.value - gasContribution;
+            return actualETH * 3000; // Return USD amount
+        }
+        return amount;
+    }
+}
+
+contract MockBasket {
+    // Mock Basket for USD storage (implements minimal ERC6909 interface)
+    mapping(address => mapping(uint => uint)) public balanceOf;
+    mapping(address => uint) public totalBalances;
+    
+    uint public totalSupply;
+    
+    function mint(address to, uint amount, address, uint) external {
+        balanceOf[to][0] += amount; // Use ID 0 for simplicity
+        totalBalances[to] += amount;
+        totalSupply += amount;
+    }
+    
+    function deposit(address, address, uint amount) external returns (uint) {
+        // Mock deposit - just return the amount
+        return amount;
+    }
+    
+    function isStable(address) external pure returns (bool) {
+        return true; // All tokens are "stable" in mock
+    }
+    
+    function isVault(address) external pure returns (bool) {
+        return false;
+    }
+    
+    function transfer(address to, uint amount) external {
+        balanceOf[msg.sender][0] -= amount;
+        totalBalances[msg.sender] -= amount;
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
+    }
+    
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        balanceOf[from][0] -= amount;
+        totalBalances[from] -= amount;
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
+        return true;
+    }
+    
+    function approve(address spender, uint amount) external returns (bool) {
+        // Mock approval
+        return true;
+    }
+    
+    // Add burn functionality for settlements
+    function turn(address from, uint amount) external returns (uint) {
+        require(balanceOf[from][0] >= amount, "Insufficient balance");
+        balanceOf[from][0] -= amount;
+        totalBalances[from] -= amount;
+        totalSupply -= amount;
+        return amount;
+    }
+}
+
 contract AuctionTest is Test {
     AuctionFactory public factory;
     Auction public predictionMarket;
@@ -34,10 +113,10 @@ contract AuctionTest is Test {
         // Deploy mock Basket for USD storage
         basket = Basket(address(new MockBasket()));
         
-        // Deploy Factory (Rover address can be zero since Auction doesn't use it)
+        // Deploy Factory (need to provide valid rover address)
         factory = new AuctionFactory(
             address(settlement),
-            address(0), // Rover not needed by Auction
+            address(new MockRover()), // Provide actual rover instance
             address(aux),
             address(basket)
         );
@@ -113,6 +192,7 @@ contract AuctionTest is Test {
         predictionMarket.clearEpoch(0);
         
         // Check allocations - Bob should get shares first (highest price)
+        // But if Bob and another bidder had same price, they'd get pro-rata allocation
         uint[] memory bobBids = predictionMarket.getUserBidIds(bob);
         (, , , uint bobShares, , ) = predictionMarket.getBidDetails(bobBids[0]);
         assertGt(bobShares, 0, "Bob should get shares");
@@ -233,6 +313,39 @@ contract AuctionTest is Test {
         assertEq(participants[1], bob);
     }
     
+    function testProRataAllocation() public {
+        // Test that same price bids get pro-rata allocation
+        
+        // All bid at same price
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 10 ether}(0.5e18, true);
+        
+        vm.prank(bob);
+        predictionMarket.placePredictionBid{value: 10 ether}(0.5e18, true);
+        
+        vm.prank(carol);
+        predictionMarket.placePredictionBid{value: 10 ether}(0.5e18, true);
+        
+        // Move past epoch
+        vm.warp(block.timestamp + 1 hours + 1);
+        
+        // Clear epoch
+        predictionMarket.clearEpoch(0);
+        
+        // Check allocations - should be equal since same price
+        uint[] memory aliceBids = predictionMarket.getUserBidIds(alice);
+        uint[] memory bobBids = predictionMarket.getUserBidIds(bob);
+        uint[] memory carolBids = predictionMarket.getUserBidIds(carol);
+        
+        (, , , uint aliceShares, , ) = predictionMarket.getBidDetails(aliceBids[0]);
+        (, , , uint bobShares, , ) = predictionMarket.getBidDetails(bobBids[0]);
+        (, , , uint carolShares, , ) = predictionMarket.getBidDetails(carolBids[0]);
+        
+        // Should get roughly equal shares (within rounding)
+        assertApproxEqAbs(aliceShares, bobShares, 1e18, "Alice and Bob should have similar shares");
+        assertApproxEqAbs(bobShares, carolShares, 1e18, "Bob and Carol should have similar shares");
+    }
+    
     // ============ DoS Protection Tests ============
     
     function testMaxBidsPerEpoch() public {
@@ -295,6 +408,17 @@ contract AuctionTest is Test {
         vm.prank(alice);
         vm.expectRevert("Too small after gas");
         predictionMarket.placePredictionBid{value: 0.0001 ether}(0.5e18, true);
+    }
+    
+    function testFairPriceEnforcement() public {
+        // Place some bids to establish a fair price
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 5 ether}(0.1e18, true);
+        
+        // Try to bid below fair price
+        vm.prank(bob);
+        vm.expectRevert("Price below fair value");
+        predictionMarket.placePredictionBid{value: 5 ether}(0.005e18, true);
     }
     
     function testPartialFillRefunds() public {
@@ -381,79 +505,5 @@ contract AuctionTest is Test {
         vm.warp(block.timestamp + 4 days);
         vm.prank(alice);
         settlement.executeProposal(address(predictionMarket), proposalId);
-    }
-}
-
-// ============ Mock Contracts ============
-
-contract MockAux {
-    // Mock Aux that handles ETH->USD swaps for Auction
-    function swap(address token, bool zeroForOne, uint amount, uint waitable) 
-        external payable returns (uint) {
-        // Mock swap: return USD amount based on ETH sent
-        // Assuming 1 ETH = 3000 USD for testing
-        if (!zeroForOne) { // Selling ETH for USD
-            // Account for gas fee (0.5%)
-            uint gasContribution = (msg.value * 50) / 10000;
-            uint actualETH = msg.value - gasContribution;
-            return actualETH * 3000; // Return USD amount
-        }
-        return amount;
-    }
-}
-
-contract MockBasket {
-    // Mock Basket for USD storage (implements minimal ERC6909 interface)
-    mapping(address => mapping(uint => uint)) public balanceOf;
-    mapping(address => uint) public totalBalances;
-    
-    uint public totalSupply;
-    
-    function mint(address to, uint amount, address, uint) external {
-        balanceOf[to][0] += amount; // Use ID 0 for simplicity
-        totalBalances[to] += amount;
-        totalSupply += amount;
-    }
-    
-    function deposit(address, address, uint amount) external returns (uint) {
-        // Mock deposit - just return the amount
-        return amount;
-    }
-    
-    function isStable(address) external pure returns (bool) {
-        return true; // All tokens are "stable" in mock
-    }
-    
-    function isVault(address) external pure returns (bool) {
-        return false;
-    }
-    
-    function transfer(address to, uint amount) external {
-        balanceOf[msg.sender][0] -= amount;
-        totalBalances[msg.sender] -= amount;
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-    }
-    
-    function transferFrom(address from, address to, uint amount) external returns (bool) {
-        balanceOf[from][0] -= amount;
-        totalBalances[from] -= amount;
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-        return true;
-    }
-    
-    function approve(address spender, uint amount) external returns (bool) {
-        // Mock approval
-        return true;
-    }
-    
-    // Add burn functionality for settlements
-    function turn(address from, uint amount) external returns (uint) {
-        require(balanceOf[from][0] >= amount, "Insufficient balance");
-        balanceOf[from][0] -= amount;
-        totalBalances[from] -= amount;
-        totalSupply -= amount;
-        return amount;
     }
 }

@@ -97,7 +97,7 @@ contract Aux is Ownable {
         UNWIND_COST = 3524821; // TODO recalculate
         // ^ gas for unwind()
         SWAP_SELECTOR = bytes4(
-            keccak256("batchSwap(uint160,uint,uint,uint,uint,uint)")
+            keccak256("batchSwap(uint160,uint256,uint256,uint256,uint256,uint256)")
         );
     }
 
