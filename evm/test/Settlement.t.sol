@@ -33,13 +33,8 @@ contract SettlementTest is Test {
         address mockRover = address(new MockRover());
         address mockAux = address(new MockAux());
         
-        // Deploy Basket with minimal stables/vaults
-        address[] memory stables = new address[](1);
-        address[] memory vaults = new address[](1);
-        stables[0] = address(new MockERC20("USDC", "USDC", 6));
-        vaults[0] = address(new MockVault(stables[0]));
-        
-        basket = new Basket(mockRover, mockAux, stables, vaults);
+        // Deploy mock basket that doesn't enforce permissions
+        basket = Basket(address(new MockBasket()));
         
         // Deploy Settlement fresh
         settlement = new Settlement();
@@ -56,8 +51,7 @@ contract SettlementTest is Test {
         // Initialize Settlement with factory
         settlement.initialize(address(basket), address(factory));
         
-        // Deploy test market through factory - but first get ownership
-        vm.startPrank(factory.owner());
+        // Deploy test market through factory
         AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
             name: "Test Market",
             symbol: "TEST",
@@ -71,7 +65,6 @@ contract SettlementTest is Test {
             config
         );
         market = Auction(payable(marketAddress));
-        vm.stopPrank();
         
         // Fund accounts
         vm.deal(alice, 100 ether);
@@ -84,29 +77,23 @@ contract SettlementTest is Test {
     
     function _setupJurorEligibility() internal {
         // Mock participation to create eligible jurors
-        // In reality, they would place bets through the auction
-        
-        // Need to properly setup basket to mint tokens
-        // First give basket some allowance to itself (workaround for test)
-        vm.startPrank(address(basket));
-        MockERC20(basket.stables(0)).mint(address(basket), 10000e6); // 10k USDC
-        vm.stopPrank();
-        
-        // Now mint 6909 tokens to potential jurors
+        // Mint 6909 tokens to potential jurors
         for (uint i = 0; i < 10; i++) {
             address user = address(uint160(0x100 + i));
             // Mint enough tokens to be eligible as juror (100e18 minimum)
             basket.mint(user, 200e18, address(basket), 0);
         }
+        
+        // Also mint to alice, bob, carol for proposals
+        basket.mint(alice, 200e18, address(basket), 0);
+        basket.mint(bob, 200e18, address(basket), 0);
+        basket.mint(carol, 200e18, address(basket), 0);
     }
     
     // ============ Proposal Path Tests ============
     
     function testProposalLifecycle() public {
         vm.warp(block.timestamp + 31 days);
-        
-        // First, alice needs 6909 tokens to propose
-        basket.mint(alice, 100e18, address(basket), 0);
         
         // Create proposal
         vm.startPrank(alice);
@@ -119,7 +106,6 @@ contract SettlementTest is Test {
         vm.stopPrank();
         
         // Support
-        basket.mint(bob, 150e18, address(basket), 0);
         vm.startPrank(bob);
         basket.approve(address(settlement), 150e18);
         settlement.supportProposal(
@@ -130,7 +116,6 @@ contract SettlementTest is Test {
         vm.stopPrank();
         
         // Oppose
-        basket.mint(carol, 100e18, address(basket), 0);
         vm.startPrank(carol);
         basket.approve(address(settlement), 100e18);
         settlement.opposeProposal(
@@ -156,7 +141,6 @@ contract SettlementTest is Test {
     function testProposalThresholdEnforcement() public {
         vm.warp(block.timestamp + 31 days);
         
-        basket.mint(alice, 100e18, address(basket), 0);
         vm.startPrank(alice);
         basket.approve(address(settlement), 100e18);
         uint proposalId = settlement.proposeSettlement(
@@ -167,7 +151,6 @@ contract SettlementTest is Test {
         vm.stopPrank();
         
         // Heavy opposition
-        basket.mint(bob, 200e18, address(basket), 0);
         vm.startPrank(bob);
         basket.approve(address(settlement), 200e18);
         settlement.opposeProposal(
@@ -188,7 +171,6 @@ contract SettlementTest is Test {
     function testProposalDispute() public {
         vm.warp(block.timestamp + 31 days);
         
-        basket.mint(alice, 100e18, address(basket), 0);
         vm.startPrank(alice);
         basket.approve(address(settlement), 100e18);
         uint proposalId = settlement.proposeSettlement(
@@ -201,7 +183,6 @@ contract SettlementTest is Test {
         vm.warp(block.timestamp + 3 days + 1);
         
         // Dispute
-        basket.mint(bob, 100e18, address(basket), 0);
         vm.startPrank(bob);
         basket.approve(address(settlement), 100e18);
         uint disputeId = settlement.disputeProposal(
@@ -237,7 +218,6 @@ contract SettlementTest is Test {
         assertEq(reason2, "Ready for new settlement proposal");
         
         // Active proposal
-        basket.mint(alice, 100e18, address(basket), 0);
         vm.startPrank(alice);
         basket.approve(address(settlement), 100e18);
         settlement.proposeSettlement(address(market), true, 100e18);
@@ -283,7 +263,6 @@ contract SettlementTest is Test {
         vm.warp(block.timestamp + 31 days);
         
         // Create and execute proposal
-        basket.mint(alice, 200e18, address(basket), 0);
         vm.startPrank(alice);
         basket.approve(address(settlement), 200e18);
         uint proposalId = settlement.proposeSettlement(
@@ -293,7 +272,6 @@ contract SettlementTest is Test {
         );
         vm.stopPrank();
         
-        basket.mint(bob, 100e18, address(basket), 0);
         vm.startPrank(bob);
         basket.approve(address(settlement), 100e18);
         settlement.opposeProposal(address(market), proposalId, 100e18);
@@ -316,92 +294,74 @@ contract SettlementTest is Test {
         vm.expectRevert("Nothing to claim");
         settlement.claimStakes(address(market), proposalId);
     }
-    
-    function _resolveMarket(bool outcome) internal {
-        // Create and execute proposal
-        basket.mint(alice, 100e18, address(basket), 0);
-        vm.startPrank(alice);
-        basket.approve(address(settlement), 100e18);
-        uint proposalId = settlement.proposeSettlement(
-            address(market),
-            outcome,
-            100e18
-        );
-        vm.stopPrank();
-        
-        // Wait and execute
-        vm.warp(block.timestamp + 4 days);
-        vm.prank(alice);
-        settlement.executeProposal(address(market), proposalId);
-    }
 }
 
 // ============ Mock Contracts ============
 
 contract MockRover {
-    // Minimal Rover mock - Auction doesn't interact with it directly
     receive() external payable {}
 }
 
 contract MockAux {
-    // Mock Aux that handles swaps for Auction
     function swap(address token, bool zeroForOne, uint amount, uint waitable) 
         external payable returns (uint) {
-        // Mock swap: return USD amount based on ETH sent
-        // Assuming 1 ETH = 3000 USD for testing
-        if (!zeroForOne) { // Selling ETH for USD
+        if (!zeroForOne) {
             return msg.value * 3000;
         }
         return amount;
     }
 }
 
-contract MockERC20 {
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
+contract MockBasket {
+    mapping(address => mapping(uint => uint)) public balanceOf;
+    mapping(address => uint) public totalBalances;
+    mapping(uint => address) public holders;
+    uint public latest_holder = 10; // Start with some holders
     
-    string public name;
-    string public symbol;
-    uint8 public decimals;
-    
-    constructor(string memory _name, string memory _symbol, uint8 _decimals) {
-        name = _name;
-        symbol = _symbol;
-        decimals = _decimals;
+    function mint(address to, uint amount, address, uint) external {
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
+        
+        // Add to holders if new
+        bool found = false;
+        for (uint i = 1; i <= latest_holder; i++) {
+            if (holders[i] == to) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            latest_holder++;
+            holders[latest_holder] = to;
+        }
     }
     
-    function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount;
-    }
-    
-    function transfer(address to, uint256 amount) external returns (bool) {
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
+    function transfer(address to, uint amount) external returns (bool) {
+        require(balanceOf[msg.sender][0] >= amount, "Insufficient balance");
+        balanceOf[msg.sender][0] -= amount;
+        totalBalances[msg.sender] -= amount;
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
         return true;
     }
     
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        allowance[from][msg.sender] -= amount;
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        require(balanceOf[from][0] >= amount, "Insufficient balance");
+        balanceOf[from][0] -= amount;
+        totalBalances[from] -= amount;
+        balanceOf[to][0] += amount;
+        totalBalances[to] += amount;
         return true;
     }
     
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
+    function approve(address, uint) external returns (bool) {
         return true;
     }
-}
-
-contract MockVault {
-    address public asset;
     
-    constructor(address _asset) {
-        asset = _asset;
-    }
-    
-    function deposit(uint256 assets, address) external returns (uint256) {
-        IERC20(asset).transferFrom(msg.sender, address(this), assets);
-        return assets; // 1:1 for simplicity
+    function turn(address from, uint amount) external returns (uint) {
+        require(balanceOf[from][0] >= amount, "Insufficient balance");
+        balanceOf[from][0] -= amount;
+        totalBalances[from] -= amount;
+        return amount;
     }
 }
