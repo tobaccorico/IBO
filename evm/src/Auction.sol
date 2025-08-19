@@ -156,12 +156,17 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ Constructor & Initialization ============
     
+    /// @notice Constructor sets up ERC404 with units preventing NFT minting
+    /// @dev Units = 1e18 means users need 1e18 tokens for 1 NFT, effectively disabling NFTs
     constructor() ERC404("", "", 18) {
         // Set units to 1e18 to effectively disable NFT minting
         // This makes the system work with ERC20 tokens only
         units = 1e18;
     }
     
+    /// @notice Initialize auction with core parameters
+    /// @dev Called by factory clone pattern, can only be called once
+    /// @param _params Struct containing all initialization parameters
     function initialize(AuctionParams memory _params) external {
         require(!initialized, "Already initialized");
         initialized = true;
@@ -177,6 +182,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         _startNewEpoch();
     }
     
+    /// @notice Initialize as prediction market with specific question and rules
+    /// @dev Called after basic initialization to set prediction market parameters
+    /// @param question_ The yes/no question being predicted
+    /// @param resolutionTime_ When the outcome can be determined
+    /// @param metaEvidenceId_ Reference to resolution rules in Settlement contract
+    /// @param requiresContent_ Whether participants must submit content (for rap battles)
+    /// @param contentDeadline_ Deadline for content submission if required
+    /// @param minParticipants_ Minimum participants needed (e.g., 2 for rap battles)
     function initializePredictionMarket(
         string memory question_,
         uint resolutionTime_,
@@ -197,6 +210,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         metaEvidenceId = metaEvidenceId_;
     }
     
+    /// @notice Set authorized content submitters for content-based markets
+    /// @dev Only callable by protocol treasury or owner, used for rap battles
+    /// @param submitter1 First authorized submitter (e.g., challenger)
+    /// @param submitter2 Second authorized submitter (e.g., challenged)
     function setAuthorizedSubmitters(address submitter1, address submitter2) external {
         require(msg.sender == protocolTreasury || msg.sender == params.owner, "Not authorized");
         require(predictionConfig.requiresContent, "Not content market");
@@ -224,6 +241,9 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     // ============ Core Belgian Auction Functions ============
     
     /// @notice Calculate dynamic fee based on bidding velocity
+    /// @dev Penalizes rapid bidding to prevent spam and manipulation
+    /// @param bidder Address of the bidder
+    /// @return feeBps Fee in basis points (50 = 0.5% base, up to 500 = 5%)
     function calculateDynamicGasFee(address bidder) internal returns (uint feeBps) {
         uint timeSinceLastBid = block.timestamp - lastBidTime[bidder];
         
@@ -248,6 +268,9 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Calculate fair price based on demand curve
+    /// @dev Prevents predictable pricing that could be gamed by MEV bots
+    /// @param epochIndex The epoch to calculate price for
+    /// @return Dynamic minimum price based on fill rate and randomness
     function calculateFairPrice(uint epochIndex) public view returns (uint) {
         Epoch storage epoch = epochs[epochIndex];
         if (epoch.totalBids == 0) return PRICE_INCREMENT;
@@ -269,6 +292,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Anti-sniping: Extend epoch if bid near end
+    /// @dev Prevents last-second sniping attacks common in auctions
+    /// @param epochIndex The epoch to potentially extend
     function _checkEpochExtension(uint epochIndex) internal {
         Epoch storage epoch = epochs[epochIndex];
         uint timeRemaining = epoch.endTime > block.timestamp ? 
@@ -283,6 +308,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Calculate minimum price based on total allocation (MEV protection)
+    /// @dev Exponential curve prevents whales from dominating epochs cheaply
+    /// @param totalSharesWanted Number of shares desired
+    /// @param epochShares Total shares available in epoch
+    /// @return Minimum price required for that allocation percentage
     function getMinimumPriceForAllocation(uint totalSharesWanted, uint epochShares) public pure returns (uint) {
         if (epochShares == 0) return 1e18;
         
@@ -300,6 +329,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Commit a large bid (MEV protection via commit-reveal)
+    /// @dev Prevents front-running of large bids by hiding details until reveal
     /// @param commitment Hash of (price, isYes, nonce)
     function commitBid(bytes32 commitment) external payable nonReentrant {
         require(msg.value >= COMMIT_REVEAL_THRESHOLD_ETH, "Use direct bid for small amounts");
@@ -315,6 +345,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Commit a large USD bid via stablecoin/vault deposit
+    /// @dev Alternative to ETH commits for stablecoin users
     /// @param commitment Hash of (price, isYes, nonce)
     /// @param token Token to deposit (stable or vault)
     /// @param amount Amount to deposit
@@ -340,6 +371,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Reveal a committed bid
+    /// @dev Must wait REVEAL_DELAY blocks to prevent block manipulation
     /// @param pricePerShare Your confidence expressed as price (0.01 to 1.00)
     /// @param isYes True for YES side, false for NO side
     /// @param nonce Random value used in commitment
@@ -370,6 +402,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Place a Belgian auction bid with ETH at your confidence level
+    /// @dev Main entry point for regular bids, enforces commit-reveal for large amounts
     /// @param pricePerShare Your confidence expressed as price (0.01 to 1.00)
     /// @param isYes True for YES side, false for NO side
     function placePredictionBid(uint pricePerShare, bool isYes) public payable nonReentrant {
@@ -387,6 +420,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Place a bid with stablecoin or vault token
+    /// @dev Alternative to ETH bidding for stablecoin users
     /// @param pricePerShare Your confidence expressed as price (0.01 to 1.00)
     /// @param isYes True for YES side, false for NO side
     /// @param token Token to use for payment
@@ -413,6 +447,13 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         _processBidInternalUSD(msg.sender, usdAmount, pricePerShare, isYes, false);
     }
     
+    /// @notice Internal function to process ETH bids
+    /// @dev Handles participant tracking, gas fees, swap to USD, and bid creation
+    /// @param bidder Address placing the bid
+    /// @param ethAmount ETH amount sent
+    /// @param pricePerShare Confidence level (0.01 to 1.00)
+    /// @param isYes True for YES side, false for NO side
+    /// @param skipFairPrice Whether to skip fair price check (for commit-reveal)
     function _processBidInternal(
         address bidder,
         uint ethAmount,
@@ -490,6 +531,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Pro-rata allocation to prevent gaming
+    /// @dev Ensures bids at same price get proportional shares, not first-come-first-served
+    /// @param epochIndex The epoch to allocate shares for
     function _allocateProRata(uint epochIndex) internal {
         Epoch storage epoch = epochs[epochIndex];
         uint[] memory sortedKeys = epoch.sortedBidIds.getSortedSet();
@@ -513,6 +556,12 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         }
     }
     
+    /// @notice Allocate shares within a price tier pro-rata
+    /// @dev Core Belgian auction logic - same price = same treatment
+    /// @param epochIndex The epoch being allocated
+    /// @param sortedKeys Array of sorted bid keys
+    /// @param startIndex Start of this price tier
+    /// @param endIndex End of this price tier
     function _allocateTier(
         uint epochIndex,
         uint[] memory sortedKeys,
@@ -561,6 +610,13 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         }
     }
     
+    /// @notice Internal function to process USD bids (from stablecoins)
+    /// @dev Similar to ETH processing but without gas fees or swaps
+    /// @param bidder Address placing the bid
+    /// @param usdAmount USD amount already in Basket
+    /// @param pricePerShare Confidence level (0.01 to 1.00)
+    /// @param isYes True for YES side, false for NO side
+    /// @param skipFairPrice Whether to skip fair price check
     function _processBidInternalUSD(
         address bidder,
         uint usdAmount,
@@ -622,6 +678,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Place bid with content (for rap battles)
+    /// @dev Requires authorized submitter and content submission before deadline
+    /// @param pricePerShare Your confidence level
+    /// @param isYes True for backing first submitter
+    /// @param contentURI IPFS URI of submitted content
     function placePredictionBidWithContent(
         uint pricePerShare,
         bool isYes,
@@ -649,7 +709,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     // ============ Belgian Auction Clearing with Gas Compensation ============
     
     /// @notice Clear epoch with pro-rata allocation for same price tiers
-    /// @dev This prevents gaming by treating all bids at the same price equally
+    /// @dev Anyone can call this after epoch ends to earn gas compensation
+    /// @param epochIndex The epoch to clear
     function clearEpoch(uint epochIndex) external nonReentrant {
         Epoch storage epoch = epochs[epochIndex];
         require(!epoch.cleared, "Already cleared");
@@ -757,6 +818,11 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         emit EpochCleared(epochIndex, epoch.sharesAllocated, msg.sender, compensation);
     }
     
+    /// @notice Update user's weighted average strike price
+    /// @dev Tracks average entry price for analytics and potential future features
+    /// @param user User address
+    /// @param newPrice Price of new shares
+    /// @param newShares Number of new shares
     function _updateUserStrikePrice(address user, uint newPrice, uint newShares) internal {
         uint currentShares = predictionConfig.userYesShares[user] + predictionConfig.userNoShares[user] - newShares;
         uint currentAvg = predictionConfig.avgStrikePrice[user];
@@ -771,6 +837,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ Simplified ERC20 Burn (No NFT handling) ============
     
+    /// @notice Burn ERC20 tokens without NFT logic
+    /// @dev Simplified burn since units = 1e18 prevents NFT minting
+    /// @param from Address to burn from
+    /// @param amount Amount to burn
     function _burnERC20Only(address from, uint256 amount) internal {
         require(balanceOf[from] >= amount, "Insufficient balance");
         
@@ -784,6 +854,9 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     // ============ Resolution & Payouts ============
     
     /// @notice Calculate user's payout
+    /// @dev Winners get proportional share of total pool based on their shares
+    /// @param user User address to calculate payout for
+    /// @return payoutUSD Amount user can claim in USD (6909 tokens)
     function calculatePredictionPayout(address user) external view returns (uint payoutUSD) {
         require(predictionConfig.resolved, "Not resolved");
         require(!forceMajeurRefunds, "Use force majeur refund");
@@ -805,6 +878,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Claim prediction payout in 6909 tokens
+    /// @dev Burns user's shares and mints 6909 tokens as payout
     function claimPredictionPayout() external nonReentrant {
         require(predictionConfig.resolved, "Not resolved");
         require(!forceMajeurRefunds, "Use force majeur");
@@ -830,6 +904,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     }
     
     /// @notice Claim force majeur refund
+    /// @dev Returns proportional share of pool when market is cancelled
     function claimForceMajeurRefund() external nonReentrant {
         require(forceMajeurRefunds, "No force majeur");
         
@@ -860,6 +935,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ Settlement Integration ============
     
+    /// @notice Receive ruling from Settlement contract
+    /// @dev Implements IArbitrable interface for modular dispute resolution
+    /// @param _disputeID ID of the dispute being ruled on
+    /// @param _ruling The ruling (0=NO, 1=YES, 2=Force Majeur)
     function rule(uint _disputeID, uint _ruling) external override {
         require(msg.sender == address(settlementSystem), "Only settlement");
         require(_disputeID == disputeId, "Wrong dispute");
@@ -886,6 +965,9 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ Helper Functions ============
     
+    /// @notice Add participant for jury pool tracking
+    /// @dev Critical for fair jury selection in dispute resolution
+    /// @param participant Address to add to participant list
     function _addParticipant(address participant) internal {
         if (!hasParticipated[participant]) {
             hasParticipated[participant] = true;
@@ -895,6 +977,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         }
     }
     
+    /// @notice Update epoch if time has passed
+    /// @dev Automatically transitions to next epoch or closes betting window
     function _updateEpochIfNeeded() internal {
         if (currentEpochIndex >= params.totalEpochs) {
             if (!bettingWindowClosed) {
@@ -917,6 +1001,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         }
     }
     
+    /// @notice Start a new epoch with decaying share availability
+    /// @dev Each epoch has 10% fewer shares to create scarcity
     function _startNewEpoch() internal {
         uint epochIndex = currentEpochIndex;
         
@@ -938,6 +1024,13 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ View Functions ============
     
+    /// @notice Get current epoch information
+    /// @dev Provides real-time market state for UIs
+    /// @return index Current epoch number
+    /// @return currentPrice Implied price based on demand
+    /// @return timeRemaining Seconds until epoch ends
+    /// @return bidCount Number of bids in epoch
+    /// @return isActive Whether epoch accepts bids
     function getCurrentEpochInfo() external view returns (
         uint index,
         uint currentPrice,
@@ -968,6 +1061,13 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         isActive = !bettingWindowClosed && !epoch.cleared;
     }
     
+    /// @notice Get user's position in the market
+    /// @dev Shows shares held and potential payout
+    /// @param user User address to query
+    /// @return yesShares Number of YES shares held
+    /// @return noShares Number of NO shares held
+    /// @return total404Tokens Total ERC404 tokens held
+    /// @return estimatedPayout Payout if resolved now
     function getUserPosition(address user) external view returns (
         uint yesShares,
         uint noShares,
@@ -983,14 +1083,28 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         }
     }
     
+    /// @notice Get all participants (for jury selection)
+    /// @dev Critical for Settlement contract's jury selection
+    /// @return Array of all participant addresses
     function getParticipants() external view returns (address[] memory) {
         return participants;
     }
     
+    /// @notice Get participant count
+    /// @return Number of unique participants
     function getParticipantCount() external view returns (uint) {
         return participantCount;
     }
     
+    /// @notice Get prediction market summary
+    /// @dev High-level market state for UIs
+    /// @return question The prediction question
+    /// @return totalYesShares Total YES shares minted
+    /// @return totalNoShares Total NO shares minted
+    /// @return totalPoolUSD Total USD in pool
+    /// @return impliedProbability YES probability (0-100)
+    /// @return resolved Whether market is resolved
+    /// @return outcome Final outcome if resolved
     function getPredictionSummary() external view returns (
         string memory question,
         uint totalYesShares,
@@ -1013,6 +1127,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         outcome = predictionConfig.outcome;
     }
     
+    /// @notice Get full prediction configuration
+    /// @dev Detailed market parameters
     function getPredictionConfig() external view returns (
         string memory question,
         uint resolutionTime,
@@ -1039,6 +1155,14 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         );
     }
     
+    /// @notice Get bid details
+    /// @param bidId The bid ID to query
+    /// @return bidder Address who placed bid
+    /// @return usdAmount USD value of bid
+    /// @return pricePerShare Confidence level
+    /// @return sharesAllocated Shares received
+    /// @return isYes Side of bet
+    /// @return processed Whether bid was processed
     function getBidDetails(uint bidId) external view returns (
         address bidder,
         uint usdAmount,
@@ -1058,10 +1182,16 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         );
     }
     
+    /// @notice Get user's bid IDs
+    /// @param user User address
+    /// @return Array of bid IDs for user
     function getUserBidIds(address user) external view returns (uint[] memory) {
         return userBidIds[user];
     }
     
+    /// @notice Get content submissions for content markets
+    /// @return submitters Array of submitter addresses
+    /// @return Array of content URIs
     function getContentSubmissions() external view returns (address[] memory submitters, string[] memory) {
         uint len = predictionConfig.contentSubmitters.length;
         string[] memory submissions = new string[](len);
@@ -1073,6 +1203,17 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
         return (predictionConfig.contentSubmitters, submissions);
     }
     
+    /// @notice Get epoch details
+    /// @param index Epoch index to query
+    /// @return startTime When epoch started
+    /// @return endTime When epoch ends
+    /// @return sharesAvailable Total shares in epoch
+    /// @return sharesAllocated Shares already allocated
+    /// @return totalBids Number of bids
+    /// @return totalGasCollected Gas fees collected
+    /// @return cleared Whether epoch is cleared
+    /// @return gasCompensated Whether gas was compensated
+    /// @return clearer Address that cleared epoch
     function getEpoch(uint index) external view returns (
         uint startTime,
         uint endTime,
@@ -1100,6 +1241,8 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ Utility Functions ============
     
+    /// @notice Enable force majeur refunds for content markets
+    /// @dev Allows refunds if content requirements not met
     function enableContentRefunds() external {
         require(predictionConfig.requiresContent, "Not content market");
         require(block.timestamp > predictionConfig.contentDeadline, "Deadline not passed");
@@ -1112,12 +1255,18 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable {
     
     // ============ ERC404 tokenURI Implementation ============
     
+    /// @notice Return empty URI since NFTs are disabled
+    /// @dev Required by ERC404 but unused due to high units value
+    /// @param id Token ID (unused)
+    /// @return Empty string
     function tokenURI(uint256 id) public view override returns (string memory) {
         return string('');
     }
     
     // ============ Receive ETH ============
     
+    /// @notice Accept ETH for gas fees
+    /// @dev Allows contract to receive gas compensation
     receive() external payable {
         // Accept ETH for gas fees
     }

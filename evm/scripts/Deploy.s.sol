@@ -9,11 +9,259 @@ import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 import {Aux} from "../src/Aux.sol";
 import {Rover} from "../src/Rover.sol";
 import {BasketL2} from "../src/BasketL2.sol";
+import {Settlement} from "../src/Settlement.sol";
+import {AuctionFactory} from "../src/AuctionFactory.sol";
+import {AuctionHelpers} from "../src/AuctionHelpers.sol";
 
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
 import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol"; // < L1 and Arbi
 // import {IV3SwapRouter as ISwapRouter} from "../src/imports/V3/IV3SwapRouter.sol";
+
+// ============ Dummy Contracts for Testing ============
+
+// Minimal Basket implementation for testing
+contract DummyBasket {
+    mapping(address => uint) public totalBalances;
+    mapping(address => mapping(uint => uint)) public balanceOf; // For 6909
+    mapping(address => bool) public isStable;
+    mapping(address => bool) public isVault;
+    mapping(uint => address) public holders;
+    mapping(address => uint) public holder_to_id;
+    mapping(address => bool) public hasClaimed; // Track faucet claims
+    
+    address public V4;
+    address public SET; // Settlement contract
+    uint public latest_holder = 0;
+    
+    string public name = "QUID";
+    string public symbol = "QD";
+    uint8 public decimals = 18;
+    
+    constructor(address _v4) {
+        V4 = _v4;
+        isStable[address(this)] = true;
+    }
+    
+    // Auto-faucet helper
+    function _autoFaucet(address user) internal {
+        if (!hasClaimed[user] && totalBalances[user] < 100e18) {
+            // TODO: Remove this auto-faucet in production - only for testing
+            totalBalances[user] = 1000e18; // Give 1000 QUID
+            hasClaimed[user] = true;
+            
+            if (holder_to_id[user] == 0) {
+                latest_holder++;
+                holders[latest_holder] = user;
+                holder_to_id[user] = latest_holder;
+            }
+        }
+    }
+    
+    // Core ERC20 functions
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        // Auto-faucet for testing convenience
+        _autoFaucet(from);
+        
+        require(totalBalances[from] >= amount, "Insufficient balance");
+        totalBalances[from] -= amount;
+        totalBalances[to] += amount;
+        
+        // Track holders for jury selection
+        if (holder_to_id[to] == 0 && to != address(0)) {
+            latest_holder++;
+            holders[latest_holder] = to;
+            holder_to_id[to] = latest_holder;
+        }
+        
+        return true;
+    }
+    
+    function transfer(address to, uint amount) external returns (bool) {
+        require(totalBalances[msg.sender] >= amount, "Insufficient balance");
+        totalBalances[msg.sender] -= amount;
+        totalBalances[to] += amount;
+        
+        // Track holders
+        if (holder_to_id[to] == 0 && to != address(0)) {
+            latest_holder++;
+            holders[latest_holder] = to;
+            holder_to_id[to] = latest_holder;
+        }
+        
+        return true;
+    }
+    
+    function mint(address to, uint amount, address, uint) external {
+        totalBalances[to] += amount;
+        
+        // Track holders
+        if (holder_to_id[to] == 0) {
+            latest_holder++;
+            holders[latest_holder] = to;
+            holder_to_id[to] = latest_holder;
+        }
+    }
+    
+    function deposit(address from, address token, uint amount) external returns (uint) {
+        // Auto-faucet for testing convenience
+        _autoFaucet(from);
+        
+        // Mock deposit - just return scaled amount
+        if (token == address(this)) {
+            totalBalances[from] += amount;
+            return amount;
+        }
+        // Assume USD tokens have 6 decimals
+        return amount * 1e12;
+    }
+    
+    function take(address who, uint amount, address token, bool) external returns (uint) {
+        // Mock withdrawal
+        if (token == address(this)) {
+            require(totalBalances[who] >= amount, "Insufficient balance");
+            totalBalances[who] -= amount;
+            return amount;
+        }
+        return amount;
+    }
+    
+    function turn(address from, uint value) external returns (uint) {
+        // Mock burn for Settlement slashing
+        require(totalBalances[from] >= value, "Insufficient balance");
+        totalBalances[from] -= value;
+        return value;
+    }
+    
+    function setSettlement(address _settlement) external {
+        SET = _settlement;
+    }
+    
+    // Test faucet - gives users tokens for testing
+    function faucet() external {
+        require(!hasClaimed[msg.sender], "Already claimed");
+        totalBalances[msg.sender] += 1000e18; // 1000 QUID
+        hasClaimed[msg.sender] = true;
+        
+        if (holder_to_id[msg.sender] == 0) {
+            latest_holder++;
+            holders[latest_holder] = msg.sender;
+            holder_to_id[msg.sender] = latest_holder;
+        }
+    }
+    
+    // For AuctionHelpers
+    function balanceOf(address owner, uint) external view returns (uint) {
+        return totalBalances[owner];
+    }
+}
+
+// Minimal Aux implementation for testing
+contract DummyAux {
+    uint constant ETH_PRICE = 3000e18; // $3000 per ETH
+    address public WETH;
+    address public basket;
+    
+    constructor(address _weth, address _basket) {
+        WETH = _weth;
+        basket = _basket;
+    }
+    
+    // Mock swap function - Auction calls this
+    function swap(address to, bool, uint ethAmount, uint) external payable returns (uint) {
+        require(msg.value == ethAmount, "ETH mismatch");
+        
+        // Calculate USD amount (6 decimals)
+        uint usdAmount = (ethAmount * 3000e6) / 1e18;
+        
+        // Mock the basket deposit
+        DummyBasket(basket).mint(to, usdAmount * 1e12, address(0), 0);
+        
+        return usdAmount;
+    }
+    
+    // For Aux initialization check
+    function wethVault() external view returns (address) {
+        return address(this); // dummy
+    }
+    
+    function setQuid(address) external payable {
+        // Mock initialization
+    }
+    
+    function getPrice(uint160, bool) external pure returns (uint) {
+        return ETH_PRICE;
+    }
+    
+    function untouchable() external pure returns (uint) {
+        return 0;
+    }
+    
+    function QUID() external view returns (address) {
+        return basket;
+    }
+    
+    function sendETH(uint amount, address to) external {
+        payable(to).transfer(amount);
+    }
+    
+    function putETH(uint) external pure returns (uint) {
+        return 0; // dummy
+    }
+    
+    receive() external payable {} // Accept ETH
+}
+
+// Minimal Rover implementation for testing
+contract DummyRover {
+    address public owner;
+    address public QUID;
+    
+    constructor() {
+        owner = msg.sender;
+    }
+    
+    function setup(address _quid, address, address) external {
+        QUID = _quid;
+    }
+}
+
+// Minimal WETH for testing
+contract DummyWETH {
+    mapping(address => uint) public balanceOf;
+    
+    function deposit() external payable {
+        balanceOf[msg.sender] += msg.value;
+    }
+    
+    function withdraw(uint amount) external {
+        require(balanceOf[msg.sender] >= amount);
+        balanceOf[msg.sender] -= amount;
+        payable(msg.sender).transfer(amount);
+    }
+    
+    function transfer(address to, uint amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount);
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+    
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        require(balanceOf[from] >= amount);
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+    
+    function approve(address, uint) external pure returns (bool) {
+        return true;
+    }
+    
+    function decimals() external pure returns (uint8) {
+        return 18;
+    }
+}
 
 // TODO morpho addresses across chains
 
@@ -154,11 +402,13 @@ contract Deploy is Script {
     function run() public {
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
+        /*
         Rover V4router = new Rover(poolManager);
         
         Aux AUX = new Aux(address(V4router),
             address(V3pool), address(V3router),
-            address(gauntletWETHvault), aavePool);
+            address(gauntletWETHvault), aavePool,
+            aaveData, aaveAddr);
        
         Basket QUID = new BasketL2(
             address(V4router), address(AUX), 
@@ -167,15 +417,76 @@ contract Deploy is Script {
             address(USDS), address(SUSDS),
             address(USDE), address(SUSDE), 
             address(CRVUSD), address(SCRVUSD)
-        );  V4router.setup(address(QUID),
+        );  
+        
+        V4router.setup(address(QUID),
             address(AUX), address(V3pool));
         
         USDC.transfer(address(AUX), 1000000);
-        AUX.setQuid{value: 1 wei}(address(QUID));   
+        AUX.setQuid{value: 1 wei}(address(QUID));
+        */
+        
+        // TODO == TEMPORARY - dummy contracts for testing
+        console.log("Deploying dummy contracts for testing...");
+        
+        // Deploy dummy WETH
+        DummyWETH dummyWETH = new DummyWETH();
+        console.log("Dummy WETH:", address(dummyWETH));
+        
+        // Deploy dummy Rover
+        DummyRover V4router = new DummyRover();
+        console.log("Dummy Rover:", address(V4router));
+        
+        // Deploy dummy Basket
+        DummyBasket QUID = new DummyBasket(address(V4router));
+        console.log("Dummy Basket:", address(QUID));
+        
+        // Deploy dummy Aux
+        DummyAux AUX = new DummyAux(address(dummyWETH), address(QUID));
+        console.log("Dummy Aux:", address(AUX));
+        
+        // Setup dummy connections
+        V4router.setup(address(QUID), address(AUX), address(0));
+        
+        // Send some ETH to Aux for swaps
+        payable(address(AUX)).transfer(10 ether);
 
-        console.log("QUID", address(QUID));
-        console.log("AUX", address(AUX));
-        console.log("V4", address(V4router));
+        // Deploy Settlement
+        Settlement settlement = new Settlement();
+        settlement.initialize(address(QUID), address(0));
+        
+        // Deploy AuctionFactory
+        AuctionFactory factory = new AuctionFactory(
+            address(settlement),
+            address(V4router),
+            address(AUX),
+            address(QUID)
+        );
+        
+        // Deploy AuctionHelpers
+        AuctionHelpers helpers = new AuctionHelpers(
+            address(factory),
+            address(settlement),
+            address(QUID)
+        );
+        
+        // Connect Settlement to Basket
+        QUID.setSettlement(address(settlement));
+
+        console.log("\n=== Deployment Summary ===");
+        console.log("QUID (Dummy)", address(QUID));
+        console.log("AUX (Dummy)", address(AUX));
+        console.log("V4 (Dummy)", address(V4router));
+        console.log("Settlement", address(settlement));
+        console.log("Factory", address(factory));
+        console.log("Helpers", address(helpers));
+        
+        console.log("\n=== Test Instructions ===");
+        console.log("1. Users automatically receive 1000 QUID when they:");
+        console.log("   - Place their first bet (via Auction)");
+        console.log("   - Propose a settlement (via Settlement transferFrom)");
+        console.log("2. No need to manually call faucet()");
+        console.log("3. This enables jury participation automatically");
     
         vm.stopBroadcast();
     }

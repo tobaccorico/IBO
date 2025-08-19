@@ -134,6 +134,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     constructor() {}
     
+    /// @notice Initialize the settlement system with basket and factory addresses
+    /// @dev Can only be called once to set up the system
+    /// @param _basket The Basket (6909) contract address for token operations
+    /// @param _factory The AuctionFactory address for market validation
     function initialize(address _basket, address _factory) external {
         require(basketContract == address(0), "Already initialized");
         basketContract = _basket;
@@ -142,6 +146,12 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Proposal System (6909 Token Stakes) ============
     
+    /// @notice Propose a settlement outcome for a prediction market
+    /// @dev First phase of resolution - requires staking 6909 tokens
+    /// @param market The prediction market to settle
+    /// @param outcome Proposed outcome (true for YES, false for NO)
+    /// @param stakeAmount Amount of 6909 tokens to stake (min 100e18)
+    /// @return proposalId The ID of the created proposal
     function proposeSettlement(address market, bool outcome, uint stakeAmount) 
         external nonReentrant returns (uint proposalId) {
         require(stakeAmount >= MIN_PROPOSAL_STAKE, "Insufficient stake");
@@ -166,6 +176,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalCreated(market, proposalId, msg.sender, outcome, stakeAmount);
     }
     
+    /// @notice Support an active proposal by staking additional tokens
+    /// @dev Supporters share in winnings if proposal executes successfully
+    /// @param market The prediction market address
+    /// @param proposalId The proposal to support
+    /// @param amount Amount of 6909 tokens to stake in support
     function supportProposal(address market, uint proposalId, uint amount) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
@@ -182,6 +197,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalSupported(market, proposalId, msg.sender, amount);
     }
     
+    /// @notice Oppose an active proposal by staking tokens
+    /// @dev Opposers prevent execution if total opposition >= support/2
+    /// @param market The prediction market address
+    /// @param proposalId The proposal to oppose
+    /// @param amount Amount of 6909 tokens to stake in opposition
     function opposeProposal(address market, uint proposalId, uint amount) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
@@ -198,6 +218,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalOpposed(market, proposalId, msg.sender, amount);
     }
     
+    /// @notice Execute a proposal that has met the support threshold
+    /// @dev Requires 2:1 support ratio and execution delay passed
+    /// @param market The prediction market address
+    /// @param proposalId The proposal to execute
     function executeProposal(address market, uint proposalId) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
@@ -214,6 +238,14 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalExecuted(market, proposalId);
     }
     
+    /// @notice Dispute a proposal and trigger jury resolution
+    /// @dev Transitions from proposal system to jury system
+    /// @param market The prediction market address
+    /// @param proposalId The proposal to dispute
+    /// @param evidence IPFS URI or other evidence link
+    /// @param evidenceHash Hash of evidence for verification
+    /// @param disputeStake Amount to stake for dispute (returned if successful)
+    /// @return disputeId The created dispute ID
     function disputeProposal(address market, uint proposalId, string calldata evidence, string calldata evidenceHash, uint disputeStake) 
         external nonReentrant returns (uint disputeId) {
         require(disputeStake >= MIN_PROPOSAL_STAKE, "Insufficient stake");
@@ -248,12 +280,17 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     // ============ Jury System (6909 Balance Based) ============
     
     /// @notice Check if address is eligible to be a juror based on 6909 balance
+    /// @dev Jurors must hold at least MIN_JUROR_BALANCE tokens and not be in active disputes
+    /// @param juror Address to check eligibility
+    /// @return Whether the address can serve as a juror
     function isEligibleJuror(address juror) public view returns (bool) {
         uint balance = Basket(basketContract).totalBalances(juror);
         return balance >= MIN_JUROR_BALANCE && activeDisputes[juror] == 0;
     }
     
     /// @notice Get all potential jurors from 6909 holders
+    /// @dev Scans all holders and filters for eligibility, requires minimum pool size
+    /// @return Array of eligible juror addresses and count
     function getPotentialJurors() public view returns (address[] memory, uint) {
         Basket basket = Basket(basketContract);
         uint latestHolder = basket.latest_holder();
@@ -283,6 +320,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return (eligibleJurors, eligibleCount);
     }
     
+    /// @notice Request jury selection using future block randomness
+    /// @dev Stores future block numbers for RANDAO-based selection
+    /// @param disputeId The dispute requiring jury selection
     function requestJurySelection(uint disputeId) external {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.createdAt > 0, "Invalid dispute");
@@ -302,6 +342,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit JuryRequested(disputeId, round);
     }
     
+    /// @notice Fulfill jury selection with block headers
+    /// @dev Uses RANDAO values from multiple blocks for unpredictable selection
+    /// @param disputeId The dispute to select jury for
+    /// @param headers Array of 3 block headers for randomness extraction
     function fulfillJurySelection(uint disputeId, bytes[] calldata headers) external {
         Dispute storage dispute = disputes[disputeId];
         uint round = dispute.currentRound;
@@ -337,6 +381,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit JurySelected(disputeId, round, selected);
     }
     
+    /// @notice Submit vote as a selected juror
+    /// @dev Jurors vote on the dispute outcome: No, Yes, or Force Majeur
+    /// @param disputeId The dispute being voted on
+    /// @param round The round of voting (for appeals)
+    /// @param vote The vote choice (No=0, Yes=1, ForceMajeur=2)
     function submitVote(uint disputeId, uint round, VoteChoice vote) external {
         require(vote != VoteChoice.None, "Invalid vote");
         
@@ -360,6 +409,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         }
     }
     
+    /// @notice Finalize a voting round and determine verdict
+    /// @dev Called automatically when majority is reached
+    /// @param disputeId The dispute being finalized
+    /// @param round The round to finalize
     function _finalizeRound(uint disputeId, uint round) internal {
         DisputeRound storage disputeRound = rounds[disputeId][round];
         
@@ -386,6 +439,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Appeals ============
     
+    /// @notice Appeal a jury decision to trigger another round
+    /// @dev Each appeal round requires 3x more stake than previous
+    /// @param _disputeID The dispute to appeal
     function appeal(uint _disputeID, bytes calldata) external payable override {
         Dispute storage dispute = disputes[_disputeID];
         require(dispute.currentRound < MAX_ROUNDS - 1, "Max rounds");
@@ -411,6 +467,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Finalization ============
     
+    /// @notice Finalize dispute and execute ruling
+    /// @dev Slashes overturned jurors and executes final verdict
+    /// @param disputeId The dispute to finalize
     function finalizeDispute(uint disputeId) external nonReentrant {
         Dispute storage dispute = disputes[disputeId];
         require(!dispute.isFinalized, "Already finalized");
@@ -439,6 +498,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         IArbitrable(dispute.market).rule(disputeId, ruling);
     }
     
+    /// @notice Slash jurors who voted against the final verdict
+    /// @dev Burns 10% of their 6909 balance as penalty for wrong vote
+    /// @param disputeId The dispute being finalized
+    /// @param round The round to slash
+    /// @param finalVerdict The final verdict to compare against
     function _slashRound(uint disputeId, uint round, VoteChoice finalVerdict) internal {
         DisputeRound storage slashRound = rounds[disputeId][round];
         
@@ -466,6 +530,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Claim Proposal Stakes ============
     
+    /// @notice Claim stakes after proposal execution
+    /// @dev Proposer gets all stakes, supporters get proportional share of opposition
+    /// @param market The prediction market address
+    /// @param proposalId The executed proposal
     function claimStakes(address market, uint proposalId) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Executed, "Not executed");
@@ -497,6 +565,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Internal Helpers ============
     
+    /// @notice Select jurors using provided randomness
+    /// @dev Fisher-Yates shuffle variant for fair selection
+    /// @param randomSeed Random value for selection
+    /// @return Array of selected juror addresses
     function _selectJurorsWithRandomness(uint randomSeed) internal view returns (address[] memory) {
         // Get all eligible jurors
         (address[] memory eligibleJurors, uint eligibleCount) = getPotentialJurors();
@@ -528,11 +600,18 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return selected;
     }
     
+    /// @notice Check if market is valid (deployed by factory)
+    /// @param market Address to validate
+    /// @return Whether market is valid
     function _isValidMarket(address market) internal view returns (bool) {
         AuctionFactory factory = AuctionFactory(auctionFactory);
         return factory.isValidAuction(market);
     }
     
+    /// @notice Check if market can receive proposals
+    /// @dev Market must be past resolution time and not have active proposals/disputes
+    /// @param market Market to check
+    /// @return Whether proposals can be made
     function _canPropose(address market) internal view returns (bool) {
         if (activeProposalId[market] > 0) return false;
         if (marketDispute[market] > 0) return false;
@@ -557,10 +636,17 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return true;
     }
     
+    /// @notice Check if proposal is in voting period
+    /// @param proposal Proposal to check
+    /// @return Whether voting is active
     function _inVotingPeriod(Proposal storage proposal) internal view returns (bool) {
         return block.timestamp <= proposal.createdAt + PROPOSAL_VOTING_PERIOD;
     }
     
+    /// @notice Check if proposal can be executed
+    /// @dev Requires 2:1 support ratio and execution delay
+    /// @param proposal Proposal to check
+    /// @return Whether execution is allowed
     function _canExecute(Proposal storage proposal) internal view returns (bool) {
         if (block.timestamp < proposal.createdAt + PROPOSAL_VOTING_PERIOD + PROPOSAL_EXECUTION_DELAY) {
             return false;
@@ -572,6 +658,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return totalSupport >= totalOppose * SUPPORT_THRESHOLD;
     }
     
+    /// @notice Check if address is selected juror
+    /// @param jurors Array of selected jurors
+    /// @param juror Address to check
+    /// @return Whether address is in array
     function _isSelectedJuror(address[] memory jurors, address juror) internal pure returns (bool) {
         for (uint i = 0; i < jurors.length; i++) {
             if (jurors[i] == juror) return true;
@@ -581,6 +671,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Timeouts ============
     
+    /// @notice Force resolution for inactive disputes
+    /// @dev Prevents markets from being stuck indefinitely
+    /// @param disputeId Dispute to force resolve
     function forceTimeoutResolution(uint disputeId) external {
         Dispute storage dispute = disputes[disputeId];
         require(!dispute.isFinalized, "Already finalized");
@@ -604,6 +697,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ Meta Evidence ============
     
+    /// @notice Create standard meta evidence for prediction markets
+    /// @dev Defines the resolution rules and options
+    /// @return ID of created meta evidence
     function createPredictionMarketMetaEvidence() external returns (uint) {
         return createMetaEvidence(
             "Standard Prediction Market",
@@ -614,6 +710,14 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         );
     }
     
+    /// @notice Create custom meta evidence
+    /// @dev Allows markets to define custom resolution rules
+    /// @param _title Title of the resolution type
+    /// @param _description Description of resolution process
+    /// @param _question The question being resolved
+    /// @param _rulingOptions JSON array of possible rulings
+    /// @param _fileURI Additional documentation URI
+    /// @return ID of created meta evidence
     function createMetaEvidence(
         string memory _title,
         string memory _description,
@@ -637,6 +741,14 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return id;
     }
     
+    /// @notice Create dispute with meta evidence
+    /// @dev Shortcut to create proposal and immediately dispute it
+    /// @param market Market to dispute
+    /// @param _metaEvidenceId Meta evidence defining resolution rules
+    /// @param evidence Evidence supporting dispute
+    /// @param evidenceHash Hash of evidence
+    /// @param stakeAmount Total stake amount (split between proposal and dispute)
+    /// @return disputeId Created dispute ID
     function initiateDisputeWithMetaEvidence(
         address market,
         uint _metaEvidenceId,
@@ -653,6 +765,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ IArbitrator Implementation ============
     
+    /// @notice Create a dispute (IArbitrator interface)
+    /// @dev Direct dispute creation for IArbitrable contracts
+    /// @param _choices Number of ruling options
+    /// @param _extraData Additional data (unused)
+    /// @return disputeID Created dispute ID
     function createDispute(uint _choices, bytes calldata _extraData) external payable override returns (uint disputeID) {
         require(_choices >= 2, "Need choices");
         
@@ -674,18 +791,32 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit DisputeCreated(disputeID, IArbitrable(msg.sender), _choices);
     }
     
+    /// @notice Get arbitration cost
+    /// @dev Returns minimum stake required in 6909 tokens
+    /// @return Cost in 6909 tokens
     function arbitrationCost(bytes calldata) external pure override returns (uint) {
         return MIN_PROPOSAL_STAKE;
     }
     
+    /// @notice Get appeal cost for a dispute
+    /// @dev Cost increases exponentially with each round
+    /// @param _disputeID Dispute to check
+    /// @return Cost in 6909 tokens
     function appealCost(uint _disputeID, bytes calldata) external view override returns (uint) {
         return MIN_PROPOSAL_STAKE * (APPEAL_MULTIPLIER ** disputes[_disputeID].currentRound);
     }
     
+    /// @notice Get dispute status
+    /// @param _disputeID Dispute to check
+    /// @return Current status
     function disputeStatus(uint _disputeID) external view override returns (DisputeStatus) {
         return disputes[_disputeID].status;
     }
     
+    /// @notice Get current ruling for a dispute
+    /// @dev Returns the verdict of the current round if finalized
+    /// @param _disputeID Dispute to check
+    /// @return Ruling (0=NO, 1=YES, 2=Force Majeur)
     function currentRuling(uint _disputeID) external view override returns (uint) {
         Dispute storage dispute = disputes[_disputeID];
         DisputeRound storage round = rounds[_disputeID][dispute.currentRound];
@@ -696,6 +827,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return 0;
     }
     
+    /// @notice Get appeal period for a dispute
+    /// @dev Returns time window for appeals if applicable
+    /// @param _disputeID Dispute to check
+    /// @return start Start of appeal period
+    /// @return end End of appeal period
     function appealPeriod(uint _disputeID) external view override returns (uint start, uint end) {
         Dispute storage dispute = disputes[_disputeID];
         DisputeRound storage round = rounds[_disputeID][dispute.currentRound];
@@ -706,6 +842,10 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         }
     }
     
+    /// @notice Submit evidence for a dispute
+    /// @dev Can be called during evidence period
+    /// @param _disputeID Dispute to submit evidence for
+    /// @param _evidence Evidence URI or data
     function submitEvidence(uint _disputeID, string calldata _evidence) external {
         Dispute storage dispute = disputes[_disputeID];
         require(dispute.createdAt > 0, "Invalid dispute");
@@ -716,6 +856,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     // ============ View Functions ============
     
+    /// @notice Check if market can be settled
+    /// @dev Comprehensive check of market settlement state
+    /// @param market Market to check
+    /// @return canSettleResult Whether settlement is possible
+    /// @return reason Human-readable reason
     function canSettle(address market) external view returns (bool canSettleResult, string memory reason) {
         if (!_isValidMarket(market)) {
             return (false, "Invalid market");
@@ -757,6 +902,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return (true, "Ready for new settlement proposal");
     }
     
+    /// @notice Get count of eligible jurors
+    /// @dev Useful for checking if jury selection is possible
+    /// @return Number of eligible jurors
     function getEligibleJurorCount() external view returns (uint) {
         (, uint count) = getPotentialJurors();
         return count;

@@ -28,6 +28,9 @@ interface IStakeToken is IERC20 { // StkGHO (safety module)
              external view returns (uint);
 }
 
+/// @title Basket - Multi-Asset Stablecoin Basket with Time-Locked Maturity
+/// @notice Implements ERC6909 for multi-asset positions with time-based maturity
+/// @dev Core component that manages USD deposits across multiple yield sources
 contract Basket is ERC6909 { // extended
 // for full ERC20 compatibility, batch
 // transferring through helper function
@@ -84,6 +87,8 @@ contract Basket is ERC6909 { // extended
     // Add fee toggle for testing
     bool public feesEnabled = false;
 
+    /// @notice Restricts access to core system contracts
+    /// @dev Only Rover (V4), Aux, or Settlement can call restricted functions
     modifier onlyUs { 
         address sender = msg.sender;
         require(sender == V4 
@@ -91,33 +96,53 @@ contract Basket is ERC6909 { // extended
              || sender == address(SET), "404"); _;
     }
 
+    /// @notice Calculate current month since deployment
+    /// @dev Used for time-based token maturity (28-day months)
+    /// @return month Current month number since deployment
     function currentMonth() public view returns
         (uint month) { month = (block.timestamp -
                       _deployed) / 2420000; // ~28 days
     }
  
+    /// @notice Get token name
+    /// @return Token name "QU!D"
     function name() public view virtual returns (string memory) {
         return _name;
     }
 
+    /// @notice Get token symbol
+    /// @return Token symbol "QD"
     function symbol() public view virtual returns (string memory) {
         return _symbol;
     }
 
+    /// @notice Get token decimals
+    /// @return Always 18 decimals
     function decimals() public view virtual returns (uint8) {
         return 18;
     }
 
+    /// @notice Get total supply across all batches
+    /// @return Total 6909 tokens in circulation
     function totalSupply() public 
         view returns (uint) {
         return _totalSupply;
     }
 
+    /// @notice Transfer tokens (ERC20 compatible)
+    /// @dev Transfers from most recent batches first
+    /// @param to Recipient address
+    /// @param amount Amount to transfer
+    /// @return Always true if successful
     function transfer(address to, // receiver
         uint amount) public returns (bool) {
         return _transfer(msg.sender, to, amount, true);
     }
 
+    /// @notice Approve spender (ERC20 compatible)
+    /// @param spender Address to approve
+    /// @param value Amount to approve
+    /// @return Always true
     function approve(address spender, 
         uint value) public returns (bool) {
         require(spender != address(0), "suspender");
@@ -125,6 +150,10 @@ contract Basket is ERC6909 { // extended
         return true;
     }
 
+    /// @notice Find most recent mature batch for withdrawal
+    /// @dev Scans from newest to oldest to find withdrawable batches
+    /// @param batches Array of batch IDs sorted by time
+    /// @return i Index of most recent mature batch (-1 if none)
     function matureBatches(uint[] memory batches)
         public view returns (int i) {
         int start = int(batches.length - 1);
@@ -135,6 +164,12 @@ contract Basket is ERC6909 { // extended
         }
     }
 
+    /// @notice Constructor initializes the basket with stablecoins and vaults
+    /// @dev Sets up equal weighting across all stablecoins initially
+    /// @param _router Rover (V4) contract address
+    /// @param _aux Aux contract address
+    /// @param _stables Array of stablecoin addresses
+    /// @param _vaults Array of corresponding vault addresses
     constructor(address _router, address _aux,
         address[] memory _stables,
         address[] memory _vaults) { 
@@ -152,16 +187,25 @@ contract Basket is ERC6909 { // extended
         }   V4 = payable(_router);
     }
 
-    // Enable/disable fees (for testing)
+    /// @notice Enable/disable rebalancing fees (for testing)
+    /// @dev Only callable by system contracts
+    /// @param _enabled Whether fees are enabled
     function setFeesEnabled(bool _enabled) external onlyUs {
         feesEnabled = _enabled;
     }
 
+    /// @notice Set the Settlement contract address
+    /// @dev Can only be set once during initialization
+    /// @param _settlement Settlement contract address
     function setSettlement(address _settlement) external onlyUs {
         require(address(SET) == address(0), "set"); 
         SET = Settlement(_settlement);
     }
 
+    /// @notice Get current metrics with optional force refresh
+    /// @dev Calculates total value and yield across all vaults
+    /// @param force Whether to force recalculation
+    /// @return Total value and yield (in WAD)
     // if force is false we just return
     // the most recent known metrics 
     // without recalculating them...
@@ -179,6 +223,8 @@ contract Basket is ERC6909 { // extended
         } return (stats.total, stats.yield); // to Rover's a lien, uh?
     }
 
+    /// @notice Collect GHO staking rewards
+    /// @dev Sends rewards to Rover owner as protocol fee
     // deployer's take-home...
     function collect() external {
         address vault = vaults[
@@ -188,6 +234,9 @@ contract Basket is ERC6909 { // extended
                     type(uint).max);
     }
 
+    /// @notice Get current deposits across all vaults
+    /// @dev Returns array with total and per-vault values
+    /// @return amounts [0]=total, [1-n]=per vault, [9]=weighted APY sum
     function get_deposits() public view
         returns (uint[10] memory amounts) {
         address vault; uint shares; // 4626
@@ -215,6 +264,13 @@ contract Basket is ERC6909 { // extended
         amounts[0] += shares; // our total
     }
 
+    /// @notice Withdraw tokens from basket to recipient
+    /// @dev Complex logic handling multi-vault withdrawals with rebalancing
+    /// @param who Recipient address
+    /// @param amount Amount to withdraw (in 6909 tokens)
+    /// @param token Specific token requested (or basket address for pro-rata)
+    /// @param strict If true, only withdraw from specified token vault
+    /// @return sent Amount actually sent after fees
     function take(address who, uint amount, 
         address token, bool strict) public
         onlyUs returns (uint sent) { 
@@ -282,6 +338,12 @@ contract Basket is ERC6909 { // extended
         }
     }  
    
+    /// @notice Internal vault withdrawal logic
+    /// @dev Handles share conversion and updates tracking
+    /// @param to Recipient address
+    /// @param vault Vault to withdraw from
+    /// @param amount Amount to withdraw in assets
+    /// @return sent Actual amount withdrawn
     function withdraw(address to, address vault, uint amount) internal returns (uint sent) {
         uint sharesWithdrawn = Math.min(IERC4626(vault).balanceOf(address(this)),
                                         IERC4626(vault).convertToShares(amount));
@@ -293,6 +355,12 @@ contract Basket is ERC6909 { // extended
         perVault[vault].shares -= sharesWithdrawn;
     }
 
+    /// @notice Deposit tokens into basket
+    /// @dev Handles stablecoins, vault shares, and GHO staking
+    /// @param from Depositor address
+    /// @param token Token being deposited
+    /// @param amount Amount to deposit
+    /// @return usd USD value of deposit
     function deposit(address from,
         address token, uint amount)
         public returns (uint usd) {
@@ -345,6 +413,11 @@ contract Basket is ERC6909 { // extended
         }  
     }
 
+    /// @notice Internal mint function for 6909 tokens
+    /// @dev Overrides standard to add holder tracking and time-based batches
+    /// @param receiver Address to mint to
+    /// @param id Batch ID (month)
+    /// @param amount Amount to mint
     // overriding standard 6909 code
     function _mint(address receiver,
         uint id, uint amount
@@ -365,6 +438,12 @@ contract Basket is ERC6909 { // extended
     // pink sheets music
     // cyan samsung a16z
 
+    /// @notice Mint new 6909 tokens with time-based maturity
+    /// @dev Creates tokens that mature after specified time period
+    /// @param pledge Beneficiary address
+    /// @param amount Amount to mint
+    /// @param token Backing token (if not self-minting)
+    /// @param when Maturity month (0 for immediate)
     /** TODO can reutrn new total 
      * @param pledge is on whose behalf...
      * @param amount is the amount to mint
@@ -398,6 +477,12 @@ contract Basket is ERC6909 { // extended
         } 
     } 
 
+    /// @notice Transfer from with allowance check
+    /// @dev ERC20 compatible transferFrom
+    /// @param from Source address
+    /// @param to Destination address
+    /// @param amount Amount to transfer
+    /// @return Always true if successful
     function transferFrom(address from, 
         address to, uint amount) public
         returns (bool) {
@@ -413,6 +498,11 @@ contract Basket is ERC6909 { // extended
         } return _transfer(from, to, amount, true);
     }
 
+    /// @notice Burn tokens (restricted to system contracts)
+    /// @dev Used for redemptions and settlements
+    /// @param from Address to burn from
+    /// @param value Amount to burn
+    /// @return sent Amount actually burned
     // utility function for redemption (i.e. burn)
     function turn(address from, // whose balance
         uint value) onlyUs public returns (uint sent) {
@@ -421,6 +511,12 @@ contract Basket is ERC6909 { // extended
                 address(0), value);
     }
 
+    /// @notice Internal transfer helper handling batch logic
+    /// @dev Transfers from newest to oldest batches
+    /// @param from Source address
+    /// @param to Destination address (0 for burn)
+    /// @param amount Amount to transfer
+    /// @return sent Amount actually transferred
     // eventually a balance may be spread
     // over enough batches that this will
     // run out of gas, so there will be
@@ -469,6 +565,13 @@ contract Basket is ERC6909 { // extended
         }
     }
 
+    /// @notice Main transfer function with rebalancing
+    /// @dev Updates concentrations after transfers if fees enabled
+    /// @param from Source address
+    /// @param to Destination address
+    /// @param amount Amount to transfer
+    /// @param update Whether to update concentrations
+    /// @return Always true if successful
     /**
      * @dev A transfer that doesn't specify which
      * batch will proceed backwards from most recent
@@ -489,6 +592,9 @@ contract Basket is ERC6909 { // extended
         return true;
     }
 
+    /// @notice Vote on target allocations for rebalancing
+    /// @dev Weighted by 6909 balance, updates weekly epoch
+    /// @param _targets Array of target percentages (must sum to WAD)
     function vote(uint[] calldata _targets) external {
         uint epoch = block.timestamp / 1 weeks;
         require(_targets.length == stables.length 
@@ -508,6 +614,12 @@ contract Basket is ERC6909 { // extended
             _recomputeConcentrations(epoch);
     }
 
+    /// @notice Insert vote maintaining sorted order
+    /// @dev Enables efficient weighted median calculation
+    /// @param epoch Voting epoch
+    /// @param stableIndex Which stablecoin
+    /// @param voteValue Target percentage
+    /// @param weight Voter's weight
     function _insertSortedVote(uint epoch, uint stableIndex, 
         uint voteValue, uint weight) internal {
         uint[] storage votes = epochVotes[epoch][stableIndex];
@@ -531,6 +643,9 @@ contract Basket is ERC6909 { // extended
         weights[insertPos] = weight;
     }
 
+    /// @notice Recompute target concentrations from votes
+    /// @dev Uses exponential moving average for smooth rebalancing
+    /// @param epoch Current voting epoch
     function _recomputeConcentrations(uint epoch) internal {
         uint[] memory newConcentrations = new uint[](stables.length);
         // Only recompute if there are votes for this epoch
@@ -548,6 +663,11 @@ contract Basket is ERC6909 { // extended
         }
     }
 
+    /// @notice Compute weighted median of votes
+    /// @dev More robust than simple average, resistant to manipulation
+    /// @param epoch Voting epoch
+    /// @param stableIndex Which stablecoin
+    /// @return Weighted median target percentage
     function _computeWeightedMedian(uint epoch,
         uint stableIndex) internal view returns (uint) {
         uint[] storage votes = epochVotes[epoch][stableIndex];
@@ -574,6 +694,12 @@ contract Basket is ERC6909 { // extended
         } return votes[votes.length - 1]; 
     }
 
+    /// @notice Calculate rebalancing fee using sigmoid curve
+    /// @dev Penalizes deposits/withdrawals that move away from target
+    /// @param actual Current concentration
+    /// @param target Target concentration
+    /// @param multiplier Fee multiplier (higher for deposits)
+    /// @return fee18 Fee in WAD units
     function sigmoidFee(uint actual, 
         uint target, uint multiplier) public pure returns (uint fee18) {
         // Manhattan distance approach for multi-dimensional optimization
@@ -601,6 +727,12 @@ contract Basket is ERC6909 { // extended
         } else { fee18 = 0; }
     }
 
+    /// @notice Get rebalancing fee for a stablecoin operation
+    /// @dev Incentivizes deposits to underweight assets, withdrawals from overweight
+    /// @param stable Stablecoin address
+    /// @param isMinting True for deposits, false for withdrawals
+    /// @param amount Operation amount (unused but kept for future)
+    /// @return fee18 Fee percentage in WAD units
     function getFee(address stable, 
         bool isMinting, uint amount) 
         public view returns (uint fee18) {

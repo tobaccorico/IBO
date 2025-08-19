@@ -1,5 +1,3 @@
-
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
@@ -27,6 +25,9 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 import "lib/forge-std/src/console.sol"; // TODO remove
 
+/// @title Aux - Auxiliary System for ETH/USD Swaps and Leverage
+/// @notice Handles ETH/USD conversions, AAVE leverage, and batch swap clearing
+/// @dev Integrates V3 for swaps, AAVE for leverage, and manages WETH vault deposits
 contract Aux is Ownable { 
     bool public token1isWETH;
     IERC20 USDC; WETH9 public WETH;
@@ -65,10 +66,20 @@ contract Aux is Ownable {
     uint lastBlock; 
     // ^ for ASS...
 
+    /// @notice Restricts functions to Rover contract only
     modifier onlyRover {
         require(msg.sender == address(V4), "404"); _;
     }
 
+    /// @notice Initialize Aux with required contracts and addresses
+    /// @dev Sets up V3 pool, AAVE integration, and determines token ordering
+    /// @param _router Rover contract address
+    /// @param _v3pool Uniswap V3 pool for ETH/USDC
+    /// @param _v3router Uniswap V3 router for swaps
+    /// @param _wethVault Vault for WETH deposits (earns yield)
+    /// @param _aave AAVE pool address
+    /// @param _data AAVE data provider
+    /// @param _addr AAVE addresses provider
     constructor(address _router, address _v3pool, 
         address _v3router, address _wethVault, 
         // these next 3 are all AAVE-specific
@@ -101,6 +112,11 @@ contract Aux is Ownable {
         );
     }
 
+    /// @notice Get ETH price from sqrtPriceX96
+    /// @dev Converts V3/V4 sqrt price format to human readable price
+    /// @param sqrtPriceX96 Square root price in X96 format
+    /// @param v3 Whether this is a V3 pool (affects token ordering)
+    /// @return price ETH price in USDC with 18 decimals
     function getPrice(uint160 sqrtPriceX96, bool v3)
         public /*view*/ returns (uint price) {
         if (_ETH_PRICE > 0) { // TODO pure
@@ -120,6 +136,9 @@ contract Aux is Ownable {
         _ETH_PRICE = price;
     }
 
+    /// @notice Initialize QUID basket and set up AAVE positions
+    /// @dev One-time setup requiring $1 USDC and 1 wei ETH
+    /// @param _quid Basket contract address
     // must send $1 USDC to address(this) & attach msg.value 1 wei
     function setQuid(address _quid) external payable onlyOwner {    
         require(address(QUID) == address(0), "QUID");
@@ -150,6 +169,13 @@ contract Aux is Ownable {
                         address(USDC), true);
     }
 
+    /// @notice Entry point for swaps with MEV protection
+    /// @dev Routes small swaps directly, large swaps through batch system
+    /// @param token Target token (QUID or stablecoin)
+    /// @param zeroForOne True for USDC->ETH, false for ETH->USDC
+    /// @param amount Amount to swap
+    /// @param waitable Max blocks to wait for batch processing
+    /// @return blockNumber Block when trade will clear
     // In order to prevent sandwich attacks, we implemented 
     // a simple form of ASS: process buys first, then sells!
     // Minimum trade size is a form of DoS/spam protection.
@@ -211,12 +237,18 @@ contract Aux is Ownable {
         return blockNumber;
     }
 
+    /// @notice Public function to trigger batch clearing
+    /// @dev Anyone can call to process pending swaps
     function clearSwaps() external {
         (uint160 sqrtPriceX96,,,) = V4.repack();
         uint price = getPrice(sqrtPriceX96, false);
         _clearSwaps(sqrtPriceX96, price);
     }
 
+    /// @notice Internal batch clearing logic with ASS protection
+    /// @dev Processes buys first, then sells to minimize MEV
+    /// @param sqrtPriceX96 Current pool price
+    /// @param price Human readable ETH price
     function _clearSwaps(uint160 sqrtPriceX96, uint price) internal { 
         if (lastBlock == block.number) return;
         (Types.Batch memory forZero, 
@@ -282,6 +314,9 @@ contract Aux is Ownable {
         lastBlock = block.number;
     } 
 
+    /// @notice Open leveraged long position (borrow WETH against USDC)
+    /// @dev 70% LTV on AAVE, excess USDC locked as collateral
+    /// @param amount WETH amount to deposit
     function leverOneForZero(uint amount) payable external {
         require(msg.value >= UNWIND_COST);
         amount = _depositETH(amount);
@@ -329,6 +364,10 @@ contract Aux is Ownable {
             buffer: buffer, price: int(price) });
     }
 
+    /// @notice Open leveraged short position (borrow USDC against WETH)
+    /// @dev 70% LTV on AAVE, deposited stablecoins as collateral
+    /// @param amount Stablecoin amount to deposit
+    /// @param token Stablecoin token address
     function leverZeroForOne(uint amount, 
         address token) payable external {
         require(msg.value >= UNWIND_COST);
@@ -362,6 +401,9 @@ contract Aux is Ownable {
             buffer: 0, price: int(price) });
     }
 
+    /// @notice Redeem leveraged position profits
+    /// @dev Withdraws accumulated yield from leverage positions
+    /// @param amount Amount of 6909 tokens to redeem
     function redeem(uint amount) external {
         amount = QUID.turn(msg.sender, amount);
         (uint total, ) = QUID.get_metrics(false);
@@ -373,6 +415,9 @@ contract Aux is Ownable {
         } // TODO extremely unlikely edge case, distribute ETH if
     } // there is not suffcient dollars in the basket to cover...
 
+    /// @notice Test function to manually set ETH price
+    /// @dev TODO: Remove for production
+    /// @param up True to increase price, false to decrease
     // TODO remove (for testing purposes only)
     function set_price_eth(bool up) external {
         uint _price = getPrice(0, true);
@@ -381,32 +426,53 @@ contract Aux is Ownable {
                           _price - delta;
     } 
 
+    /// @notice Swap WETH for USDC via V3
+    /// @param howMuch WETH amount to swap
+    /// @param minExpected Minimum USDC expected (slippage protection)
+    /// @return Amount of USDC received
     function _getUSDC(uint howMuch, uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
             abi.encodePacked(address(WETH), uint24(500), address(USDC)),
             address(this), block.timestamp, howMuch, minExpected));
     }
 
+    /// @notice Swap USDC for WETH via V3
+    /// @param howMuch USDC amount to swap
+    /// @param minExpected Minimum WETH expected (slippage protection)
+    /// @return Amount of WETH received
     function _getWETH(uint howMuch, uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
             abi.encodePacked(address(USDC), uint24(500), address(WETH)),
             address(this), block.timestamp, howMuch, minExpected));
     }
 
+    /// @notice Withdraw WETH from vault
+    /// @param howMuch Amount to withdraw
+    /// @return withdrawn Actual amount withdrawn
     function _takeWETH(uint howMuch) internal returns (uint withdrawn) {
         uint amount = Math.min(wethVault.balanceOf(address(this)),
                                wethVault.convertToShares(howMuch));
         withdrawn = wethVault.redeem(amount, address(this), address(this));
     }   fallback() external payable {} // weth.withdraw() triggers this...
 
+    /// @notice Send ETH to address (Rover only)
+    /// @param howMuch Amount to send
+    /// @param toWhom Recipient address
     function sendETH(uint howMuch, address toWhom) 
         public onlyRover{ _sendETH(howMuch, toWhom); }
 
+    /// @notice Deposit WETH to vault (Rover only)
+    /// @param howMuch Amount to deposit
+    /// @return Vault shares received
     function putETH(uint howMuch) public onlyRover returns (uint) {
         WETH.transferFrom(address(V4), address(this), howMuch);
         return wethVault.deposit(howMuch, address(this));
     }
 
+    /// @notice Internal ETH sending logic
+    /// @dev Combines vault withdrawals with existing ETH balance
+    /// @param howMuch Total amount to send
+    /// @param toWhom Recipient address
     function _sendETH(uint howMuch, address toWhom) internal {
         // any unused gas from clearSwaps() lands back in 
         // address(this) as residual ETH; re-appropriate:
@@ -418,6 +484,9 @@ contract Aux is Ownable {
                                                     assert(_success);
     }
     
+    /// @notice Deposit ETH/WETH from user
+    /// @param amount WETH amount to transfer
+    /// @return Total amount including msg.value
     function _depositETH(uint amount) internal returns (uint) {
         if (amount > 0) { WETH.transferFrom(msg.sender,
                             address(this), amount);
@@ -427,6 +496,11 @@ contract Aux is Ownable {
         }   return amount;  
     } 
 
+    /// @notice Internal AAVE loan repayment
+    /// @param repay Token to repay
+    /// @param out Token to withdraw
+    /// @param borrowed Amount borrowed
+    /// @param supplied Amount supplied
     function _unwind(address repay, address out,
         uint borrowed, uint supplied) internal {
         IERC20(repay).approve(address(AAVE), borrowed);
@@ -437,6 +511,9 @@ contract Aux is Ownable {
         }
     } 
     
+    /// @notice Calculate accrued interest on AAVE positions
+    /// @return repayWETH Interest owed on WETH borrows
+    /// @return repayUSDC Interest owed on USDC borrows
     function _howMuchInterest() internal returns 
         (uint repayWETH, uint repayUSDC) {
         (IUiPoolDataProviderV3.UserReserveData[] memory data, ) = DATA.getUserReservesData(
@@ -446,6 +523,10 @@ contract Aux is Ownable {
         repayUSDC = data[3].scaledVariableDebt - totalBorrowed[address(USDC)];
     }
 
+    /// @notice Unwind leveraged positions based on price movement
+    /// @dev Automatically rebalances or closes positions at ±4.9% price change
+    /// @param whose Array of position holders
+    /// @param oneForZero Array indicating position type (true = long, false = short)
     // untouchable helps track how much USDC must not 
     // leave the contract, to make sure ^^^^ debt is
     // always repaid in full (form of outflow capping)

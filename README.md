@@ -1,35 +1,72 @@
+# *bet...oh, him*? `unwind` a curveball...*be met* with auctions  
 
-# ERC6909 + ERC404
+*Auction.sol*, Belgian mechanism, MEV protected, participant jury lottery      
+*Settlement.sol* (escalatable resolution system with 6909-juror slashing)  
+
+price by confidence: bidders express their odds estimate as a discount  
+they're willing to pay per share (0.01 - $1); descending share emission,  
+each epoch has progressively fewer shares than previous (natural scarcity  
+with pro-rata % allocation for same-price bids, no toxic MEV, good game).  
+  
+*Basket.sol*: sDAI, DAI, USDE, USDS, crvUSD, GHO, USDC, USDT incentives  
+to stake long-term, increasing the stability of all the currencies by   
+taking a mutual long term support strategy, incentivising bonds that  
+
+backstop the price of being able to sell ETH in case there is a huge  
+drop, because you know that most people will take the max duration  
+bond to get the most yield upfront (to use it as a force multiplier  
+in DeFi protocols while the delayed redeemability buffers solvency).  
+ 
+*Modularity*: can swap out different resolution systems    
+without changing market logic, which diversifies risk     
+of holding ETH without requiring you to sell any of it    
+while it's earning >10% on fees, cheaper swaps than V3    
+with sandwich protection and yield optimisations on top.    
+
+*Reusability*: settlement system can be used for EigenLayer;  
+participant tracking in Auction enables fair jury selection    
+from actual market participants (ETH or dollar depositors).  
+
+## ERC6909 + ERC404  
 & even ERC1497 בדיוק 🤯  
-
 IMA means mom in Hebrew;  
 forked IMO (emo version):    
-IBO is the **I** **B**et on **O**ne,    
+IBO is the [**I** **B**et on **O**ne](http://hackmd.io/@quidmint/yc),    
 with 2 virtual machines...    
 
-equity baskets on svm, and  
-stable baskets on evm with  
-[Belgian prediciton markets](http://hackmd.io/@quid/yc).     
-  
-For pooling ETH with $,  
-Quid outperforms Bunni  
-while being much simpler.  
+equity baskets on svm, 
+stable baskets on evm
+in pooling ETH with $,  
+Quid overloads Bunni    
+with 6909 stardard:   
+particularly apt in  
+tracking for bonds;  
+Bonds are useful for  
+how way yield boosts  
+Morpho`viaAAVE` et al 
 
-The 6909 stardard is   
-particularly apt for    
-this basket because   
-it solves maturity  
-tracking for bonds.  
+### MEV Protection 404
 
-Bonds are necessary  
-for the way we boost  
-yield `viaAAVE`, and  
-allow upfront gains.  
+including commit-reveal for large bids (>5 ETH)  
+dynamic pricing demand curves with randomness,  
+anti-sniping mechanisms with epoch extensions...   
+Velocity tracking to penalize rapid-fire bidding  
+a similar exponential moving average is used in   
+basket's optionally enabled epoch governance...  
+Batch processing through epoch-based clearing  
+(epochs in two senses: one 404 & one in 6909)  
 
-Other projects have   
+##### phased settlement: proposal with 2:1 support, jury if dispute
+with slashing mechanism for jurors who vote against final verdict
+force majeur option (with full refunds) for cancelled markets...  
+
+Basket (6909): dollar ETH basket + rebalancing
+Rover: UniV4 integration with batch clearing...
+
+other projects have   
 attempted to launch  
 prediction markets   
-on Uniswap, but in  
+as Uniswap, but in  
 many ways (e.g. no  
 hooks, aka vanilla)  
 we set a precedent.  
@@ -83,7 +120,12 @@ think of it like a concert where:
 
 You cannot change bids after placing them, but if you want  
 different exposure, bid in the next epoch at a new price.  
-Early epochs see rapid trading, late epochs see hoarding.  
+Early epochs see rapid trading, late epochs see hoarding
+as more of the shares have been allocated earlier in the 
+epoch schedule if there were higher % confidence bettors
+then, this explains why it doesn't make sense for them
+to wait until the last minute to be most extractive as 
+this has been seen with Polymarket, etc.
 
 The current 404 price is set by scarcity  
 = (Shares Allocated / Total Shares) × $1  

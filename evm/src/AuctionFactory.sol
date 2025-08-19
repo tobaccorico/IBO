@@ -17,6 +17,7 @@ contract AuctionFactory is Ownable {
     
     // ============ Structs ============
     
+    /// @dev Configuration for launching new markets
     struct LaunchConfig {
         string name;
         string symbol;
@@ -60,6 +61,12 @@ contract AuctionFactory is Ownable {
     
     // ============ Constructor ============
     
+    /// @notice Initialize factory with core infrastructure addresses
+    /// @dev Deploys auction implementation once for clone pattern
+    /// @param _settlementSystem Settlement contract for dispute resolution
+    /// @param _rover Rover contract for V4 DEX integration
+    /// @param _aux Aux contract for ETH/USD swaps and leverage
+    /// @param _basket Basket contract for 6909 token management
     constructor(
         address _settlementSystem,
         address _rover,
@@ -83,6 +90,12 @@ contract AuctionFactory is Ownable {
     
     // ============ Prediction Market Deployment ============
 
+    /// @notice Deploy a prediction market with custom configuration
+    /// @dev Public wrapper for internal deployment function
+    /// @param question The yes/no prediction question
+    /// @param resolutionTime When the outcome can be determined
+    /// @param config Market configuration (name, symbol, price, duration)
+    /// @return Address of deployed prediction market
     function deployPredictionMarket(
         string memory question,
         uint resolutionTime,
@@ -91,10 +104,12 @@ contract AuctionFactory is Ownable {
         return _deployPredictionMarket(question, resolutionTime, config);
     }
     
-    /// @notice Deploy standard prediction market
+    /// @notice Internal deployment logic for prediction markets
+    /// @dev Uses clone pattern for gas efficiency
     /// @param question The prediction question
     /// @param resolutionTime When the outcome can be determined
     /// @param config Auction configuration (price, duration, etc.)
+    /// @return Address of deployed market
     function _deployPredictionMarket(
         string memory question,
         uint resolutionTime,
@@ -156,10 +171,12 @@ contract AuctionFactory is Ownable {
     }
     
     /// @notice Deploy rap battle prediction market (requires content submission)
+    /// @dev Special market type where participants must submit content
     /// @param challenger Name/address of challenger
     /// @param challenged Name/address of person being challenged
     /// @param responseDeadline Deadline for challenged person to respond with content
     /// @param config Auction configuration
+    /// @return Address of deployed rap battle market
     function deployRapBattleMarket(
         string memory challenger,
         string memory challenged,
@@ -235,7 +252,9 @@ contract AuctionFactory is Ownable {
         );
         
         // Set authorized content submitters
-        // In a real implementation, these would be verified addresses
+        // NOTE: This call will fail as factory is not authorized
+        // In production, this would need to be handled differently
+        // Either by making factory authorized or having owner set later
         Auction(payable(clone)).setAuthorizedSubmitters(
             msg.sender,        // Challenger is deployer
             address(0)         // Challenged address to be set later
@@ -250,8 +269,10 @@ contract AuctionFactory is Ownable {
     }
     
     /// @notice Deploy simple prediction market with basic question
+    /// @dev Convenience function with simplified parameters
     /// @param question Simple yes/no question
     /// @param daysUntilResolution How many days until outcome can be determined
+    /// @return Address of deployed market
     function deploySimplePrediction(
         string memory question,
         uint daysUntilResolution
@@ -272,7 +293,10 @@ contract AuctionFactory is Ownable {
     
     // ============ Internal Functions ============
     
-    /// @notice Register auction with all systems
+    /// @notice Register auction with tracking systems
+    /// @dev Updates all mappings and arrays for deployed auction
+    /// @param clone Address of deployed auction clone
+    /// @param config Configuration used for deployment
     function _registerAuction(address clone, LaunchConfig memory config) internal {
         // Track auction
         auctions.push(clone);
@@ -285,6 +309,11 @@ contract AuctionFactory is Ownable {
     }
     
     /// @notice Extract substring for naming
+    /// @dev Helper to create short names from long strings
+    /// @param str Source string
+    /// @param start Starting index
+    /// @param end Ending index (exclusive)
+    /// @return Substring result
     function _substring(string memory str, uint start, uint end) internal pure returns (string memory) {
         bytes memory strBytes = bytes(str);
         if (end > strBytes.length) end = strBytes.length;
@@ -300,16 +329,29 @@ contract AuctionFactory is Ownable {
     // ============ View Functions ============
     
     /// @notice Get all deployed auctions
+    /// @dev Returns full array of auction addresses
+    /// @return Array of all auction addresses
     function getAuctions() external view returns (address[] memory) {
         return auctions;
     }
     
     /// @notice Get auctions created by specific address
+    /// @param creator Creator address to query
+    /// @return Array of auction addresses created by this address
     function getAuctionsByCreator(address creator) external view returns (address[] memory) {
         return creatorAuctions[creator];
     }
     
     /// @notice Get detailed auction information
+    /// @dev Aggregates data from auction contract and local storage
+    /// @param auction Auction address to query
+    /// @return config Launch configuration
+    /// @return isPrediction Always true (all are prediction markets)
+    /// @return question The prediction question
+    /// @return currentPrice Current epoch price
+    /// @return totalPoolUSD Total USD in the pool
+    /// @return isActive Whether betting is active
+    /// @return isResolved Whether market is resolved
     function getAuctionInfo(address auction) external view returns (
         LaunchConfig memory config,
         bool isPrediction,
@@ -348,6 +390,11 @@ contract AuctionFactory is Ownable {
     }
     
     /// @notice Get infrastructure addresses
+    /// @dev Returns all core system contract addresses
+    /// @return _settlement Settlement contract address
+    /// @return _rover Rover contract address
+    /// @return _aux Aux contract address
+    /// @return _basket Basket contract address
     function getInfrastructure() external view returns (
         address _settlement,
         address _rover,
@@ -364,7 +411,10 @@ contract AuctionFactory is Ownable {
     
     // ============ Admin Functions ============
     
-    /// @notice Update default values
+    /// @notice Update default values for market creation
+    /// @dev Only callable by owner
+    /// @param _initialPrice Default starting price (min $1)
+    /// @param _duration Default auction duration (1 hour to 7 days)
     function setDefaults(uint _initialPrice, uint _duration) external onlyOwner {
         require(_initialPrice >= 1e18, "Price too low");  // Min $1
         require(_duration >= 1 hours, "Duration too short");
@@ -376,7 +426,10 @@ contract AuctionFactory is Ownable {
         emit DefaultsUpdated(_initialPrice, _duration);
     }
     
-    /// @notice Update protocol fee
+    /// @notice Update protocol fee parameters
+    /// @dev Only callable by owner
+    /// @param _rate Fee rate in basis points (max 10%)
+    /// @param _recipient Address to receive fees
     function setProtocolFee(uint _rate, address _recipient) external onlyOwner {
         require(_rate <= 1000, "Fee too high"); // Max 10%
         require(_recipient != address(0), "Invalid recipient");
