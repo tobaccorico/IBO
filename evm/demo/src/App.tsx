@@ -65,11 +65,6 @@ const App: React.FC = () => {
 
   // Initialize contracts and connect wallet
   useEffect(() => {
-    // Check if addresses are set
-    if (FACTORY_ADDRESS === '0x0000000000000000000000000000000000000000') {
-      setError('Please update contract addresses in src/contracts/addresses.ts');
-      return;
-    }
     connectWallet();
   }, []);
 
