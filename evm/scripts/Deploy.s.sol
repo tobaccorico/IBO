@@ -12,6 +12,7 @@ import {BasketL2} from "../src/BasketL2.sol";
 import {Settlement} from "../src/Settlement.sol";
 import {AuctionFactory} from "../src/AuctionFactory.sol";
 import {AuctionHelpers} from "../src/AuctionHelpers.sol";
+import {Auction} from "../src/Auction.sol";
 
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
@@ -23,7 +24,7 @@ import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol"; // < L1 and Arbi
 // Minimal Basket implementation for testing
 contract DummyBasket {
     mapping(address => uint) public totalBalances;
-    mapping(address => mapping(uint => uint)) public balanceOf; // For 6909
+    mapping(address => mapping(uint => uint)) public balances; // Renamed from balanceOf
     mapping(address => bool) public isStable;
     mapping(address => bool) public isVault;
     mapping(uint => address) public holders;
@@ -154,6 +155,11 @@ contract DummyBasket {
     function balanceOf(address owner, uint) external view returns (uint) {
         return totalBalances[owner];
     }
+    
+    // For ERC20 compatibility
+    function balanceOf(address owner) external view returns (uint) {
+        return totalBalances[owner];
+    }
 }
 
 // Minimal Aux implementation for testing
@@ -177,7 +183,34 @@ contract DummyAux {
         // Mock the basket deposit
         DummyBasket(basket).mint(to, usdAmount * 1e12, address(0), 0);
         
+        // Auto-clear epochs for the calling auction
+        _autoClearEpochs(msg.sender);
+        
         return usdAmount;
+    }
+    
+    // Auto-clear helper - clears any expired epochs
+    function _autoClearEpochs(address auction) internal {
+        try Auction(payable(auction)).getCurrentEpochInfo() returns (
+            uint index,
+            uint,
+            uint timeRemaining,
+            uint bidCount,
+            bool
+        ) {
+            // Clear current epoch if expired and has bids
+            if (timeRemaining == 0 && bidCount > 0) {
+                try Auction(payable(auction)).clearEpoch(index) {} catch {}
+            }
+            
+            // Also try to clear previous epochs
+            if (index > 0) {
+                for (uint i = index - 1; i >= 0 && i >= index - 3; i--) {
+                    try Auction(payable(auction)).clearEpoch(i) {} catch {}
+                    if (i == 0) break; // Prevent underflow
+                }
+            }
+        } catch {}
     }
     
     // For Aux initialization check
@@ -377,12 +410,12 @@ contract Deploy is Script {
     IERC4626 public SCRVUSD = IERC4626(0x646A737B9B6024e49f5908762B3fF73e65B5160c);
     // Arbi : 0xEfB6601Df148677A338720156E2eFd3c5Ba8809d
 
-    IPoolManager public poolManager = IPoolManager(0x498581ff718922c3f8e6a244956af099b2652b2b);
+    IPoolManager public poolManager = IPoolManager(0x498581fF718922c3f8e6A244956aF099B2652b2b);
     // Ethereum : 0x000000000004444c5dc75cB358380D2e3dE08A90
     // Polygon : 0x67366782805870060151383f4bbff9dab53e5cd6
     // Unichain : 0x1f98400000000000000000000000000000000004
     // Arbi : 0x360e68faccca8ca495c1b759fd9eee466db9fb32
-    // Base : 0x498581ff718922c3f8e6a244956af099b2652b2b
+    // Base : 0x498581fF718922c3f8e6A244956aF099B2652b2b
   
     ISwapRouter public V3router = ISwapRouter(0x2626664c2603336E57B271c5C0b26F421741e481);
     // Ethereum : 0xE592427A0AEce92De3Edee1F18E0157C05861564
@@ -400,9 +433,23 @@ contract Deploy is Script {
 
     // Deploy contracts (Base)
     function run() public {
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        // Handle private key with or without 0x prefix
+        string memory privateKeyStr = vm.envString("PRIVATE_KEY");
+        uint256 deployerPrivateKey;
+        
+        // Check if it starts with 0x
+        if (bytes(privateKeyStr).length > 2 && 
+            bytes(privateKeyStr)[0] == 0x30 && 
+            bytes(privateKeyStr)[1] == 0x78) {
+            deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        } else {
+            // Add 0x prefix
+            deployerPrivateKey = vm.parseUint(string(abi.encodePacked("0x", privateKeyStr)));
+        }
+        
+        vm.startBroadcast(deployerPrivateKey);
 
-        /*
+        /* COMMENTED OUT - Real deployments
         Rover V4router = new Rover(poolManager);
         
         Aux AUX = new Aux(address(V4router),
@@ -426,7 +473,7 @@ contract Deploy is Script {
         AUX.setQuid{value: 1 wei}(address(QUID));
         */
         
-        // TODO == TEMPORARY - dummy contracts for testing
+        // TEMPORARY - Deploy dummy contracts for testing
         console.log("Deploying dummy contracts for testing...");
         
         // Deploy dummy WETH
@@ -448,8 +495,15 @@ contract Deploy is Script {
         // Setup dummy connections
         V4router.setup(address(QUID), address(AUX), address(0));
         
-        // Send some ETH to Aux for swaps
-        payable(address(AUX)).transfer(10 ether);
+        // Send some ETH to Aux for swaps (only if deployer has enough balance)
+        uint256 deployerBalance = address(this).balance;
+        uint256 auxFunding = deployerBalance > 0.1 ether ? 0.1 ether : deployerBalance / 2;
+        if (auxFunding > 0) {
+            payable(address(AUX)).transfer(auxFunding);
+            console.log("Sent ETH to Aux:", auxFunding);
+        } else {
+            console.log("Warning: No ETH sent to Aux (low deployer balance)");
+        }
 
         // Deploy Settlement
         Settlement settlement = new Settlement();
@@ -472,6 +526,11 @@ contract Deploy is Script {
         
         // Connect Settlement to Basket
         QUID.setSettlement(address(settlement));
+        
+        // Mint tokens to deployer for testing
+        address deployer = msg.sender;
+        QUID.mint(deployer, 10000e18, address(QUID), 0); // 10,000 QUID tokens
+        console.log("Minted 10,000 QUID to deployer:", deployer);
 
         console.log("\n=== Deployment Summary ===");
         console.log("QUID (Dummy)", address(QUID));
@@ -482,13 +541,56 @@ contract Deploy is Script {
         console.log("Helpers", address(helpers));
         
         console.log("\n=== Test Instructions ===");
-        console.log("1. Users automatically receive 1000 QUID when they:");
-        console.log("   - Place their first bet (via Auction)");
-        console.log("   - Propose a settlement (via Settlement transferFrom)");
-        console.log("2. No need to manually call faucet()");
-        console.log("3. This enables jury participation automatically");
+        console.log("1. Deployer has 10,000 QUID tokens for testing");
+        console.log("2. Users automatically receive 1000 QUID when placing bets");
+        console.log("3. Epochs auto-clear when new bets are placed");
+        console.log("4. No manual epoch clearing needed!");
+        
+        // Save deployment info
+        _saveDeployment(
+            address(factory),
+            address(helpers),
+            address(settlement),
+            address(QUID)
+        );
     
         vm.stopBroadcast();
+    }
+    
+    function _saveDeployment(
+        address factory,
+        address helpers,
+        address settlement,
+        address basket
+    ) internal {
+        string memory json = string(abi.encodePacked(
+            '{\n',
+            '  "factory": "', addressToString(factory), '",\n',
+            '  "helpers": "', addressToString(helpers), '",\n',
+            '  "settlement": "', addressToString(settlement), '",\n',
+            '  "basket": "', addressToString(basket), '",\n',
+            '  "chainId": ', uint2str(block.chainid), ',\n',
+            '  "blockNumber": ', uint2str(block.number), '\n',
+            '}'
+        ));
+        
+        string memory filename = string(abi.encodePacked(
+            "deployments/",
+            uint2str(block.chainid),
+            "-deployment.json"
+        ));
+        
+        // This should work within the allowed paths
+        vm.writeFile(filename, json);
+        console.log("Deployment saved to:", filename);
+        
+        // Also log the TypeScript content for manual copying
+        console.log("\n=== Copy this to demo/src/contracts/addresses.ts ===");
+        console.log("// Auto-generated by deployment script");
+        console.log(string(abi.encodePacked("export const FACTORY_ADDRESS = '", addressToString(factory), "';")));
+        console.log(string(abi.encodePacked("export const HELPERS_ADDRESS = '", addressToString(helpers), "';")));
+        console.log(string(abi.encodePacked("export const SETTLEMENT_ADDRESS = '", addressToString(settlement), "';")));
+        console.log(string(abi.encodePacked("export const BASKET_ADDRESS = '", addressToString(basket), "';")));
     }
     
     function _saveDeployment(address factory, address registry, address helpers) internal {
