@@ -32,8 +32,22 @@ interface Market {
   resolutionTime: number;
   totalYesShares: string;
   totalNoShares: string;
+  totalPoolUSD: string;
+  impliedProbability: number;
   resolved: boolean;
   outcome?: boolean;
+  isActive: boolean;
+  currentPrice: string;
+  timeRemaining: number;
+}
+
+interface UserPosition {
+  yesShares: string;
+  noShares: string;
+  total404Tokens: string;
+  estimatedPayout: string;
+  canClaimPayout: boolean;
+  canClaimRefund: boolean;
 }
 
 interface Proposal {
@@ -60,6 +74,7 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<'create' | 'market' | 'settle'>('create');
   const [markets, setMarkets] = useState<Market[]>([]);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
+  const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -139,25 +154,55 @@ const App: React.FC = () => {
         const config = await auctionContract.getPredictionConfig();
         
         // Extract challenger/challenged from question
-        const match = config.question.match(/Dare: (.+) vs (.+)/);
+        const match = config.question.match(/Dare: (.+) dares (.+) to .+/) || 
+                     config.question.match(/Dare: (.+) vs (.+)/) ||
+                     config.question.match(/Q: (.+)/);
+        
+        const challenger = match?.[1] || 'Unknown';
+        const challenged = match?.[2] || 'Unknown';
         
         marketData.push({
           address,
           question: config.question,
-          challenger: match?.[1] || 'Unknown',
-          challenged: match?.[2] || 'Unknown',
-          responseDeadline: config.contentDeadline,
-          resolutionTime: config.resolutionTime,
-          totalYesShares: overview.totalYesShares.toString(),
-          totalNoShares: overview.totalNoShares.toString(),
+          challenger,
+          challenged,
+          responseDeadline: Number(config.contentDeadline),
+          resolutionTime: Number(config.resolutionTime),
+          totalYesShares: ethers.formatEther(overview.totalYesShares),
+          totalNoShares: ethers.formatEther(overview.totalNoShares),
+          totalPoolUSD: ethers.formatEther(overview.totalPoolUSD),
+          impliedProbability: Number(overview.impliedProbability),
           resolved: overview.isResolved,
-          outcome: overview.outcome
+          outcome: overview.outcome,
+          isActive: overview.isActive,
+          currentPrice: ethers.formatEther(overview.currentPrice),
+          timeRemaining: Number(overview.timeRemaining)
         });
       }
       
       setMarkets(marketData);
     } catch (err) {
       console.error('Failed to load markets:', err);
+    }
+  };
+
+  // Load user position for selected market
+  const loadUserPosition = async (marketAddress: string) => {
+    if (!helpers || !account) return;
+    
+    try {
+      const position = await helpers.getUserPosition(marketAddress, account);
+      
+      setUserPosition({
+        yesShares: ethers.formatEther(position.yesShares),
+        noShares: ethers.formatEther(position.noShares),
+        total404Tokens: ethers.formatEther(position.total404Tokens),
+        estimatedPayout: ethers.formatEther(position.estimatedPayout),
+        canClaimPayout: position.canClaimPayout,
+        canClaimRefund: position.canClaimRefund
+      });
+    } catch (err) {
+      console.error('Failed to load user position:', err);
     }
   };
 
@@ -174,9 +219,7 @@ const App: React.FC = () => {
     setError('');
     
     try {
-      // Format as a dare challenge
-      const question = `Dare: ${challenger} dares ${challenged} to ${dareDescription}`;
-      
+      // Use the rap battle function which is designed for dare markets
       const tx = await helpers.createRapBattle(
         challenger,
         challenged,
@@ -200,11 +243,12 @@ const App: React.FC = () => {
     }
   };
 
-  // Place a bet
+  // Place a bet using velocity-based MEV protection (no commit-reveal)
   const placeBet = async (
     marketAddress: string,
     isYes: boolean,
-    amountETH: string
+    amountETH: string,
+    confidenceLevel: number = 100
   ) => {
     if (!helpers) return;
     
@@ -213,18 +257,39 @@ const App: React.FC = () => {
     
     try {
       const value = ethers.parseEther(amountETH);
+      const pricePerShare = ethers.parseEther((confidenceLevel / 100).toString());
       
+      // Get current MEV protection info
+      const mevInfo = await helpers.getMEVProtectionInfo(
+        marketAddress,
+        account,
+        ethers.parseEther((parseFloat(amountETH) * 3000).toString()) // Assume $3000/ETH
+      );
+      
+      if (mevInfo.wouldTriggerPenalty) {
+        const proceed = window.confirm(
+          `MEV Protection Warning: You have high velocity (${mevInfo.userVelocity}/1000). ` +
+          `This will incur a ${mevInfo.dynamicFeeBps} basis point fee. Continue?`
+        );
+        if (!proceed) {
+          setLoading(false);
+          return;
+        }
+      }
+      
+      // Place bet with confidence level
       const tx = isYes 
-        ? await helpers.betYes(marketAddress, { value })
-        : await helpers.betNo(marketAddress, { value });
+        ? await helpers.betYesWithSlippage(marketAddress, pricePerShare, { value })
+        : await helpers.betNoWithSlippage(marketAddress, pricePerShare, { value });
       
       await tx.wait();
       
-      alert(`Successfully placed ${isYes ? 'YES' : 'NO'} bet!`);
+      alert(`Successfully placed ${isYes ? 'YES' : 'NO'} bet with ${confidenceLevel}% confidence!`);
       
-      // Reload market data
+      // Reload market data and user position
       if (factory && helpers) {
         await loadMarkets(factory, helpers);
+        await loadUserPosition(marketAddress);
       }
       
     } catch (err: any) {
@@ -238,7 +303,8 @@ const App: React.FC = () => {
   // Submit evidence (for dare completion)
   const submitEvidence = async (
     marketAddress: string,
-    evidenceURI: string
+    evidenceURI: string,
+    confidenceLevel: number = 90
   ) => {
     if (!signer) return;
     
@@ -252,17 +318,25 @@ const App: React.FC = () => {
         signer
       );
       
-      // Submit content/evidence
+      const pricePerShare = ethers.parseEther((confidenceLevel / 100).toString());
+      
+      // Submit content/evidence with bet
       const tx = await auctionContract.placePredictionBidWithContent(
-        ethers.parseEther("0.01"), // 1% confidence
+        pricePerShare,
         true, // isYes (completed dare)
         evidenceURI,
-        { value: ethers.parseEther("0.01") } // Small bet
+        { value: ethers.parseEther("0.01") } // Small bet with evidence
       );
       
       await tx.wait();
       
       alert('Evidence submitted successfully!');
+      
+      // Reload data
+      if (factory && helpers) {
+        await loadMarkets(factory, helpers);
+        await loadUserPosition(marketAddress);
+      }
       
     } catch (err: any) {
       console.error('Failed to submit evidence:', err);
@@ -284,9 +358,6 @@ const App: React.FC = () => {
     setError('');
     
     try {
-      // First approve 6909 tokens if needed
-      // For testing, we'll use a direct proposal
-      
       const stake = ethers.parseEther(stakeAmount);
       
       const tx = await settlement.proposeSettlement(
@@ -380,6 +451,9 @@ const App: React.FC = () => {
       
       alert('Payout claimed successfully!');
       
+      // Reload user position
+      await loadUserPosition(marketAddress);
+      
     } catch (err: any) {
       console.error('Failed to claim payout:', err);
       setError(err.message || 'Failed to claim payout');
@@ -429,6 +503,12 @@ const App: React.FC = () => {
         {activeView === 'market' && (
           <MarketView 
             markets={markets}
+            selectedMarket={selectedMarket}
+            userPosition={userPosition}
+            onSelectMarket={(market) => {
+              setSelectedMarket(market);
+              loadUserPosition(market.address);
+            }}
             onPlaceBet={placeBet}
             onSubmitEvidence={submitEvidence}
             loading={loading}
@@ -502,6 +582,14 @@ const CreateDareView: React.FC<{
           {loading ? 'Creating...' : 'Create Dare Market'}
         </button>
       </form>
+      <div className="mev-info">
+        <h3>Enhanced MEV Protection</h3>
+        <p>✅ Velocity-based dynamic fees</p>
+        <p>✅ Randomized epoch timing</p>
+        <p>✅ Fair price allocation curves</p>
+        <p>✅ Anti-sniping extensions</p>
+        <p>❌ No commit-reveal needed</p>
+      </div>
     </div>
   );
 };
@@ -509,63 +597,108 @@ const CreateDareView: React.FC<{
 // Component for market interaction
 const MarketView: React.FC<{
   markets: Market[];
-  onPlaceBet: (market: string, isYes: boolean, amount: string) => Promise<void>;
-  onSubmitEvidence: (market: string, evidence: string) => Promise<void>;
+  selectedMarket: Market | null;
+  userPosition: UserPosition | null;
+  onSelectMarket: (market: Market) => void;
+  onPlaceBet: (market: string, isYes: boolean, amount: string, confidence: number) => Promise<void>;
+  onSubmitEvidence: (market: string, evidence: string, confidence: number) => Promise<void>;
   loading: boolean;
-}> = ({ markets, onPlaceBet, onSubmitEvidence, loading }) => {
-  const [selectedMarket, setSelectedMarket] = useState<string>('');
+}> = ({ markets, selectedMarket, userPosition, onSelectMarket, onPlaceBet, onSubmitEvidence, loading }) => {
   const [betAmount, setBetAmount] = useState('0.1');
+  const [confidenceLevel, setConfidenceLevel] = useState(80);
   const [evidenceURI, setEvidenceURI] = useState('');
 
   return (
     <div className="market-view">
       <h2>Active Dare Markets</h2>
       {markets.map((market) => (
-        <div key={market.address} className="market-card">
+        <div 
+          key={market.address} 
+          className={`market-card ${selectedMarket?.address === market.address ? 'selected' : ''}`}
+          onClick={() => onSelectMarket(market)}
+        >
           <h3>{market.question}</h3>
           <div className="market-stats">
-            <p>YES: {ethers.formatEther(market.totalYesShares)} shares</p>
-            <p>NO: {ethers.formatEther(market.totalNoShares)} shares</p>
+            <div className="stat-row">
+              <span>YES: {market.totalYesShares} shares</span>
+              <span>NO: {market.totalNoShares} shares</span>
+            </div>
+            <div className="stat-row">
+              <span>Pool: ${market.totalPoolUSD}</span>
+              <span>Probability: {market.impliedProbability}%</span>
+            </div>
+            <div className="stat-row">
+              <span>Current Price: ${market.currentPrice}</span>
+              <span>Time Left: {Math.floor(market.timeRemaining / 3600)}h</span>
+            </div>
             <p>Response deadline: {new Date(market.responseDeadline * 1000).toLocaleString()}</p>
           </div>
           
-          <div className="market-actions">
-            <input
-              type="number"
-              step="0.01"
-              value={betAmount}
-              onChange={(e) => setBetAmount(e.target.value)}
-              placeholder="ETH amount"
-            />
-            <button 
-              onClick={() => onPlaceBet(market.address, true, betAmount)}
-              disabled={loading}
-            >
-              Bet YES (Completed)
-            </button>
-            <button 
-              onClick={() => onPlaceBet(market.address, false, betAmount)}
-              disabled={loading}
-            >
-              Bet NO (Failed)
-            </button>
-          </div>
-          
-          <div className="evidence-submission">
-            <input
-              type="text"
-              value={evidenceURI}
-              onChange={(e) => setEvidenceURI(e.target.value)}
-              placeholder="Evidence URL (Instagram, YouTube, Twitter, etc.)"
-            />
-            <button 
-              onClick={() => onSubmitEvidence(market.address, evidenceURI)}
-              disabled={loading || !evidenceURI}
-            >
-              Submit Evidence
-            </button>
-            <small>Any URL or text proof: Instagram posts, YouTube videos, tweets, etc.</small>
-          </div>
+          {selectedMarket?.address === market.address && (
+            <>
+              {userPosition && (
+                <div className="user-position">
+                  <h4>Your Position</h4>
+                  <p>YES: {userPosition.yesShares} | NO: {userPosition.noShares}</p>
+                  <p>Total Tokens: {userPosition.total404Tokens}</p>
+                  {userPosition.estimatedPayout !== '0' && (
+                    <p>Estimated Payout: ${userPosition.estimatedPayout}</p>
+                  )}
+                  {(userPosition.canClaimPayout || userPosition.canClaimRefund) && (
+                    <p style={{ color: 'green' }}>✅ You can claim rewards!</p>
+                  )}
+                </div>
+              )}
+              
+              <div className="market-actions">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={betAmount}
+                  onChange={(e) => setBetAmount(e.target.value)}
+                  placeholder="ETH amount"
+                />
+                <label>
+                  Confidence Level: {confidenceLevel}%
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    value={confidenceLevel}
+                    onChange={(e) => setConfidenceLevel(Number(e.target.value))}
+                  />
+                </label>
+                <button 
+                  onClick={() => onPlaceBet(market.address, true, betAmount, confidenceLevel)}
+                  disabled={loading}
+                >
+                  Bet YES (Completed) - {confidenceLevel}%
+                </button>
+                <button 
+                  onClick={() => onPlaceBet(market.address, false, betAmount, confidenceLevel)}
+                  disabled={loading}
+                >
+                  Bet NO (Failed) - {confidenceLevel}%
+                </button>
+              </div>
+              
+              <div className="evidence-submission">
+                <input
+                  type="text"
+                  value={evidenceURI}
+                  onChange={(e) => setEvidenceURI(e.target.value)}
+                  placeholder="Evidence URL (Instagram, YouTube, Twitter, etc.)"
+                />
+                <button 
+                  onClick={() => onSubmitEvidence(market.address, evidenceURI, 90)}
+                  disabled={loading || !evidenceURI}
+                >
+                  Submit Evidence (90% confidence)
+                </button>
+                <small>Any URL or text proof: Instagram posts, YouTube videos, tweets, etc.</small>
+              </div>
+            </>
+          )}
         </div>
       ))}
     </div>
@@ -597,7 +730,7 @@ const SettlementView: React.FC<{
               type="number"
               value={stakeAmount}
               onChange={(e) => setStakeAmount(e.target.value)}
-              placeholder="Stake amount (6909)"
+              placeholder="Stake amount (QUID)"
             />
             <button 
               onClick={() => onProposeSettlement(market.address, true, stakeAmount)}

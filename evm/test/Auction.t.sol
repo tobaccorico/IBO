@@ -148,10 +148,10 @@ contract AuctionTest is Test {
         vm.deal(carol, 1000 ether);
     }
     
-    // ============ Core Belgian Auction Tests ============
+    // ============ Core Belgian Auction Tests (No Commit-Reveal) ============
     
     function testPlacePredictionBid() public {
-        // Alice bets YES at 60% confidence with amount under commit-reveal threshold
+        // Alice bets YES at 60% confidence - no commit-reveal needed
         vm.startPrank(alice);
         predictionMarket.placePredictionBid{value: 4 ether}(0.6e18, true);
         vm.stopPrank();
@@ -177,8 +177,34 @@ contract AuctionTest is Test {
         assertTrue(isYes);
     }
     
+    function testVelocityBasedMEVProtection() public {
+        // Test velocity-based dynamic fees
+        vm.startPrank(alice);
+        
+        // First bid - should have minimal fees
+        uint balanceBefore1 = address(predictionMarket).balance;
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
+        uint balanceAfter1 = address(predictionMarket).balance;
+        uint gasContribution1 = balanceAfter1 - balanceBefore1;
+        
+        // Check velocity increased
+        uint velocityAfter1 = predictionMarket.bidVelocity(alice);
+        assertGt(velocityAfter1, 0, "Velocity should increase");
+        
+        // Immediate second bid - should have higher fees due to velocity
+        uint balanceBefore2 = address(predictionMarket).balance;
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
+        uint balanceAfter2 = address(predictionMarket).balance;
+        uint gasContribution2 = balanceAfter2 - balanceBefore2;
+        
+        // Second bid should have higher gas contribution due to velocity penalty
+        assertGt(gasContribution2, gasContribution1, "Rapid bidding should increase fees");
+        
+        vm.stopPrank();
+    }
+    
     function testBelgianPricePriority() public {
-        // Place bids at different confidence levels (all under 5 ETH)
+        // Place bids at different confidence levels - no commit-reveal
         vm.prank(alice);
         predictionMarket.placePredictionBid{value: 2 ether}(0.3e18, true);
         
@@ -195,10 +221,51 @@ contract AuctionTest is Test {
         predictionMarket.clearEpoch(0);
         
         // Check allocations - Bob should get shares first (highest price)
-        // But if Bob and another bidder had same price, they'd get pro-rata allocation
         uint[] memory bobBids = predictionMarket.getUserBidIds(bob);
         (, , , uint bobShares, , ) = predictionMarket.getBidDetails(bobBids[0]);
         assertGt(bobShares, 0, "Bob should get shares");
+    }
+    
+    function testRandomizedEpochTiming() public {
+        // Check that epochs have randomized timing
+        (, uint endTime1, , , , , , , ) = predictionMarket.getEpoch(0);
+        
+        // Force epoch transition
+        vm.warp(endTime1 + 1);
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 0.1 ether}(0.5e18, true);
+        
+        // Check second epoch timing
+        (, uint endTime2, , , , , , , ) = predictionMarket.getEpoch(1);
+        
+        // Duration should be randomized (not exactly 1 hour)
+        uint duration1 = endTime1 - block.timestamp + (endTime1 - block.timestamp);
+        uint duration2 = endTime2 - endTime1;
+        
+        // Should have some variance due to randomization
+        assertNotEq(duration1, duration2, "Epoch durations should be randomized");
+    }
+    
+    function testAntiSnipingExtensions() public {
+        // Get initial epoch end time
+        (, uint initialEndTime, , , , , , , ) = predictionMarket.getEpoch(0);
+        
+        // Move close to end time
+        vm.warp(initialEndTime - 1 minutes);
+        
+        // Place bid close to deadline - should trigger extension
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
+        
+        // Check if epoch was extended
+        (, uint newEndTime, , , , , , , ) = predictionMarket.getEpoch(0);
+        
+        // Epoch should be extended
+        assertGt(newEndTime, initialEndTime, "Epoch should be extended to prevent sniping");
+        
+        // Check extension count
+        // uint extensions = predictionMarket.epochExtensions(0);
+        // assertEq(extensions, 1, "Should have one extension");
     }
     
     function testGasCompensation() public {
@@ -235,21 +302,9 @@ contract AuctionTest is Test {
         uint contractBalance = address(predictionMarket).balance;
         assertGe(contractBalance, gasCollected, "Contract should have gas fees");
         
-        // Make sure treasury can receive ETH - deploy a contract that can receive
-        address payable treasury = payable(address(new PayableContract()));
-        
-        // We need to mock the protocolTreasury to be our payable contract
-        // This is tricky since protocolTreasury is immutable in Auction
-        // Instead, let's just check that gas was collected and skip the distribution test
-        
-        // For now, just verify gas collection works
+        // Verify gas collection works
         assertGt(gasCollected, 0, "Gas fees were collected");
         assertEq(gasCollected, totalGasContribution, "Correct amount collected");
-        
-        // The actual distribution test would require either:
-        // 1. The test accounts (alice, bob, carol) to have receive() functions
-        // 2. Or deploying the auction with a treasury that can receive ETH
-        // Since this is testing the gas collection mechanism primarily, we've verified that works
     }
     
     function testShareScarcity() public {
@@ -262,47 +317,42 @@ contract AuctionTest is Test {
         vm.prank(alice);
         predictionMarket.placePredictionBid{value: 0.1 ether}(0.5e18, true);
         
-        // Check second epoch has fewer shares
+        // Check second epoch has fewer shares (with randomization)
         (, , uint sharesEpoch1, , , , , , ) = predictionMarket.getEpoch(1);
-        assertEq(sharesEpoch1, 9000e18); // 10% decay
+        assertLt(sharesEpoch1, sharesAvailable, "Second epoch should have fewer shares");
+        assertGt(sharesEpoch1, 8000e18, "But not too few due to randomization");
     }
     
     // ============ Content Market Tests ============
     
     function testContentMarketFlow() public {
-        // First, we need to work around the fact that the factory tries to call setAuthorizedSubmitters
-        // but isn't authorized. We'll need to modify our approach.
-        
         // Deploy a simple prediction market instead and manually set it up as a content market
         AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
-            name: "RAP: Drake vs Kendrick",
-            symbol: "RAP",
+            name: "Dare: Alice vs Bob",
+            symbol: "DARE",
             initialPricePerToken: 50e18,
             auctionDuration: 24 hours
         });
         
         // Deploy as regular prediction market first
-        address rapBattle = factory.deployPredictionMarket(
-            "Rap Battle: Drake vs Kendrick",
+        address dareMarket = factory.deployPredictionMarket(
+            "Dare: Alice dares Bob to post a TikTok dance",
             block.timestamp + 7 days,
             config
         );
         
-        Auction rapAuction = Auction(payable(rapBattle));
+        Auction dareAuction = Auction(payable(dareMarket));
         
-        // Now we can test the content submission flow by using a regular bid
-        // since the content market setup is failing in the factory
-        
-        // For this test, let's just verify the regular prediction market works
+        // Test regular prediction betting works
         vm.prank(alice);
-        rapAuction.placePredictionBid{value: 4 ether}(0.9e18, true);
+        dareAuction.placePredictionBid{value: 4 ether}(0.9e18, true);
         
         // Verify bid was placed
-        uint[] memory aliceBids = rapAuction.getUserBidIds(alice);
+        uint[] memory aliceBids = dareAuction.getUserBidIds(alice);
         assertEq(aliceBids.length, 1);
         
         // Check bid details
-        (address bidder, uint usdAmount, , , bool isYes, ) = rapAuction.getBidDetails(aliceBids[0]);
+        (address bidder, uint usdAmount, , , bool isYes, ) = dareAuction.getBidDetails(aliceBids[0]);
         assertEq(bidder, alice);
         assertGt(usdAmount, 0);
         assertTrue(isYes);
@@ -426,23 +476,13 @@ contract AuctionTest is Test {
     // ============ Integration Tests ============
     
     function testPayoutIntegration() public {
-        // For large bids (>= 5 ETH), we need to use commit-reveal
-        // First, commit Alice's bid
-        vm.startPrank(alice);
-        bytes32 aliceCommitment = keccak256(abi.encode(alice, 0.8e18, true, 12345));
-        predictionMarket.commitBid{value: 5 ether}(aliceCommitment);
-        vm.stopPrank();
+        // No commit-reveal needed - direct betting
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 5 ether}(0.8e18, true);
         
-        // Bob can place a smaller direct bid
+        // Bob can place a direct bid
         vm.prank(bob);
         predictionMarket.placePredictionBid{value: 4 ether}(0.4e18, false);
-        
-        // Wait for reveal delay (2 blocks)
-        vm.roll(block.number + 3);
-        
-        // Alice reveals her bid
-        vm.prank(alice);
-        predictionMarket.revealBid(0.8e18, true, 12345);
         
         // Clear epochs
         vm.warp(block.timestamp + 25 hours);
@@ -495,10 +535,8 @@ contract AuctionTest is Test {
         uint pricePerShare = 0.01e18;
         uint ethNeeded = (sharesAvailable * 2 * pricePerShare) / (1e18 * 3000); // Assuming 3000 USD/ETH
         
-        // Make sure we stay under commit-reveal threshold
-        if (ethNeeded >= 5 ether) {
-            ethNeeded = 4.9 ether;
-        }
+        // Make sure we have enough ETH for the test
+        ethNeeded = 4.9 ether; // Use a reasonable amount
         
         vm.deal(alice, ethNeeded * 2);
         vm.prank(alice);
@@ -562,29 +600,14 @@ contract AuctionTest is Test {
         assertApproxEqRel(actualRatio, expectedRatio, 0.2e18, "Share ratio should be ~9x");
     }
     
-    // ============ Commit-Reveal Tests ============
+    // ============ No More Commit-Reveal Tests ============
     
-    function testCommitRevealLargeBid() public {
-        // Test the commit-reveal flow for large bids
-        vm.startPrank(alice);
+    function testLargeBidsDirectPlacement() public {
+        // Large bids now work directly (no commit-reveal)
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 10 ether}(0.7e18, true);
         
-        // Commit a large bid
-        bytes32 commitment = keccak256(abi.encode(alice, 0.7e18, true, 999));
-        predictionMarket.commitBid{value: 10 ether}(commitment);
-        
-        // Try to reveal too early
-        vm.expectRevert("Too early to reveal");
-        predictionMarket.revealBid(0.7e18, true, 999);
-        
-        // Wait for reveal delay
-        vm.roll(block.number + 3);
-        
-        // Now reveal should work
-        predictionMarket.revealBid(0.7e18, true, 999);
-        
-        vm.stopPrank();
-        
-        // Check bid was recorded
+        // Check bid was recorded directly
         uint[] memory aliceBids = predictionMarket.getUserBidIds(alice);
         assertEq(aliceBids.length, 1);
         
@@ -595,15 +618,27 @@ contract AuctionTest is Test {
         assertGt(usdAmount, 0);
     }
     
-    function testLargeBidRequiresCommitReveal() public {
-        // Try to place a large direct bid
-        vm.prank(alice);
-        vm.expectRevert("Use commitBid for large amounts");
-        predictionMarket.placePredictionBid{value: 5 ether}(0.5e18, true);
+    function testMEVProtectionWithoutCommitReveal() public {
+        // Test that MEV protection works through velocity tracking
+        vm.startPrank(alice);
         
-        // Try to place a bid just under threshold - should work
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 4.9 ether}(0.5e18, true);
+        // First large bid
+        predictionMarket.placePredictionBid{value: 10 ether}(0.5e18, true);
+        uint velocity1 = predictionMarket.bidVelocity(alice);
+        
+        // Immediate second large bid - should have higher velocity
+        predictionMarket.placePredictionBid{value: 10 ether}(0.6e18, true);
+        uint velocity2 = predictionMarket.bidVelocity(alice);
+        
+        // Third rapid bid - should have even higher velocity
+        predictionMarket.placePredictionBid{value: 10 ether}(0.7e18, true);
+        uint velocity3 = predictionMarket.bidVelocity(alice);
+        
+        vm.stopPrank();
+        
+        // Velocity should increase with rapid bidding
+        assertGt(velocity2, velocity1, "Velocity should increase");
+        assertGt(velocity3, velocity2, "Velocity should keep increasing");
     }
     
     // ============ Helpers ============

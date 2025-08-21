@@ -5,7 +5,12 @@ out = "out"
 libs = ["lib"]
 ffi = true
 
-fs_permissions = [{ access = "read-write", path = ".forge-snapshots/"}]
+fs_permissions = [
+    { access = "read-write", path = ".forge-snapshots/"},
+    { access = "read-write", path = "demo/src/contracts/"},
+    { access = "read-write", path = "src/contracts/"},
+    { access = "read-write", path = "deployments/"}
+]
 
 solc_version = "0.8.26"
 evm_version = "cancun"
