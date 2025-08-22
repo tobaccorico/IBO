@@ -135,8 +135,14 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalCreated(market, proposalId, msg.sender, outcome, stakeAmount);
     }
 
-    function getRoundVerdict(uint disputeId, uint round) external view returns (VoteChoice) {
+    // Mark as virtual to allow overriding in tests
+    function getRoundVerdict(uint disputeId, uint round) external view virtual returns (VoteChoice) {
         return rounds[disputeId][round].verdict;
+    }
+
+    // Mark as virtual to allow overriding in tests
+    function getRoundFinalized(uint disputeId, uint round) external view virtual returns (bool) {
+        return rounds[disputeId][round].finalized;
     }
     
     function supportProposal(address market, uint proposalId, uint amount) external nonReentrant {
@@ -277,7 +283,8 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit JuryRequested(disputeId, round);
     }
     
-    function fulfillJurySelection(uint disputeId, bytes[] calldata headers) external {
+    // Mark as virtual to allow overriding in tests
+    function fulfillJurySelection(uint disputeId, bytes[] calldata headers) external virtual {
         Dispute storage dispute = disputes[disputeId];
         uint round = dispute.currentRound;
         

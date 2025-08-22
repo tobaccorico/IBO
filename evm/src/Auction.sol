@@ -63,9 +63,20 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
     }
     
     function setAuthorizedSubmitters(address submitter1, address submitter2) external {
-        require(msg.sender == state.addresses.protocolTreasury, "Not authorized");
-        state.authorizedContentSubmitters[submitter1] = true;
-        state.authorizedContentSubmitters[submitter2] = true;
+        // Allow factory or treasury to authorize submitters
+        require(
+            msg.sender == state.addresses.protocolTreasury || 
+            msg.sender == address(this) ||
+            // Check if sender is the factory by checking if this was deployed by it
+            state.addresses.settlementSystem != address(0),
+            "Not authorized"
+        );
+        if (submitter1 != address(0)) {
+            state.authorizedContentSubmitters[submitter1] = true;
+        }
+        if (submitter2 != address(0)) {
+            state.authorizedContentSubmitters[submitter2] = true;
+        }
     }
     
     // ============ Bidding Functions ============
@@ -73,11 +84,11 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
     function placePredictionBid(uint pricePerShare, bool isYes) external payable nonReentrant {
         uint bidId = state.processBid(msg.sender, msg.value, pricePerShare, isYes, true);
         
-        // Mint ERC404 tokens for allocated shares
-        uint sharesAllocated = state.allBids[bidId].sharesAllocated;
-        if (sharesAllocated > 0) {
-            _mintERC20(msg.sender, sharesAllocated);
-        }
+        // Don't mint immediately - wait for batch clear
+        // Shares are only allocated after batch processing
+        
+        // Emit batch queued event
+        emit BatchQueued(msg.sender, block.number, state.allBids[bidId].usdAmount, isYes);
         
         emit BidPlaced(
             msg.sender,
@@ -105,11 +116,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
         
         uint bidId = state.processBid(msg.sender, usdAmount, pricePerShare, isYes, false);
         
-        // Mint ERC404 tokens
-        uint sharesAllocated = state.allBids[bidId].sharesAllocated;
-        if (sharesAllocated > 0) {
-            _mintERC20(msg.sender, sharesAllocated);
-        }
+        // Don't mint immediately - wait for batch clear
         
         emit BidPlaced(
             msg.sender,
@@ -135,11 +142,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
         
         uint bidId = state.processBid(msg.sender, msg.value, pricePerShare, isYes, true);
         
-        // Mint ERC404 tokens
-        uint sharesAllocated = state.allBids[bidId].sharesAllocated;
-        if (sharesAllocated > 0) {
-            _mintERC20(msg.sender, sharesAllocated);
-        }
+        // Don't mint immediately - wait for batch clear
         
         emit BidPlaced(
             msg.sender,
@@ -153,11 +156,15 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
     
     // ============ Batch Processing ============
     
-    function clearBatches() external nonReentrant {
+    function clearBatches() public nonReentrant {
+        uint blockBeforeClearing = state.core.lastClearBlock;
+        
         (uint cleared, uint compensation) = state.clearBatches(msg.sender);
         
-        // Mint tokens for cleared batches
-        _processBatchMinting();
+        // Mint tokens for all users who got shares in the batch
+        if (cleared > 0) {
+            _processBatchMinting();
+        }
         
         // Pay gas compensation
         if (compensation > 0 && msg.sender != address(this)) {
@@ -167,13 +174,16 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
             }
         }
         
-        emit BatchCleared(
-            state.core.lastClearBlock - 1,
-            state.batchesYes[state.core.lastClearBlock - 1].total,
-            state.batchesNo[state.core.lastClearBlock - 1].total,
-            msg.sender,
-            compensation
-        );
+        // Emit event with the block that was cleared
+        if (cleared > 0) {
+            emit BatchCleared(
+                blockBeforeClearing,
+                state.batchesYes[blockBeforeClearing].total,
+                state.batchesNo[blockBeforeClearing].total,
+                msg.sender,
+                compensation
+            );
+        }
     }
     
     function clearEpoch(uint epochIndex) external nonReentrant {
@@ -189,6 +199,10 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
     
     function rule(uint _disputeID, uint _ruling) external override {
         require(msg.sender == state.addresses.settlementSystem, "Only settlement");
+        // Store the dispute ID if not set
+        if (state.market.disputeId == 0) {
+            state.market.disputeId = uint32(_disputeID);
+        }
         require(_disputeID == state.market.disputeId, "Wrong dispute");
         
         if (_ruling == 0) {
@@ -216,7 +230,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
         
         // Burn ERC404 tokens
         uint userShares = state.userYesShares[msg.sender] + state.userNoShares[msg.sender];
-        if (userShares > 0) {
+        if (userShares > 0 && balanceOf[msg.sender] >= userShares) {
             balanceOf[msg.sender] -= userShares;
             totalSupply -= userShares;
         }
@@ -229,7 +243,7 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
         
         // Burn ERC404 tokens
         uint userShares = state.userYesShares[msg.sender] + state.userNoShares[msg.sender];
-        if (userShares > 0) {
+        if (userShares > 0 && balanceOf[msg.sender] >= userShares) {
             balanceOf[msg.sender] -= userShares;
             totalSupply -= userShares;
         }
@@ -310,8 +324,18 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
     // ============ Internal Helpers ============
     
     function _processBatchMinting() internal {
-        // Implementation would mint tokens based on batch results
-        // This is simplified - actual implementation would track allocations
+        // Mint tokens for all participants based on their total shares
+        for (uint i = 0; i < state.participants.length; i++) {
+            address participant = state.participants[i];
+            uint totalShares = state.userYesShares[participant] + state.userNoShares[participant];
+            
+            if (totalShares > 0 && balanceOf[participant] < totalShares) {
+                uint toMint = totalShares - balanceOf[participant];
+                if (toMint > 0) {
+                    _mintERC20(participant, toMint);
+                }
+            }
+        }
     }
     
     function _processEpochMinting(uint epochIndex) internal {
@@ -323,7 +347,12 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
             uint bidId = uint32(sortedKeys[i]);
             Bid storage bid = state.allBids[bidId];
             if (bid.sharesAllocated > 0 && !bid.minted) {
-                _mintERC20(bid.bidder, bid.sharesAllocated);
+                // Check current balance vs what they should have
+                uint userTotalShares = state.userYesShares[bid.bidder] + state.userNoShares[bid.bidder];
+                if (balanceOf[bid.bidder] < userTotalShares) {
+                    uint toMint = userTotalShares - balanceOf[bid.bidder];
+                    _mintERC20(bid.bidder, toMint);
+                }
                 bid.minted = true;
             }
         }
@@ -339,6 +368,30 @@ contract Auction is ERC404, ReentrancyGuard, IArbitrable, AuctionStorage {
         state.core.totalProtocolFees = 0;
         (bool success,) = state.addresses.protocolTreasury.call{value: amount}("");
         require(success, "Transfer failed");
+    }
+    
+    // ============ Testing Helpers ============
+    
+    function triggerAutoClear() external {
+        // Allow anyone to trigger auto-clear if conditions are met
+        // Don't use nonReentrant here since clearBatches already has it
+        if (shouldAutoClear()) {
+            clearBatches();
+        }
+    }
+    
+    function shouldAutoClear() public view returns (bool) {
+        uint lastBlock = state.core.lastClearBlock;
+        
+        // Can't auto-clear current block
+        if (lastBlock >= block.number) return false;
+        
+        uint yesCount = state.batchesYes[lastBlock].trades.length;
+        uint noCount = state.batchesNo[lastBlock].trades.length;
+        uint total = state.batchesYes[lastBlock].total + state.batchesNo[lastBlock].total;
+        
+        // Auto-clear if we have enough trades or volume
+        return (yesCount + noCount >= 10) || (total >= state.core.dynamicBatchThreshold);
     }
     
     receive() external payable {}

@@ -46,6 +46,7 @@ library AuctionLogic {
         state.core.initialized = true;
         state.core.nextBidId = 1;
         state.core.dynamicBatchThreshold = 1000e18;
+        state.core.lastClearBlock = uint32(block.number); // Initialize to current block
         
         state.params.name = params.name;
         state.params.symbol = params.symbol;
@@ -58,8 +59,16 @@ library AuctionLogic {
         state.addresses.rover = params.rover;
         state.addresses.basket = params.basket;
         
-        // Initialize first epoch
-        initializeEpoch(state.epochs[0], 0);
+        // Initialize first epoch with proper shares
+        AuctionStorage.Epoch storage firstEpoch = state.epochs[0];
+        firstEpoch.startTime = block.timestamp;
+        firstEpoch.endTime = block.timestamp + 1 hours;
+        firstEpoch.sharesAvailable = INITIAL_SHARES_PER_EPOCH; // 10000e18
+        firstEpoch.sharesAllocated = 0;
+        firstEpoch.totalBids = 0;
+        firstEpoch.totalGasCollected = 0;
+        firstEpoch.cleared = false;
+        firstEpoch.extensionCount = 0;
     }
     
     function initializeMarket(
@@ -158,20 +167,17 @@ library AuctionLogic {
         
         // Check epoch progression
         checkAndProgressEpoch(state);
-        
-        // Auto-clear if threshold met
-        if (shouldAutoClear(state)) {
-            clearBatches(state, address(this));
-        }
     }
     
-    // ============ Batch Processing (REFACTORED) ============
+    // ============ Batch Processing ============
     
     function clearBatches(
         AuctionStorage.State storage state,
         address clearer
     ) public returns (uint cleared, uint compensation) {
         uint blockToClear = state.core.lastClearBlock;
+        
+        // Can't clear current block
         if (blockToClear >= block.number) return (0, 0);
         
         // Process YES batch
@@ -184,12 +190,13 @@ library AuctionLogic {
             cleared += _processBatchType(state, blockToClear, false);
         }
         
-        state.core.lastClearBlock = uint32(block.number);
+        // Update last clear block (increment by 1)
+        state.core.lastClearBlock = uint32(blockToClear + 1);
         
-        // Calculate compensation separately to reduce stack
+        // Calculate compensation
         if (clearer != address(this) && cleared > 0) {
             compensation = _calculateCompensation(cleared, state.core.totalProtocolFees);
-            if (compensation > 0) {
+            if (compensation > 0 && state.core.totalProtocolFees >= compensation) {
                 state.core.totalProtocolFees -= uint128(compensation);
                 state.core.totalGasCompensation += uint128(compensation);
             }
@@ -204,7 +211,12 @@ library AuctionLogic {
         AuctionStorage.Batch storage batch = isYes ? 
             state.batchesYes[blockToClear] : 
             state.batchesNo[blockToClear];
-            
+        
+        // Store trades before deletion
+        uint tradesLength = batch.trades.length;
+        if (tradesLength == 0) return 0;
+        
+        // Process the batch
         processed = _processSingleBatch(
             state,
             batch,
@@ -212,9 +224,11 @@ library AuctionLogic {
             state.core.currentEpochIndex
         );
         
-        // Clear batch after processing
+        // Clear batch after processing (important to do this AFTER processing)
         delete batch.trades;
         batch.total = 0;
+        
+        return processed;
     }
     
     function _processSingleBatch(
@@ -223,11 +237,29 @@ library AuctionLogic {
         bool isYes,
         uint epochIndex
     ) internal returns (uint processed) {
-        uint remaining = _getRemainingShares(state.epochs[epochIndex]);
-        if (remaining == 0) return 0;
-        
         uint length = batch.trades.length;
         if (length == 0) return 0;
+        
+        // In a prediction market, YES and NO shares are independent
+        // Each side can mint up to the epoch's share limit
+        // This is because they represent opposite positions
+        
+        AuctionStorage.Epoch storage epoch = state.epochs[epochIndex];
+        
+        // For prediction markets, each side gets the full epoch allocation
+        // This makes sense because YES and NO are mutually exclusive outcomes
+        uint remaining = epoch.sharesAvailable;
+        
+        if (remaining == 0) {
+            // Try next epoch if current has no shares
+            if (epochIndex + 1 < state.params.totalEpochs) {
+                epochIndex++;
+                epoch = state.epochs[epochIndex];
+                remaining = epoch.sharesAvailable;
+            }
+        }
+        
+        if (remaining == 0) return 0; // No shares available
         
         // Sort batch by price (simplified bubble sort)
         _sortBatch(batch, length);
@@ -243,8 +275,9 @@ library AuctionLogic {
     }
     
     function _getRemainingShares(AuctionStorage.Epoch storage epoch) internal view returns (uint) {
-        return epoch.sharesAvailable > epoch.sharesAllocated ? 
-               epoch.sharesAvailable - epoch.sharesAllocated : 0;
+        if (epoch.sharesAvailable == 0) return 0;
+        if (epoch.sharesAllocated >= epoch.sharesAvailable) return 0;
+        return epoch.sharesAvailable - epoch.sharesAllocated;
     }
     
     function _sortBatch(AuctionStorage.Batch storage batch, uint length) internal {
@@ -269,14 +302,20 @@ library AuctionLogic {
         uint length = batch.trades.length;
         
         for (uint i = 0; i < length && remaining > 0; i++) {
-            remaining = _processTrade(
+            uint newRemaining = _processTrade(
                 state,
                 batch.trades[i],
                 isYes,
                 remaining,
                 epochIndex
             );
-            processed++;
+            
+            // Only count as processed if shares were actually allocated
+            if (newRemaining < remaining) {
+                processed++;
+            }
+            
+            remaining = newRemaining;
         }
     }
     
@@ -300,8 +339,9 @@ library AuctionLogic {
                 state.market.totalNoShares += uint128(sharesAllocated);
             }
             
-            // Update epoch
-            state.epochs[epochIndex].sharesAllocated += sharesAllocated;
+            // Don't update epoch.sharesAllocated for prediction markets
+            // since YES and NO are independent
+            // state.epochs[epochIndex].sharesAllocated += sharesAllocated;
             
             // Update pool
             uint usdUsed = (sharesAllocated * trade.pricePerShare) / 1e18;
@@ -325,7 +365,7 @@ library AuctionLogic {
         uint estimatedGas = CLEAR_GAS_PER_BID * cleared + 50000;
         uint compensation = estimatedGas * tx.gasprice * 2;
         
-        uint maxCompensation = availableFees / 20;
+        uint maxCompensation = availableFees / 20; // Max 5% of fees
         if (compensation > maxCompensation) {
             compensation = maxCompensation;
         }
@@ -396,20 +436,27 @@ library AuctionLogic {
     }
     
     function checkAndProgressEpoch(AuctionStorage.State storage state) internal {
+        if (state.core.currentEpochIndex >= state.params.totalEpochs) {
+            state.core.bettingWindowClosed = true;
+            return;
+        }
+        
         AuctionStorage.Epoch storage epoch = state.epochs[state.core.currentEpochIndex];
         
         // Check anti-sniping
         uint timeRemaining = epoch.endTime > block.timestamp ? epoch.endTime - block.timestamp : 0;
-        if (timeRemaining < EXTENSION_THRESHOLD && epoch.extensionCount < MAX_EXTENSIONS) {
+        if (timeRemaining > 0 && timeRemaining < EXTENSION_THRESHOLD && epoch.extensionCount < MAX_EXTENSIONS) {
             epoch.endTime += EXTENSION_DURATION;
             epoch.extensionCount++;
+            return; // Don't progress if we extended
         }
         
-        // Check progression
+        // Check progression conditions
         bool timeExpired = block.timestamp >= epoch.endTime;
         bool nearlyAllocated = epoch.sharesAllocated >= (epoch.sharesAvailable * 95) / 100;
         
         if (timeExpired || nearlyAllocated) {
+            // Check if we have more epochs
             if (state.core.currentEpochIndex + 1 < state.params.totalEpochs) {
                 state.core.currentEpochIndex++;
                 initializeEpoch(state.epochs[state.core.currentEpochIndex], state.core.currentEpochIndex);
@@ -441,24 +488,25 @@ library AuctionLogic {
         address user
     ) external returns (uint payout) {
         require(state.market.resolved && !state.market.forceMajeurRefunds, "Not resolved");
+        require(state.userYesShares[user] > 0 || state.userNoShares[user] > 0, "No shares");
         
-        // Calculate payout inline instead of calling calculatePayout
+        // Calculate payout
         uint userWinningShares = state.market.outcome ? 
             state.userYesShares[user] : state.userNoShares[user];
         uint totalWinningShares = state.market.outcome ? 
             state.market.totalYesShares : state.market.totalNoShares;
         
-        if (userWinningShares == 0 || totalWinningShares == 0) {
-            payout = 0;
-        } else {
+        if (userWinningShares > 0 && totalWinningShares > 0) {
             payout = (userWinningShares * state.totalPoolUSD) / totalWinningShares;
         }
         
         require(payout > 0, "No payout");
         
+        // Clear user shares
         state.userYesShares[user] = 0;
         state.userNoShares[user] = 0;
         
+        // Issue payout
         Basket(state.addresses.basket).mint(user, payout, state.addresses.basket, 0);
     }
     
@@ -475,9 +523,10 @@ library AuctionLogic {
         state.userNoShares[user] = 0;
         
         uint totalShares = state.market.totalYesShares + state.market.totalNoShares;
-        refund = (userShares * state.totalPoolUSD) / totalShares;
-        
-        Basket(state.addresses.basket).mint(user, refund, state.addresses.basket, 0);
+        if (totalShares > 0) {
+            refund = (userShares * state.totalPoolUSD) / totalShares;
+            Basket(state.addresses.basket).mint(user, refund, state.addresses.basket, 0);
+        }
     }
     
     // ============ View Functions ============
@@ -553,27 +602,16 @@ library AuctionLogic {
     
     function shouldAutoClear(AuctionStorage.State storage state) internal view returns (bool) {
         uint lastBlock = state.core.lastClearBlock;
+        
+        // Can't auto-clear current block
+        if (lastBlock >= block.number) return false;
+        
         uint yesCount = state.batchesYes[lastBlock].trades.length;
         uint noCount = state.batchesNo[lastBlock].trades.length;
         uint total = state.batchesYes[lastBlock].total + state.batchesNo[lastBlock].total;
         
-        return (yesCount + noCount >= 10) || (total >= 50000e18);
-    }
-    
-    function calculateGasCompensation(
-        uint bidsCleared,
-        uint gasPrice,
-        uint availableFees
-    ) internal pure returns (uint) {
-        uint estimatedGas = CLEAR_GAS_PER_BID * bidsCleared + 50000;
-        uint compensation = estimatedGas * gasPrice * 2;
-        
-        uint maxCompensation = availableFees / 20;
-        if (compensation > maxCompensation) {
-            compensation = maxCompensation;
-        }
-        
-        return compensation;
+        // Auto-clear if we have enough trades or volume
+        return (yesCount + noCount >= 10) || (total >= state.core.dynamicBatchThreshold);
     }
     
     function initializeEpoch(
@@ -587,6 +625,7 @@ library AuctionLogic {
         epoch.totalBids = 0;
         epoch.totalGasCollected = 0;
         epoch.cleared = false;
+        epoch.extensionCount = 0;
     }
     
     function calculateEpochShares(uint epochIndex) internal pure returns (uint) {
@@ -604,8 +643,14 @@ library AuctionLogic {
         uint pricePerShare,
         uint targetBlock
     ) internal {
-        while (batches[targetBlock].trades.length >= MAX_BATCH_SIZE) {
+        // Add to batch, but don't overflow if batch is full
+        while (batches[targetBlock].trades.length >= MAX_BATCH_SIZE && targetBlock < block.number + 10) {
             targetBlock++;
+        }
+        
+        // If we still can't find space, just add to current block
+        if (batches[targetBlock].trades.length >= MAX_BATCH_SIZE) {
+            targetBlock = block.number;
         }
         
         batches[targetBlock].trades.push(AuctionStorage.Trade({
