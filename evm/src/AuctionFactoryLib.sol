@@ -2,102 +2,107 @@
 pragma solidity ^0.8.20;
 
 import "./Auction.sol";
+import "./AuctionLogic.sol";
 import "./Settlement.sol";
+import "@openzeppelin/contracts/proxy/Clones.sol";
 
-/// @title AuctionFactoryLib - Helper library to reduce AuctionFactory size
-/// @notice Extracts market creation logic to reduce contract size
+/// @title AuctionFactoryLib - Deployment logic for Factory
 library AuctionFactoryLib {
+    using Clones for address;
     
-    /// @notice Initialize auction with core parameters
-    /// @param clone Address of the cloned auction
-    /// @param name Market name
-    /// @param symbol Market symbol
-    /// @param auctionDuration Duration of auction
-    /// @param owner Owner address
-    /// @param settlementSystem Settlement contract address
-    /// @param rover Rover contract address
-    /// @param aux Aux contract address
-    /// @param basket Basket contract address
-    function initializeAuction(
-        address clone,
-        string memory name,
-        string memory symbol,
-        uint auctionDuration,
-        address owner,
-        address settlementSystem,
-        address rover,
-        address aux,
-        address basket
-    ) external {
-        uint totalEpochs = auctionDuration / 1 hours;
+    struct LaunchConfig {
+        string name;
+        string symbol;
+        uint initialPricePerToken;
+        uint auctionDuration;
+    }
+    
+    /// @notice Deploy and initialize a new auction market
+    function deployMarket(
+        address implementation,
+        LaunchConfig memory config,
+        address[4] memory infrastructure, // [settlement, rover, aux, basket]
+        address protocolTreasury
+    ) external returns (address clone) {
+        // Deploy clone
+        clone = implementation.clone();
+        
+        // Initialize
+        uint32 totalEpochs = uint32(config.auctionDuration / 1 hours);
         require(totalEpochs > 0, "Duration too short");
         
-        // FIXED: Use uint instead of uint128 to match Auction.sol expectations
-        Auction.AuctionParams memory params = Auction.AuctionParams({
-            name: name,
-            symbol: symbol,
-            auctionDuration: auctionDuration,    // FIXED: uint instead of uint128
-            totalEpochs: totalEpochs,            // FIXED: uint instead of uint128
-            owner: owner,
-            settlementSystem: settlementSystem,
-            rover: rover,
-            aux: aux,
-            basket: basket
+        AuctionLogic.InitParams memory params = AuctionLogic.InitParams({
+            name: config.name,
+            symbol: config.symbol,
+            auctionDuration: uint32(config.auctionDuration),
+            totalEpochs: totalEpochs,
+            owner: protocolTreasury,
+            settlementSystem: infrastructure[0],
+            rover: infrastructure[1],
+            aux: infrastructure[2],
+            basket: infrastructure[3]
         });
         
         Auction(payable(clone)).initialize(params);
     }
     
-    /// @notice Initialize prediction market parameters
-    /// @param clone Address of the cloned auction
-    /// @param question Prediction question
-    /// @param resolutionTime When outcome can be determined
-    /// @param settlementSystem Settlement contract for meta evidence
-    /// @param requiresContent Whether content submission is required
-    /// @param contentDeadline Deadline for content submission
-    /// @param minParticipants Minimum participants required
-    function initializePredictionMarket(
-        address clone,
+    /// @notice Setup prediction market parameters
+    function setupPrediction(
+        address market,
+        address settlement,
         string memory question,
         uint resolutionTime,
-        address settlementSystem,
         bool requiresContent,
-        uint contentDeadline,
-        uint minParticipants
+        uint contentDeadline
     ) external {
-        uint metaEvidenceId = Settlement(settlementSystem).createPredictionMarketMetaEvidence();
+        uint metaEvidenceId;
         
-        Auction(payable(clone)).initializePredictionMarket(
+        if (requiresContent) {
+            // For rap battles, create custom meta evidence
+            metaEvidenceId = createRapBattleMetaEvidence(settlement, question);
+        } else {
+            // For standard predictions, use default meta evidence
+            metaEvidenceId = Settlement(settlement).createPredictionMarketMetaEvidence();
+        }
+        
+        Auction(payable(market)).initializePredictionMarket(
             question,
             resolutionTime,
             metaEvidenceId,
             requiresContent,
             contentDeadline,
-            minParticipants
+            2 // minParticipants
         );
     }
     
-    /// @notice Create meta evidence for rap battles
-    /// @param settlementSystem Settlement contract address
-    /// @param challenger Name of challenger
-    /// @param challenged Name of challenged person
-    /// @param question Full question text
-    /// @return metaEvidenceId Created meta evidence ID
+    /// @notice Create rap battle specific meta evidence
     function createRapBattleMetaEvidence(
-        address settlementSystem,
-        string memory challenger,
-        string memory challenged,
+        address settlement,
         string memory question
-    ) external returns (uint metaEvidenceId) {
-        string memory rulingOptions = string(abi.encodePacked(
-            '[{"title":"',
-            challenger,
-            ' wins"},{"title":"',
-            challenged,
-            ' wins"},{"title":"Draw/Cancel"}]'
-        ));
+    ) internal returns (uint) {
+        // Extract challenger and challenged from question for better ruling options
+        bytes memory questionBytes = bytes(question);
+        uint vsIndex = findVsIndex(questionBytes);
         
-        metaEvidenceId = Settlement(settlementSystem).createMetaEvidence(
+        string memory rulingOptions;
+        if (vsIndex > 0) {
+            // Found " vs ", extract names
+            string memory challenger = extractName(questionBytes, 12, vsIndex); // Skip "Rap Battle: "
+            string memory challenged = extractName(questionBytes, vsIndex + 4, questionBytes.length);
+            
+            rulingOptions = string(abi.encodePacked(
+                '[{"title":"',
+                challenger,
+                ' wins"},{"title":"',
+                challenged,
+                ' wins"},{"title":"Draw/Cancel"}]'
+            ));
+        } else {
+            // Fallback if parsing fails
+            rulingOptions = '[{"title":"Challenger wins"},{"title":"Challenged wins"},{"title":"Draw/Cancel"}]';
+        }
+        
+        return Settlement(settlement).createMetaEvidence(
             "Rap Battle Resolution",
             "Community voting on rap battle winner based on submitted content",
             question,
@@ -106,11 +111,34 @@ library AuctionFactoryLib {
         );
     }
     
+    /// @notice Find " vs " in bytes
+    function findVsIndex(bytes memory data) internal pure returns (uint) {
+        if (data.length < 4) return 0;
+        
+        for (uint i = 0; i < data.length - 3; i++) {
+            if (data[i] == 0x20 && // space
+                data[i+1] == 0x76 && // v
+                data[i+2] == 0x73 && // s
+                data[i+3] == 0x20) { // space
+                return i;
+            }
+        }
+        return 0;
+    }
+    
+    /// @notice Extract name from bytes
+    function extractName(bytes memory data, uint start, uint end) internal pure returns (string memory) {
+        if (start >= end || start >= data.length) return "";
+        if (end > data.length) end = data.length;
+        
+        bytes memory result = new bytes(end - start);
+        for (uint i = start; i < end; i++) {
+            result[i - start] = data[i];
+        }
+        return string(result);
+    }
+    
     /// @notice Extract substring helper
-    /// @param str Source string
-    /// @param start Starting index
-    /// @param end Ending index (exclusive)
-    /// @return Substring result
     function substring(string memory str, uint start, uint end) external pure returns (string memory) {
         bytes memory strBytes = bytes(str);
         if (end > strBytes.length) end = strBytes.length;

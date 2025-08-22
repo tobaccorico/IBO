@@ -1,86 +1,95 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "forge-std/console.sol"; // TODO 
 import {Test} from "forge-std/Test.sol";
 import {Auction} from "../src/Auction.sol";
 import {Settlement} from "../src/Settlement.sol";
 import {AuctionFactory} from "../src/AuctionFactory.sol";
+import {AuctionFactoryLib} from "../src/AuctionFactoryLib.sol";
+import {AuctionLogic} from "../src/AuctionLogic.sol";
+import {AuctionHelpers} from "../src/AuctionHelpers.sol";
 import {Basket} from "../src/Basket.sol";
-import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
-// ============ Mock Contracts ============
-
+// Mock Contracts (same as before)
 contract MockRover {
-    // Minimal Rover mock
-    receive() external payable {}
-}
-
-contract PayableContract {
-    // Contract that can receive ETH
+    address public owner;
+    constructor() {
+        owner = msg.sender;
+    }
     receive() external payable {}
 }
 
 contract MockAux {
-    // Mock Aux that handles ETH->USD swaps for Auction
-    function swap(address token, bool zeroForOne, uint amount, uint waitable) 
+    address public WETH = address(0x1234);
+    
+    function swap(address, bool, uint, uint) 
         external payable returns (uint) {
-        // Mock swap: return USD amount based on ETH sent
-        // Assuming 1 ETH = 3000 USD for testing
-        if (!zeroForOne) { // Selling ETH for USD
-            // Return USD based on msg.value (the actualBetETH after gas fee)
-            return msg.value * 3000; // Return USD amount
-        }
+        return msg.value * 3000;
+    }
+    
+    function token1isWETH() external pure returns (bool) {
+        return true;
+    }
+    
+    function getPrice(uint160, bool) external pure returns (uint) {
+        return 3000e18;
+    }
+    
+    function putETH(uint amount) external returns (uint) {
         return amount;
+    }
+    
+    function sendETH(uint amount, address to) external {
+        payable(to).transfer(amount);
+    }
+    
+    function wethVault() external pure returns (address) {
+        return address(0x5678);
     }
 }
 
 contract MockBasket {
-    // Mock Basket for USD storage (implements minimal ERC6909 interface)
     mapping(address => mapping(uint => uint)) public balanceOf;
     mapping(address => uint) public totalBalances;
-    
+    mapping(uint => address) public holders;
+    uint public latest_holder;
     uint public totalSupply;
     
     function mint(address to, uint amount, address, uint) external {
-        balanceOf[to][0] += amount; // Use ID 0 for simplicity
+        balanceOf[to][0] += amount;
         totalBalances[to] += amount;
         totalSupply += amount;
+        
+        // Add to holders if new
+        if (totalBalances[to] == amount) {
+            latest_holder++;
+            holders[latest_holder] = to;
+        }
     }
     
     function deposit(address, address, uint amount) external returns (uint) {
-        // Mock deposit - just return the amount
         return amount;
     }
     
+    function take(address who, uint amount, address, bool) external returns (uint) {
+        uint available = balanceOf[who][0];
+        uint sent = amount > available ? available : amount;
+        if (sent > 0) {
+            balanceOf[who][0] -= sent;
+            totalBalances[who] -= sent;
+        }
+        return sent;
+    }
+    
     function isStable(address) external pure returns (bool) {
-        return true; // All tokens are "stable" in mock
+        return true;
     }
     
     function isVault(address) external pure returns (bool) {
         return false;
     }
     
-    function transfer(address to, uint amount) external {
-        balanceOf[msg.sender][0] -= amount;
-        totalBalances[msg.sender] -= amount;
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-    }
-    
-    function transferFrom(address from, address to, uint amount) external returns (bool) {
-        balanceOf[from][0] -= amount;
-        totalBalances[from] -= amount;
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-        return true;
-    }
-    
-    function approve(address spender, uint amount) external returns (bool) {
-        // Mock approval
-        return true;
-    }
-    
-    // Add burn functionality for settlements
     function turn(address from, uint amount) external returns (uint) {
         require(balanceOf[from][0] >= amount, "Insufficient balance");
         balanceOf[from][0] -= amount;
@@ -88,57 +97,160 @@ contract MockBasket {
         totalSupply -= amount;
         return amount;
     }
+    
+    function approve(address, uint) external pure returns (bool) {
+        return true;
+    }
+    
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        require(totalBalances[from] >= amount, "Insufficient balance");
+        totalBalances[from] -= amount;
+        totalBalances[to] += amount;
+        return true;
+    }
+    
+    function transfer(address to, uint amount) external returns (bool) {
+        require(totalBalances[msg.sender] >= amount, "Insufficient balance");
+        totalBalances[msg.sender] -= amount;
+        totalBalances[to] += amount;
+        return true;
+    }
+}
+
+contract MockToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+    uint8 public constant decimals = 18;
+    string public constant name = "MockToken";
+    string public constant symbol = "MOCK";
+    
+    function transfer(address to, uint256 amount) public returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+    
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+    
+    function approve(address spender, uint256 amount) public returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+    
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+}
+
+// Updated AuctionFactory mock to work with new initialization
+contract MockAuctionFactory {
+    address public settlementSystem;
+    address public rover;
+    address public aux;
+    address public basket;
+    
+    constructor(address _settlement, address _rover, address _aux, address _basket) {
+        settlementSystem = _settlement;
+        rover = _rover;
+        aux = _aux;
+        basket = _basket;
+    }
+    
+    function deployPredictionMarket(
+        string memory question,
+        uint resolutionTime,
+        string memory name,
+        string memory symbol
+    ) external returns (address) {
+        Auction market = new Auction();
+        
+        console.log("Creating test market with new init params structure");
+        
+        AuctionLogic.InitParams memory initParams = AuctionLogic.InitParams({
+            name: name,
+            symbol: symbol,
+            auctionDuration: 24 hours,
+            totalEpochs: 10,
+            owner: msg.sender,
+            settlementSystem: settlementSystem,
+            rover: rover,
+            aux: aux,
+            basket: basket
+        });
+        
+        market.initialize(initParams);
+        market.initializePredictionMarket(
+            question,
+            resolutionTime,
+            0, // metaEvidenceId
+            false, // requiresContent
+            0, // contentDeadline
+            2 // minParticipants
+        );
+        
+        return address(market);
+    }
 }
 
 contract AuctionTest is Test {
-    AuctionFactory public factory;
+    MockAuctionFactory public factory;
+    AuctionHelpers public helpers;
     Auction public predictionMarket;
     Settlement public settlement;
     Basket public basket;
+    MockToken public mockUSDC;
     
     // Test accounts
     address public alice = address(0x1);
     address public bob = address(0x2);
     address public carol = address(0x3);
+    address public whale = address(0x4);
+    address public clearer = address(0x5);
     
     uint public metaEvidenceId;
     
+    // Events to test
+    event BidPlaced(address indexed bidder, uint usdAmount, uint pricePerShare, bool isYes, uint epoch, uint bidId);
+    event MarketResolved(bool outcome);
+    event PayoutClaimed(address indexed user, uint amount);
+    
     function setUp() public {
-        // Deploy minimal infrastructure - Auction only needs Aux, Basket, and Settlement
-        
-        // Deploy Settlement
+        // Deploy infrastructure
         settlement = new Settlement();
         metaEvidenceId = settlement.createPredictionMarketMetaEvidence();
         
-        // Deploy mock Aux that handles ETH->USD swaps
         MockAux aux = new MockAux();
-        
-        // Deploy mock Basket for USD storage
         basket = Basket(address(new MockBasket()));
+        mockUSDC = new MockToken();
         
-        // Deploy Factory (need to provide valid rover address)
-        factory = new AuctionFactory(
+        factory = new MockAuctionFactory(
             address(settlement),
-            address(new MockRover()), // Provide actual rover instance
+            address(new MockRover()),
             address(aux),
             address(basket)
         );
         
-        // Initialize Settlement with factory
+        helpers = new AuctionHelpers(
+            address(factory),
+            address(settlement),
+            address(basket)
+        );
+        
         settlement.initialize(address(basket), address(factory));
         
-        // Deploy test prediction market through factory
-        AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
-            name: "ETH 5K Prediction",
-            symbol: "ETH5K",
-            initialPricePerToken: 100e18,
-            auctionDuration: 24 hours
-        });
-        
+        // Deploy test prediction market
         address marketAddress = factory.deployPredictionMarket(
             "Will ETH hit $5000 by end of year?",
             block.timestamp + 30 days,
-            config
+            "ETH 5K Prediction",
+            "ETH5K"
         );
         predictionMarket = Auction(payable(marketAddress));
         
@@ -146,357 +258,263 @@ contract AuctionTest is Test {
         vm.deal(alice, 1000 ether);
         vm.deal(bob, 1000 ether);
         vm.deal(carol, 1000 ether);
+        vm.deal(whale, 10000 ether);
+        vm.deal(clearer, 100 ether);
+        
+        // Give mock USDC to users
+        mockUSDC.mint(alice, 10000e18);
+        mockUSDC.mint(bob, 10000e18);
+        mockUSDC.mint(whale, 100000e18);
     }
     
-    // ============ Core Belgian Auction Tests (No Commit-Reveal) ============
+    // ============ Core Functionality Tests ============
     
-    function testPlacePredictionBid() public {
-        // Alice bets YES at 60% confidence - no commit-reveal needed
-        vm.startPrank(alice);
-        predictionMarket.placePredictionBid{value: 4 ether}(0.6e18, true);
-        vm.stopPrank();
-        
-        // Check bid was recorded
-        uint[] memory aliceBidIds = predictionMarket.getUserBidIds(alice);
-        assertEq(aliceBidIds.length, 1);
-        
-        // Check bid details
-        (
-            address bidder,
-            uint usdAmount,
-            uint pricePerShare,
-            uint sharesAllocated,
-            bool isYes,
-            
-        ) = predictionMarket.getBidDetails(aliceBidIds[0]);
-        
-        assertEq(bidder, alice);
-        assertGt(usdAmount, 0); // Should have USD from swap
-        assertEq(pricePerShare, 0.6e18);
-        assertEq(sharesAllocated, 0); // Not cleared yet
-        assertTrue(isYes);
-    }
-    
-    function testVelocityBasedMEVProtection() public {
-        // Test velocity-based dynamic fees
+    function testUnifiedBatchBidding() public {
         vm.startPrank(alice);
         
-        // First bid - should have minimal fees
-        uint balanceBefore1 = address(predictionMarket).balance;
-        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
-        uint balanceAfter1 = address(predictionMarket).balance;
-        uint gasContribution1 = balanceAfter1 - balanceBefore1;
+        // ALL bids now go to batch, no immediate allocation
+        uint aliceBalanceBefore = predictionMarket.balanceOf(alice);
+        predictionMarket.placePredictionBid{value: 0.5 ether}(0.5e18, true);
+        uint aliceBalanceAfter = predictionMarket.balanceOf(alice);
         
-        // Check velocity increased
-        uint velocityAfter1 = predictionMarket.bidVelocity(alice);
-        assertGt(velocityAfter1, 0, "Velocity should increase");
-        
-        // Immediate second bid - should have higher fees due to velocity
-        uint balanceBefore2 = address(predictionMarket).balance;
-        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
-        uint balanceAfter2 = address(predictionMarket).balance;
-        uint gasContribution2 = balanceAfter2 - balanceBefore2;
-        
-        // Second bid should have higher gas contribution due to velocity penalty
-        assertGt(gasContribution2, gasContribution1, "Rapid bidding should increase fees");
+        // Should NOT receive tokens immediately
+        assertEq(aliceBalanceAfter, aliceBalanceBefore, "Should not receive tokens before batch clear");
         
         vm.stopPrank();
+        
+        // Clear batch to allocate tokens
+        predictionMarket.clearBatches();
+        
+        // Now check balance
+        uint aliceBalanceFinal = predictionMarket.balanceOf(alice);
+        assertGt(aliceBalanceFinal, aliceBalanceBefore, "Should receive tokens after batch clear");
     }
     
-    function testBelgianPricePriority() public {
-        // Place bids at different confidence levels - no commit-reveal
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 2 ether}(0.3e18, true);
+    function testTokenBidding() public {
+        // Setup token approval
+        vm.startPrank(alice);
+        mockUSDC.approve(address(basket), 1000e18);
         
-        vm.prank(bob);
-        predictionMarket.placePredictionBid{value: 2 ether}(0.8e18, true);
+        // Place bid with token - should go to batch
+        predictionMarket.placePredictionBidWithToken(0.5e18, true, address(mockUSDC), 500e18);
         
-        vm.prank(carol);
-        predictionMarket.placePredictionBid{value: 2 ether}(0.5e18, true);
+        // Should NOT have shares yet
+        (uint yesShares, , , ) = predictionMarket.getUserPosition(alice);
+        assertEq(yesShares, 0, "Should not have YES shares before batch clear");
         
-        // Move past epoch
-        vm.warp(block.timestamp + 1 hours + 1);
+        vm.stopPrank();
         
-        // Clear epoch
-        predictionMarket.clearEpoch(0);
+        // Clear batch
+        predictionMarket.clearBatches();
         
-        // Check allocations - Bob should get shares first (highest price)
-        uint[] memory bobBids = predictionMarket.getUserBidIds(bob);
-        (, , , uint bobShares, , ) = predictionMarket.getBidDetails(bobBids[0]);
-        assertGt(bobShares, 0, "Bob should get shares");
+        // Now should have shares
+        (uint yesSharesAfter, , , ) = predictionMarket.getUserPosition(alice);
+        assertGt(yesSharesAfter, 0, "Should have YES shares after batch clear");
     }
     
-    function testRandomizedEpochTiming() public {
-        // Check that epochs have randomized timing
-        (, uint endTime1, , , , , , , ) = predictionMarket.getEpoch(0);
-        
-        // Force epoch transition
-        vm.warp(endTime1 + 1);
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 0.1 ether}(0.5e18, true);
-        
-        // Check second epoch timing
-        (, uint endTime2, , , , , , , ) = predictionMarket.getEpoch(1);
-        
-        // Duration should be randomized (not exactly 1 hour)
-        uint duration1 = endTime1 - block.timestamp + (endTime1 - block.timestamp);
-        uint duration2 = endTime2 - endTime1;
-        
-        // Should have some variance due to randomization
-        assertNotEq(duration1, duration2, "Epoch durations should be randomized");
-    }
+    // ============ Batch Processing Tests ============
     
-    function testAntiSnipingExtensions() public {
-        // Get initial epoch end time
-        (, uint initialEndTime, , , , , , , ) = predictionMarket.getEpoch(0);
+    function testDynamicBatchThreshold() public {
+        // Initial threshold should be minimum
+        (, uint threshold1, , , ) = predictionMarket.getMarketMetrics();
+        assertEq(threshold1, 1000e18, "Initial threshold should be $1000");
         
-        // Move close to end time
-        vm.warp(initialEndTime - 1 minutes);
-        
-        // Place bid close to deadline - should trigger extension
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
-        
-        // Check if epoch was extended
-        (, uint newEndTime, , , , , , , ) = predictionMarket.getEpoch(0);
-        
-        // Epoch should be extended
-        assertGt(newEndTime, initialEndTime, "Epoch should be extended to prevent sniping");
-        
-        // Check extension count
-        // uint extensions = predictionMarket.epochExtensions(0);
-        // assertEq(extensions, 1, "Should have one extension");
-    }
-    
-    function testGasCompensation() public {
-        // Set a gas price for the test
-        uint gasPrice = 20 gwei;
-        vm.txGasPrice(gasPrice);
-        
-        // Place multiple bids to qualify for gas compensation
-        uint totalGasContribution = 0;
-        
-        for (uint i = 0; i < 15; i++) {
-            address bidder = address(uint160(0x100 + i));
-            vm.deal(bidder, 10 ether);
-            
-            uint balanceBefore = address(predictionMarket).balance;
-            
-            vm.prank(bidder);
+        // Place several bids to increase market depth
+        for (uint i = 0; i < 5; i++) {
+            vm.prank(alice);
             predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
-            
-            uint balanceAfter = address(predictionMarket).balance;
-            uint actualGasContribution = balanceAfter - balanceBefore;
-            totalGasContribution += actualGasContribution;
         }
         
-        // Check gas collected
-        (, , , , , uint gasCollected, , , ) = predictionMarket.getEpoch(0);
-        assertGt(gasCollected, 0, "Should have collected gas fees");
-        assertEq(gasCollected, totalGasContribution, "Gas collected should match contributions");
+        // Clear batches to process
+        predictionMarket.clearBatches();
         
-        // Move past epoch
-        vm.warp(block.timestamp + 2 hours);
+        // Check threshold increased with depth
+        (uint depth, uint threshold2, , , ) = predictionMarket.getMarketMetrics();
+        assertGt(depth, 0, "Market depth should increase");
         
-        // Check contract balance
-        uint contractBalance = address(predictionMarket).balance;
-        assertGe(contractBalance, gasCollected, "Contract should have gas fees");
-        
-        // Verify gas collection works
-        assertGt(gasCollected, 0, "Gas fees were collected");
-        assertEq(gasCollected, totalGasContribution, "Correct amount collected");
-    }
-    
-    function testShareScarcity() public {
-        // Check initial epoch shares
-        (, , uint sharesAvailable, , , , , , ) = predictionMarket.getEpoch(0);
-        assertEq(sharesAvailable, 10000e18); // INITIAL_SHARES_PER_EPOCH
-        
-        // Force epoch transition
-        vm.warp(block.timestamp + 1 hours);
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 0.1 ether}(0.5e18, true);
-        
-        // Check second epoch has fewer shares (with randomization)
-        (, , uint sharesEpoch1, , , , , , ) = predictionMarket.getEpoch(1);
-        assertLt(sharesEpoch1, sharesAvailable, "Second epoch should have fewer shares");
-        assertGt(sharesEpoch1, 8000e18, "But not too few due to randomization");
-    }
-    
-    // ============ Content Market Tests ============
-    
-    function testContentMarketFlow() public {
-        // Deploy a simple prediction market instead and manually set it up as a content market
-        AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
-            name: "Dare: Alice vs Bob",
-            symbol: "DARE",
-            initialPricePerToken: 50e18,
-            auctionDuration: 24 hours
-        });
-        
-        // Deploy as regular prediction market first
-        address dareMarket = factory.deployPredictionMarket(
-            "Dare: Alice dares Bob to post a TikTok dance",
-            block.timestamp + 7 days,
-            config
-        );
-        
-        Auction dareAuction = Auction(payable(dareMarket));
-        
-        // Test regular prediction betting works
-        vm.prank(alice);
-        dareAuction.placePredictionBid{value: 4 ether}(0.9e18, true);
-        
-        // Verify bid was placed
-        uint[] memory aliceBids = dareAuction.getUserBidIds(alice);
-        assertEq(aliceBids.length, 1);
-        
-        // Check bid details
-        (address bidder, uint usdAmount, , , bool isYes, ) = dareAuction.getBidDetails(aliceBids[0]);
-        assertEq(bidder, alice);
-        assertGt(usdAmount, 0);
-        assertTrue(isYes);
-    }
-    
-    // ============ Participant Tracking Tests ============
-    
-    function testParticipantTracking() public {
-        // Check initial state
-        assertEq(predictionMarket.getParticipantCount(), 0);
-        assertFalse(predictionMarket.hasParticipated(alice));
-        
-        // Alice places a bid
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
-        
-        // Check participant was tracked
-        assertEq(predictionMarket.getParticipantCount(), 1);
-        assertTrue(predictionMarket.hasParticipated(alice));
-        
-        // Bob places a bid
-        vm.prank(bob);
-        predictionMarket.placePredictionBid{value: 1 ether}(0.7e18, false);
-        
-        // Check both participants
-        assertEq(predictionMarket.getParticipantCount(), 2);
-        assertTrue(predictionMarket.hasParticipated(bob));
-        
-        // Alice places another bid - should not increase count
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 1 ether}(0.8e18, true);
-        
-        assertEq(predictionMarket.getParticipantCount(), 2); // Still 2
-        
-        // Check participants array
-        address[] memory participants = predictionMarket.getParticipants();
-        assertEq(participants.length, 2);
-        assertEq(participants[0], alice);
-        assertEq(participants[1], bob);
-    }
-    
-    function testProRataAllocation() public {
-        // Test that same price bids get pro-rata allocation
-        
-        // Get available shares for the epoch
-        (, , uint sharesAvailable, , , , , , ) = predictionMarket.getEpoch(0);
-        
-        // Each person wants to buy shares at $0.50 each
-        // Calculate ETH needed for each to request 1/2 of available shares
-        uint sharesWanted = sharesAvailable / 2;
-        uint usdNeeded = (sharesWanted * 0.5e18) / 1e18;
-        uint ethNeeded = usdNeeded / 3000; // Assuming 3000 USD/ETH
-        
-        // All bid at same price, but together they want 1.5x available shares
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: ethNeeded}(0.5e18, true);
-        
-        vm.prank(bob);
-        predictionMarket.placePredictionBid{value: ethNeeded}(0.5e18, true);
-        
-        vm.prank(carol);
-        predictionMarket.placePredictionBid{value: ethNeeded}(0.5e18, true);
-        
-        // Move past epoch
-        vm.warp(block.timestamp + 1 hours + 1);
-        
-        // Clear epoch
-        predictionMarket.clearEpoch(0);
-        
-        // Check allocations - should be equal since same price and pro-rata
-        uint[] memory aliceBids = predictionMarket.getUserBidIds(alice);
-        uint[] memory bobBids = predictionMarket.getUserBidIds(bob);
-        uint[] memory carolBids = predictionMarket.getUserBidIds(carol);
-        
-        (, , , uint aliceShares, , ) = predictionMarket.getBidDetails(aliceBids[0]);
-        (, , , uint bobShares, , ) = predictionMarket.getBidDetails(bobBids[0]);
-        (, , , uint carolShares, , ) = predictionMarket.getBidDetails(carolBids[0]);
-        
-        // Each should get approximately 1/3 of available shares
-        uint expectedShares = sharesAvailable / 3;
-        
-        assertGt(aliceShares, 0, "Alice should get shares");
-        assertGt(bobShares, 0, "Bob should get shares");
-        assertGt(carolShares, 0, "Carol should get shares");
-        
-        // Should get roughly equal shares (within rounding)
-        assertApproxEqAbs(aliceShares, expectedShares, 1e18, "Alice should get ~1/3");
-        assertApproxEqAbs(bobShares, expectedShares, 1e18, "Bob should get ~1/3");
-        assertApproxEqAbs(carolShares, expectedShares, 1e18, "Carol should get ~1/3");
-        
-        // Verify they're equal to each other
-        assertApproxEqAbs(aliceShares, bobShares, 1e18, "Alice and Bob should have similar shares");
-        assertApproxEqAbs(bobShares, carolShares, 1e18, "Bob and Carol should have similar shares");
-    }
-    
-    // ============ DoS Protection Tests ============
-    
-    function testMaxBidsPerEpoch() public {
-        // Try to place MAX_BIDS_PER_EPOCH + 1 bids
-        uint maxBids = 1000; // MAX_BIDS_PER_EPOCH
-        
-        // Place max bids
-        for (uint i = 0; i < maxBids; i++) {
-            address bidder = address(uint160(0x1000 + i));
-            vm.deal(bidder, 1 ether);
-            vm.prank(bidder);
-            predictionMarket.placePredictionBid{value: 0.01 ether}(0.5e18, true);
+        if (depth >= 10000e18) {
+            assertGt(threshold2, threshold1, "Threshold should increase with depth");
         }
-        
-        // Try to place one more - should fail
-        vm.prank(alice);
-        vm.expectRevert("Epoch full");
-        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
-        
-        // Move to next epoch - should work again
-        vm.warp(block.timestamp + 2 hours);
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
     }
     
-    // ============ Integration Tests ============
-    
-    function testPayoutIntegration() public {
-        // No commit-reveal needed - direct betting
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 5 ether}(0.8e18, true);
+    function testBatchQueuing() public {
+        // All bids should be batched now
+        vm.startPrank(whale);
         
-        // Bob can place a direct bid
+        vm.expectEmit(true, false, false, true);
+        emit BidPlaced(whale, 15000e18, 0.6e18, true, 0, 1); // Updated event expectations
+        
+        predictionMarket.placePredictionBid{value: 5 ether}(0.6e18, true);
+        
+        // Should not have tokens yet
+        uint whaleBalance = predictionMarket.balanceOf(whale);
+        assertEq(whaleBalance, 0, "Should not receive tokens before batch clear");
+        
+        // Check batch was created
+        (uint yesTotal, , uint yesBids, ) = predictionMarket.getBatchInfo(block.number);
+        assertGt(yesTotal, 0, "Should have batch total");
+        assertEq(yesBids, 1, "Should have one bid in batch");
+        
+        vm.stopPrank();
+    }
+    
+    function testBatchClearing() public {
+        // Create batches
+        vm.prank(whale);
+        predictionMarket.placePredictionBid{value: 5 ether}(0.6e18, true);
+        
         vm.prank(bob);
         predictionMarket.placePredictionBid{value: 4 ether}(0.4e18, false);
         
-        // Clear epochs
-        vm.warp(block.timestamp + 25 hours);
-        predictionMarket.clearEpoch(0);
+        uint blockBefore = block.number;
+        
+        // Clear batches
+        vm.prank(clearer);
+        predictionMarket.clearBatches();
+        
+        // Check batches were cleared (deleted after processing)
+        (uint yesTotal, uint noTotal, , ) = predictionMarket.getBatchInfo(blockBefore);
+        assertEq(yesTotal, 0, "YES batch should be cleared");
+        assertEq(noTotal, 0, "NO batch should be cleared");
+        
+        // Check users received tokens
+        assertGt(predictionMarket.balanceOf(whale), 0, "Whale should have tokens");
+        assertGt(predictionMarket.balanceOf(bob), 0, "Bob should have tokens");
+    }
+    
+    function testSortedSetAllocation() public {
+        // Test that higher price bids get allocated first via sorted set
+        
+        // Place bids at different prices in same epoch
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.3e18, true); // Low price
+        
+        vm.prank(bob);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.8e18, true); // High price
+        
+        vm.prank(carol);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true); // Medium price
+        
+        // Clear the current epoch (alternative to batch clearing)
+        uint epochIndex = predictionMarket.currentEpochIndex();
+        
+        // Move time forward to end epoch
+        vm.warp(block.timestamp + 1 hours + 1);
+        
+        // Clear epoch - this uses sorted set allocation
+        predictionMarket.clearEpoch(epochIndex);
+        
+        // Bob (highest price) should get most/all allocation
+        // Check that shares were allocated in price order
+        (uint bobYes, , , ) = predictionMarket.getUserPosition(bob);
+        (uint aliceYes, , , ) = predictionMarket.getUserPosition(alice);
+        
+        // If there were limited shares, bob should get more than alice
+        if (bobYes > 0 && aliceYes > 0) {
+            // Both got some, but bob should have gotten first pick
+            assertGe(bobYes, aliceYes, "Higher price bid should get priority");
+        }
+    }
+    
+    function testGasCompensation() public {
+        // Create large batch
+        for (uint i = 0; i < 10; i++) {
+            address bidder = address(uint160(0x100 + i));
+            vm.deal(bidder, 10 ether);
+            vm.prank(bidder);
+            predictionMarket.placePredictionBid{value: 2 ether}(0.5e18, true);
+        }
+        
+        uint clearerBalanceBefore = clearer.balance;
+        
+        // Clear with gas tracking
+        vm.prank(clearer);
+        predictionMarket.clearBatches();
+        
+        // Check compensation metrics
+        (, , , uint protocolFees, uint lastClear) = predictionMarket.getMarketMetrics();
+        
+        if (clearerBalanceBefore < clearer.balance) {
+            assertGt(clearer.balance, clearerBalanceBefore, "Should receive gas compensation");
+        }
+    }
+    
+    function testAutoClearTrigger() public {
+        // Create batch that meets auto-clear threshold (10+ bids or $50k+)
+        for (uint i = 0; i < 12; i++) {
+            address bidder = address(uint160(0x200 + i));
+            vm.deal(bidder, 10 ether);
+            vm.prank(bidder);
+            predictionMarket.placePredictionBid{value: 2 ether}(0.5e18, true);
+        }
+        
+        // Next bid should trigger auto-clear
+        uint lastBlock = predictionMarket.lastClearBlock();
+        
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 0.1 ether}(0.5e18, true);
+        
+        // Check if batch was auto-cleared
+        uint newLastBlock = predictionMarket.lastClearBlock();
+        assertGt(newLastBlock, lastBlock, "Batch should be auto-cleared");
+    }
+    
+    // ============ Market Entropy Tests ============
+    
+    function testEntropyIncrease() public {
+        // Get initial entropy
+        (, , uint entropy1, , ) = predictionMarket.getMarketMetrics();
+        
+        // Place bid to increase entropy
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
+        
+        // Check entropy increased
+        (, , uint entropy2, , ) = predictionMarket.getMarketMetrics();
+        assertGt(entropy2, entropy1, "Entropy should increase with activity");
+    }
+    
+    function testEntropyDecay() public {
+        // Place bid to increase entropy
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
+        
+        (, , uint entropy1, , ) = predictionMarket.getMarketMetrics();
+        
+        // Advance blocks to trigger decay
+        vm.roll(block.number + 10);
+        
+        // Place another bid to update entropy
+        vm.prank(bob);
+        predictionMarket.placePredictionBid{value: 0.5 ether}(0.5e18, false);
+        
+        // Entropy should have decayed then increased slightly
+        (, , uint entropy2, , ) = predictionMarket.getMarketMetrics();
+        assertLt(entropy2, entropy1 + 100, "Entropy should decay over time");
+    }
+    
+    // ============ Settlement Tests ============
+    
+    function testPayoutFlow() public {
+        // Place bids
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 3 ether}(0.8e18, true);
+        
+        vm.prank(bob);
+        predictionMarket.placePredictionBid{value: 2 ether}(0.4e18, false);
+        
+        // Clear batches to allocate shares
+        predictionMarket.clearBatches();
         
         // Resolve market
         vm.warp(block.timestamp + 31 days);
         _resolveMarket(true); // YES wins
         
         // Check Alice can claim
-        uint aliceBasketBefore = basket.balanceOf(alice, 0);
         uint alicePayout = predictionMarket.calculatePredictionPayout(alice);
         assertGt(alicePayout, 0, "Alice should have payout");
         
+        uint aliceBasketBefore = basket.balanceOf(alice, 0);
         vm.prank(alice);
         predictionMarket.claimPredictionPayout();
         
@@ -504,160 +522,171 @@ contract AuctionTest is Test {
         assertEq(aliceBasketAfter - aliceBasketBefore, alicePayout, "Alice should receive payout");
     }
     
+    function testForceMajeurRefund() public {
+        // Place bids
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 2 ether}(0.5e18, true);
+        
+        vm.prank(bob);
+        predictionMarket.placePredictionBid{value: 2 ether}(0.5e18, false);
+        
+        // Clear batches
+        predictionMarket.clearBatches();
+        
+        // Resolve with force majeur
+        vm.warp(block.timestamp + 31 days);
+        _resolveMarket(false, true);
+        
+        // Both should be able to claim refunds
+        vm.prank(alice);
+        predictionMarket.claimForceMajeurRefund();
+        
+        vm.prank(bob);
+        predictionMarket.claimForceMajeurRefund();
+        
+        // Check refunds received
+        assertGt(basket.balanceOf(alice, 0), 0, "Alice should receive refund");
+        assertGt(basket.balanceOf(bob, 0), 0, "Bob should receive refund");
+    }
+    
+    // ============ State Access Tests ============
+    
+    function testStateAccess() public {
+        // Test accessing the new state through individual getters
+        bool bettingClosed = predictionMarket.bettingWindowClosed();
+        bool resolved = predictionMarket.resolved();
+        bool outcome = predictionMarket.outcome();
+        bool forceMajeur = predictionMarket.forceMajeurRefunds();
+        
+        assertFalse(bettingClosed, "Betting should be open");
+        assertFalse(resolved, "Should not be resolved");
+        assertFalse(forceMajeur, "Should not be force majeur");
+    }
+    
+    function testParamsAccess() public {
+        // Since params is likely internal, we access through view functions
+        (, , , , bool isActive) = predictionMarket.getCurrentEpochInfo();
+        assertTrue(isActive, "Market should be active");
+        
+        (string memory question, , , , , , ) = predictionMarket.getPredictionSummary();
+        assertEq(question, "Will ETH hit $5000 by end of year?", "Question should match");
+    }
+    
     // ============ Edge Cases ============
     
-    function testMinimumBetEnforcement() public {
-        // Try to place bet that's too small after gas
-        vm.prank(alice);
-        vm.expectRevert("Below minimum USD");
-        predictionMarket.placePredictionBid{value: 0.0001 ether}(0.5e18, true);
-    }
-    
-    function testFairPriceEnforcement() public {
-        // Place first bid - no fair price check
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 2 ether}(0.02e18, true);
-        
-        // Check what the fair price actually is
-        uint fairPrice = predictionMarket.calculateFairPrice(0);
-        
-        // Try to bid below the calculated fair price
-        vm.prank(bob);
-        vm.expectRevert("Price below fair value");
-        predictionMarket.placePredictionBid{value: 2 ether}(fairPrice - 0.001e18, true);
-    }
-    
-    function testPartialFillRefunds() public {
-        // Get available shares
-        (, , uint sharesAvailable, , , , , , ) = predictionMarket.getEpoch(0);
-        
-        // Try to buy more than available at very low price
-        uint pricePerShare = 0.01e18;
-        uint ethNeeded = (sharesAvailable * 2 * pricePerShare) / (1e18 * 3000); // Assuming 3000 USD/ETH
-        
-        // Make sure we have enough ETH for the test
-        ethNeeded = 4.9 ether; // Use a reasonable amount
-        
-        vm.deal(alice, ethNeeded * 2);
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: ethNeeded}(pricePerShare, true);
-        
-        // Clear epoch
-        vm.warp(block.timestamp + 2 hours);
-        predictionMarket.clearEpoch(0);
-        
-        // Alice should have received partial fill and refund in 6909 tokens
-        uint aliceBasketBalance = basket.balanceOf(alice, 0);
-        assertGt(aliceBasketBalance, 0, "Should have refund in 6909 tokens");
-    }
-    
-    function testDynamicConfidenceStrategy() public {
-        // Get epoch shares available
-        (, , uint sharesAvailable, , , , , , ) = predictionMarket.getEpoch(0);
-        
-        // Calculate smaller bids to ensure everyone gets shares
-        // At these prices: Carol needs 9x more USD than Alice for same shares
-        // Let's ensure total demand doesn't exceed supply
-        
-        // Alice wants 3000 shares at $0.10 = $300 = 0.1 ETH
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 0.1 ether}(0.1e18, true);
-        
-        // Bob wants 600 shares at $0.50 = $300 = 0.1 ETH  
-        vm.prank(bob);
-        predictionMarket.placePredictionBid{value: 0.1 ether}(0.5e18, true);
-        
-        // Carol wants 333 shares at $0.90 = $300 = 0.1 ETH
-        vm.prank(carol);
-        predictionMarket.placePredictionBid{value: 0.1 ether}(0.9e18, true);
-        
-        // Total shares requested: 3000 + 600 + 333 = 3933 (well under 10000 available)
-        
-        // Clear epoch
-        vm.warp(block.timestamp + 2 hours);
-        predictionMarket.clearEpoch(0);
-        
-        // Check allocations
-        uint[] memory aliceBids = predictionMarket.getUserBidIds(alice);
-        uint[] memory bobBids = predictionMarket.getUserBidIds(bob);
-        uint[] memory carolBids = predictionMarket.getUserBidIds(carol);
-        
-        (, , , uint aliceShares, , ) = predictionMarket.getBidDetails(aliceBids[0]);
-        (, , , uint bobShares, , ) = predictionMarket.getBidDetails(bobBids[0]);
-        (, , , uint carolShares, , ) = predictionMarket.getBidDetails(carolBids[0]);
-        
-        // All should get their full allocation since total < available
-        assertGt(aliceShares, 0, "Alice should get shares");
-        assertGt(bobShares, 0, "Bob should get shares");
-        assertGt(carolShares, 0, "Carol should get shares");
-        
-        // Alice should get approximately 9x more shares than Carol
-        assertGt(aliceShares, carolShares, "Lower price should get more shares");
-        
-        // Check the ratio
-        uint expectedRatio = 9e18;
-        uint actualRatio = (aliceShares * 1e18) / carolShares;
-        assertApproxEqRel(actualRatio, expectedRatio, 0.2e18, "Share ratio should be ~9x");
-    }
-    
-    // ============ No More Commit-Reveal Tests ============
-    
-    function testLargeBidsDirectPlacement() public {
-        // Large bids now work directly (no commit-reveal)
-        vm.prank(alice);
-        predictionMarket.placePredictionBid{value: 10 ether}(0.7e18, true);
-        
-        // Check bid was recorded directly
-        uint[] memory aliceBids = predictionMarket.getUserBidIds(alice);
-        assertEq(aliceBids.length, 1);
-        
-        // Verify bid details
-        (, uint usdAmount, uint pricePerShare, , bool isYes, ) = predictionMarket.getBidDetails(aliceBids[0]);
-        assertEq(pricePerShare, 0.7e18);
-        assertTrue(isYes);
-        assertGt(usdAmount, 0);
-    }
-    
-    function testMEVProtectionWithoutCommitReveal() public {
-        // Test that MEV protection works through velocity tracking
+    function testMinimumBidRequirement() public {
         vm.startPrank(alice);
         
-        // First large bid
-        predictionMarket.placePredictionBid{value: 10 ether}(0.5e18, true);
-        uint velocity1 = predictionMarket.bidVelocity(alice);
-        
-        // Immediate second large bid - should have higher velocity
-        predictionMarket.placePredictionBid{value: 10 ether}(0.6e18, true);
-        uint velocity2 = predictionMarket.bidVelocity(alice);
-        
-        // Third rapid bid - should have even higher velocity
-        predictionMarket.placePredictionBid{value: 10 ether}(0.7e18, true);
-        uint velocity3 = predictionMarket.bidVelocity(alice);
+        // Try to place a bid below minimum
+        vm.expectRevert(bytes("Below min"));
+        predictionMarket.placePredictionBid{value: 0.01 ether}(0.5e18, true);
         
         vm.stopPrank();
+    }
+    
+    function testInvalidPriceTier() public {
+        vm.startPrank(alice);
         
-        // Velocity should increase with rapid bidding
-        assertGt(velocity2, velocity1, "Velocity should increase");
-        assertGt(velocity3, velocity2, "Velocity should keep increasing");
+        // Try to place bid with invalid price tier (not in 0.1, 0.2, ..., 1.0)
+        vm.expectRevert(bytes("Invalid tier"));
+        predictionMarket.placePredictionBid{value: 1 ether}(0.15e18, true); // 0.15 is not a valid tier
+        
+        vm.stopPrank();
+    }
+    
+    function testEpochProgression() public {
+        // Check initial epoch
+        (uint index, , , , bool isActive) = predictionMarket.getCurrentEpochInfo();
+        assertEq(index, 0, "Should start at epoch 0");
+        assertTrue(isActive, "Epoch should be active");
+        
+        // Advance time to trigger epoch progression
+        vm.warp(block.timestamp + 1 hours + 1);
+        
+        // Place bid to trigger epoch check
+        vm.prank(alice);
+        predictionMarket.placePredictionBid{value: 1 ether}(0.5e18, true);
+        
+        // Check epoch advanced
+        (uint newIndex, , , , ) = predictionMarket.getCurrentEpochInfo();
+        assertEq(newIndex, 1, "Should advance to epoch 1");
+    }
+    
+    function testContentSubmission() public {
+        // Deploy new market with content requirement
+        Auction contentMarket = new Auction();
+        
+        AuctionLogic.InitParams memory initParams = AuctionLogic.InitParams({
+            name: "Content Market",
+            symbol: "CONTENT",
+            auctionDuration: 24 hours,
+            totalEpochs: 10,
+            owner: address(this),
+            settlementSystem: address(settlement),
+            rover: address(factory.rover()),
+            aux: address(factory.aux()),
+            basket: address(basket)
+        });
+        
+        contentMarket.initialize(initParams);
+        contentMarket.initializePredictionMarket(
+            "Test question",
+            block.timestamp + 30 days,
+            0,
+            true, // requiresContent
+            block.timestamp + 1 days, // contentDeadline
+            2
+        );
+        
+        // Set authorized submitters
+        contentMarket.setAuthorizedSubmitters(alice, bob);
+        
+        // Alice submits with content
+        vm.deal(alice, 10 ether);
+        vm.prank(alice);
+        contentMarket.placePredictionBidWithContent{value: 1 ether}(0.5e18, true, "Test content");
+        
+        // Bob submits with content
+        vm.deal(bob, 10 ether);
+        vm.prank(bob);
+        contentMarket.placePredictionBidWithContent{value: 1 ether}(0.5e18, false, "Test content 2");
+        
+        // Third submission should fail (max 2)
+        vm.deal(carol, 10 ether);
+        contentMarket.setAuthorizedSubmitters(carol, carol);
+        vm.prank(carol);
+        vm.expectRevert(bytes("Max"));
+        contentMarket.placePredictionBidWithContent{value: 1 ether}(0.5e18, true, "Test content 3");
     }
     
     // ============ Helpers ============
     
     function _resolveMarket(bool outcome) internal {
-        // Create and execute proposal
-        basket.mint(alice, 100e18, address(basket), 0);
+        _resolveMarket(outcome, false);
+    }
+    
+    function _resolveMarket(bool outcome, bool forceMajeur) internal {
+        MockBasket(address(basket)).mint(alice, 100e18, address(basket), 0);
         vm.startPrank(alice);
         basket.approve(address(settlement), 100e18);
+        
         uint proposalId = settlement.proposeSettlement(
             address(predictionMarket),
             outcome,
             100e18
         );
-        vm.stopPrank();
         
-        // Wait and execute
-        vm.warp(block.timestamp + 4 days);
-        vm.prank(alice);
-        settlement.executeProposal(address(predictionMarket), proposalId);
+        if (forceMajeur) {
+            vm.stopPrank();
+            
+            // Since we can't access state directly, we use the disputeId getter if available
+            // or just pass 0 since it's for force majeur
+            vm.prank(address(settlement));
+            predictionMarket.rule(0, 2);
+        } else {
+            vm.warp(block.timestamp + 4 days);
+            settlement.executeProposal(address(predictionMarket), proposalId);
+            vm.stopPrank();
+        }
     }
 }

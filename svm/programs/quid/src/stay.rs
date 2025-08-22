@@ -145,13 +145,11 @@ impl Depositor {
     // using a floating rate that is reflexive/adaptive with respect to inflow/outflow behavior...
     fn calculate_accrued_interest(principal: u64, time_elapsed: f32, interest_rate: f32) -> f64 {
         return principal as f64 * E.powf(interest_rate / (100 as f32) * time_elapsed) as f64;
-    } // At she first seemed really interested, then she told me I should go see a shrink.
-    // Position shrinking means "virtual sale": profitable synthetic redemption withdraws
+    } // Position shrinking means "virtual sale": profitable synthetic redemption withdraws
     // Banks.total_deposits (more than pledged); similar to a collar (hedge wrapper), one
     // strategy for protecting against losses...though it limits large gains (under 10%).
     // Some cynic wrote on Twitter that "Ostium is broken," reason being unbounded gains
-    // for borrowers dilute depositors' yield; following solution is a game of playing
-    // on the edge, always waiting for her next move, yearning for a slightest tingle.
+    // for borrowers dilute depositors' yield; following solution creates speed bumps
     pub fn repo(&mut self, ticker: &str, // reposition, or repossession (it depends)
         mut amount: i64, price: u64, current_time: i64,
         interest_rate: u64, depository: &mut Depository) -> Result<(i64, u64)> {

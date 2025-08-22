@@ -3,7 +3,7 @@ equity baskets on svm,
 inspired by Ostium, &  
 an alternative lvlUSD,  
 stable baskets on evm  
-by pooling ETH with $
+by pooling ETH with $  
 with 2 types of bonds:  
 [snowball derivative](https://github.com/tobaccorico/IBO/blob/main/evm/src/Basket.sol#L473);  
 

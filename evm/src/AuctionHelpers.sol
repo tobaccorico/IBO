@@ -3,13 +3,16 @@ pragma solidity ^0.8.20;
 
 import "./Auction.sol";
 import "./AuctionFactory.sol";
+import "./AuctionFactoryLib.sol";
 import "./Settlement.sol";
 import "./Basket.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title AuctionHelpers - Simplified UX for Social Betting Platform
 /// @notice Helper functions for easy interaction with Belgian auction prediction markets
 /// @dev Provides user-friendly interfaces for betting, content submission, and payout claims
 contract AuctionHelpers {
+    using Math for uint;
     
     AuctionFactory public immutable factory;
     Settlement public immutable settlement;
@@ -48,15 +51,6 @@ contract AuctionHelpers {
         uint suggestedAmount;        // For desired position size
         uint expectedTokens;         // Tokens they'd receive
         uint minimumPrice;           // Minimum price for their allocation
-        uint currentVelocityPenalty; // Extra fee if bidding rapidly
-    }
-    
-    struct MEVProtectionInfo {
-        uint userVelocity;           // Current velocity score (0-1000)
-        uint dynamicFeeBps;          // Current fee in basis points
-        uint minimumPriceRequired;   // For desired allocation
-        uint batchWindowRemaining;   // Seconds until batch processes
-        bool wouldTriggerPenalty;    // If bid would increase fees
     }
     
     // ============ Constructor ============
@@ -136,51 +130,6 @@ contract AuctionHelpers {
         auction.placePredictionBid{value: msg.value}(pricePerShare, isYes);
     }
     
-    // ============ MEV Protection Analysis ============
-    
-    /// @notice Check MEV protection status for user
-    /// @param auction The prediction market contract
-    /// @param user User address to check
-    /// @param desiredSharesUSD How much they want to bet in USD
-    function getMEVProtectionInfo(
-        Auction auction, 
-        address user,
-        uint desiredSharesUSD
-    ) external view returns (MEVProtectionInfo memory) {
-        // Get user's current velocity
-        uint velocity = auction.bidVelocity(user);
-        
-        // Calculate dynamic fee
-        uint baseFee = 50; // 0.5%
-        uint dynamicFee = baseFee + (baseFee * velocity / 100);
-        
-        // Get epoch info
-        (, , uint sharesAvailable, , , , , , ) = auction.getEpoch(auction.currentEpochIndex());
-        
-        // Calculate shares at $1 price
-        uint sharesWanted = desiredSharesUSD;
-        
-        // Get minimum price for this allocation
-        uint minPrice = auction.getMinimumPriceForAllocation(sharesWanted, sharesAvailable);
-        
-        // Check batch window
-        uint batchWindow = 5 minutes;
-        uint timeInWindow = block.timestamp % batchWindow;
-        uint remaining = batchWindow - timeInWindow;
-        
-        // Would another bid increase penalty?
-        bool wouldTrigger = auction.lastBidTime(user) > 0 && 
-                           (block.timestamp - auction.lastBidTime(user)) < 1 minutes;
-        
-        return MEVProtectionInfo({
-            userVelocity: velocity,
-            dynamicFeeBps: dynamicFee,
-            minimumPriceRequired: minPrice,
-            batchWindowRemaining: remaining,
-            wouldTriggerPenalty: wouldTrigger
-        });
-    }
-    
     // ============ Payout & Claim Functions ============
     
     /// @notice Claim all available rewards (auto-detects type)
@@ -202,7 +151,7 @@ contract AuctionHelpers {
     /// @notice Claim payout and immediately convert some to different token
     /// @param auction The prediction market contract  
     /// @param convertToToken Token to convert some payout to (empty for no conversion)
-    /// @param convertAmount Amount to convert (in 6909 tokens)
+    /// @param convertAmount Amount to convert (in basket tokens)
     function claimAndConvert(
         Auction auction,
         address convertToToken,
@@ -241,7 +190,7 @@ contract AuctionHelpers {
     ) external returns (address) {
         require(hoursToRespond >= 24 && hoursToRespond <= 168, "Must be 1-7 days");
         
-        AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
+        AuctionFactoryLib.LaunchConfig memory config = AuctionFactoryLib.LaunchConfig({
             name: string(abi.encodePacked("RAP: ", challenger, " vs ", challenged)),
             symbol: "RAP",
             initialPricePerToken: 50e18,  // $50 starting price for rap battles
@@ -255,7 +204,7 @@ contract AuctionHelpers {
     
     // ============ Information & Analysis Functions ============
     
-    /// @notice Get simple market overview with MEV info
+    /// @notice Get simple market overview
     /// @param auction The prediction market contract
     function getMarketOverview(Auction auction) external view returns (SimpleMarketView memory) {
         // Get prediction summary
@@ -278,16 +227,10 @@ contract AuctionHelpers {
             bool isActive
         ) = auction.getCurrentEpochInfo();
         
-        // Get epoch details for remaining shares
-        (, , uint sharesAvailable, uint sharesAllocated, , , , , ) = auction.getEpoch(index);
-        uint sharesRemaining = sharesAvailable > sharesAllocated ? 
-                              sharesAvailable - sharesAllocated : 0;
-        
-        // Calculate minimum price for 10% allocation
-        uint minPriceFor10 = auction.getMinimumPriceForAllocation(
-            sharesAvailable / 10, 
-            sharesAvailable
-        );
+        // For simplified view, we'll estimate shares remaining
+        // In the new architecture, this would need to be exposed via a getter
+        uint epochSharesRemaining = 1000e18; // Placeholder
+        uint minimumPriceFor10Percent = currentPrice + 0.1e18; // Simplified calculation
         
         return SimpleMarketView({
             question: question,
@@ -300,8 +243,8 @@ contract AuctionHelpers {
             isActive: isActive,
             isResolved: isResolved,
             outcome: outcome,
-            epochSharesRemaining: sharesRemaining,
-            minimumPriceFor10Percent: minPriceFor10
+            epochSharesRemaining: epochSharesRemaining,
+            minimumPriceFor10Percent: minimumPriceFor10Percent
         });
     }
     
@@ -333,15 +276,16 @@ contract AuctionHelpers {
             }
         }
         
-        (, , , , , , , uint totalYes, uint totalNo, uint totalPool) = auction.getPredictionConfig();
+        // Calculate average price estimation
         uint avgPrice = 0;
         if (yesShares > 0 || noShares > 0) {
-            // This would need to be exposed in Auction contract
-            // For now, estimate based on market average
+            // Estimate based on market totals
+            (, uint totalYes, uint totalNo, uint totalPool, , , ) = auction.getPredictionSummary();
             if (totalYes + totalNo > 0) {
                 avgPrice = (totalPool * 1e18) / (totalYes + totalNo);
             }
         }
+        
         return UserPosition({
             yesShares: yesShares,
             noShares: noShares,
@@ -368,25 +312,13 @@ contract AuctionHelpers {
                 reason: "Betting window closed",
                 suggestedAmount: 0,
                 expectedTokens: 0,
-                minimumPrice: 0,
-                currentVelocityPenalty: 0
+                minimumPrice: 0
             });
         }
         
-        // Get epoch info
-        (, , uint sharesAvailable, , , , , , ) = auction.getEpoch(auction.currentEpochIndex());
-        
-        // Calculate minimum price for desired position
-        uint sharesWanted = desiredPositionUSD / 1e18; // Assuming $1 per share base
-        uint minPrice = auction.getMinimumPriceForAllocation(sharesWanted, sharesAvailable);
-        
-        // Calculate tokens at minimum price
-        uint tokensExpected = (desiredPositionUSD * 1e18) / minPrice;
+        // Calculate tokens at current price
+        uint tokensExpected = (desiredPositionUSD * 1e18) / currentPrice;
         uint ethNeeded = (desiredPositionUSD * 1e18) / 3000e18; // Assume $3000 ETH
-        
-        // Check user's velocity
-        uint velocity = auction.bidVelocity(msg.sender);
-        uint penaltyBps = velocity > 0 ? (50 * velocity / 100) : 0;
         
         // Analyze timing
         bool isGoodTiming = true;
@@ -395,12 +327,9 @@ contract AuctionHelpers {
         if (timeRemaining < 5 minutes) {
             isGoodTiming = false;
             reason = "Epoch ending soon - wait for next epoch with fresh shares";
-        } else if (minPrice > 0.5e18) {
+        } else if (currentPrice > 0.8e18) {
             isGoodTiming = false;
-            reason = "High minimum price required - consider smaller position";
-        } else if (velocity > 500) {
-            isGoodTiming = false;
-            reason = "High velocity penalty - wait before bidding again";
+            reason = "High current price - consider waiting for better entry";
         } else if (bidCount < 5) {
             isGoodTiming = true;
             reason = "Early in epoch with good availability";
@@ -414,12 +343,11 @@ contract AuctionHelpers {
             reason: reason,
             suggestedAmount: ethNeeded,
             expectedTokens: tokensExpected,
-            minimumPrice: minPrice,
-            currentVelocityPenalty: penaltyBps
+            minimumPrice: currentPrice
         });
     }
     
-    /// @notice Check market health and MEV resistance
+    /// @notice Check market health
     /// @param auction The prediction market contract
     function getMarketHealth(Auction auction) external view returns (
         bool isHealthy,
@@ -447,14 +375,6 @@ contract AuctionHelpers {
             // Calculate activity score
             activityScore = Math.min(100, (totalPoolUSD / 1000e18) * 20 + (bidCount * 5));
             
-            // Check for MEV activity
-            uint epochIndex = auction.currentEpochIndex();
-            (, , uint sharesAvailable, uint sharesAllocated, , , , , ) = auction.getEpoch(epochIndex);
-            
-            if (sharesAllocated > (sharesAvailable * 80) / 100) {
-                warningsList[warningCount++] = "High allocation in current epoch";
-            }
-            
             if (totalPoolUSD < 100e18) {
                 warningsList[warningCount++] = "Low liquidity - small total pool";
                 isHealthy = false;
@@ -477,8 +397,6 @@ contract AuctionHelpers {
         }
     }
     
-    // ============ Utility Functions ============
-    
     /// @notice Get optimal bidding strategy based on market state
     /// @param auction The prediction market contract
     /// @param budget User's total budget in ETH
@@ -492,30 +410,23 @@ contract AuctionHelpers {
         uint recommendedEpoch,
         string memory strategy
     ) {
-        uint currentEpoch = auction.currentEpochIndex();
-        (, , uint sharesAvailable, uint sharesAllocated, , , , , ) = auction.getEpoch(currentEpoch);
-        
-        uint percentAllocated = sharesAvailable > 0 ? 
-                               (sharesAllocated * 100) / sharesAvailable : 100;
+        (uint currentEpoch, uint currentPrice, , , ) = auction.getCurrentEpochInfo();
         
         // Calculate USD from ETH budget
         uint budgetUSD = budget * 3000; // Assuming $3000/ETH
-        uint targetShares = budgetUSD / 1e18; // Base $1 per share
         
-        if (percentAllocated > 90) {
+        if (currentPrice > 0.7e18) {
             recommendedEpoch = currentEpoch + 1;
             recommendedPrice = 0.1e18; // Low price for next epoch
-            strategy = "Wait for next epoch - current epoch nearly full";
-        } else if (percentAllocated < 20) {
+            strategy = "Wait for next epoch - current price too high";
+        } else if (currentPrice < 0.3e18) {
             recommendedEpoch = currentEpoch;
             recommendedPrice = 0.05e18; // Very low price early
-            strategy = "Bid now at low price - plenty of shares available";
+            strategy = "Bid now at low price - good entry point";
         } else {
-            // Check minimum required
-            uint minPrice = auction.getMinimumPriceForAllocation(targetShares, sharesAvailable);
             recommendedEpoch = currentEpoch;
-            recommendedPrice = (minPrice * 110) / 100; // 10% above minimum
-            strategy = "Bid slightly above minimum for better fill probability";
+            recommendedPrice = currentPrice + 0.1e18; // Slightly above current
+            strategy = "Bid slightly above current price for better fill probability";
         }
     }
 }

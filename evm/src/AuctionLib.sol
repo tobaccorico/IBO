@@ -2,473 +2,559 @@
 pragma solidity ^0.8.20;
 
 import "./imports/SortedSet.sol";
-import "./Settlement.sol";
 import "./Basket.sol";
+import "./Aux.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @title AuctionLib - Secure Library with Enhanced MEV Protection
-/// @notice No commit-reveal needed - uses better mechanisms
 library AuctionLib {
     using Math for uint;
     using SortedSetLib for SortedSetLib.Set;
     
     // Constants
-    uint private constant EPOCH_DURATION = 1 hours;
-    uint private constant MIN_BET_USD = 1e18;
-    uint private constant GAS_FEE_BPS = 50;
-    uint private constant INITIAL_SHARES_PER_EPOCH = 10000e18;
-    uint private constant SHARES_DECAY_RATE = 10;
-    uint private constant MIN_BIDS_FOR_GAS_COMP = 10;
-    uint private constant MAX_BIDS_PER_EPOCH = 1000;
-    uint private constant PRICE_INCREMENT = 0.01e18;
-    uint private constant EXTENSION_THRESHOLD = 2 minutes;
-    uint private constant EXTENSION_DURATION = 5 minutes;
-    uint private constant MAX_EXTENSIONS = 3;
+    uint internal constant MIN_BET_USD = 100e18;
+    uint internal constant BASE_FEE_BPS = 50; // Simple 0.5% flat fee
+    uint internal constant INITIAL_SHARES_PER_EPOCH = 10000e18;
+    uint internal constant SHARES_DECAY_RATE = 10;
+    uint internal constant CLEAR_GAS_PER_BID = 30000;
+    uint internal constant EXTENSION_THRESHOLD = 2 minutes;
+    uint internal constant EXTENSION_DURATION = 5 minutes;
+    uint internal constant MAX_EXTENSIONS = 3;
+    uint internal constant MAX_BATCH_SIZE = 50; // Increased from 40 to prevent stuffing
     
-    // ANTI-MEV Constants
-    uint private constant VELOCITY_DECAY_RATE = 15;      // Slower decay to prevent gaming
-    uint private constant SUSPICIOUS_VELOCITY = 800;     // Higher threshold for penalties
-    uint private constant MAX_VELOCITY_PENALTY = 1000;   // Cap penalty at 10x base fee
+    // Storage slot for lastClearBlock
+    bytes32 constant LAST_CLEAR_BLOCK_SLOT = keccak256("auction.lastClearBlock");
     
-    // Events
-    event EpochExtended(uint indexed epoch, uint newEndTime);
-    
-    /// @notice SECURE: Process bid with enhanced MEV protection
-    function processBidSecure(
-        address bidder,
-        uint ethAmount,
-        uint pricePerShare,
-        bool isYes,
-        uint currentEpochIndex,
-        uint nextBidId,
-        mapping(address => uint) storage lastBidTime,
-        mapping(address => uint) storage bidVelocity,
-        uint epochRandomSeed,
-        AuctionStructs.Epoch storage currentEpoch,
-        mapping(uint => AuctionStructs.Bid) storage allBids,
-        mapping(address => uint[]) storage userBidIds
-    ) external returns (
-        uint bidId,
-        uint usdReceived,
-        uint sharesRequested,
-        uint gasContribution
-    ) {
-        // ENHANCED: Velocity-based fee with anti-gaming measures
-        uint dynamicFeeBps = calculateDynamicGasFeeSecure(lastBidTime, bidVelocity, bidder, epochRandomSeed);
-        gasContribution = (ethAmount * dynamicFeeBps) / 10000;
-        
-        require(ethAmount > gasContribution, "Gas fee too high");
-        uint actualBetETH = ethAmount - gasContribution;
-        
-        // Mock USD conversion
-        usdReceived = actualBetETH * 3000;
-        require(usdReceived >= MIN_BET_USD, "Below minimum USD");
-        
-        // Calculate shares
-        sharesRequested = (usdReceived * 1e18) / pricePerShare;
-        
-        // ENHANCED: Fair pricing with randomized adjustments
-        if (currentEpoch.totalBids > 0) {
-            uint fairPrice = calculateFairPriceSecure(
-                currentEpochIndex,
-                currentEpoch.sharesAvailable,
-                currentEpoch.sharesAllocated,
-                currentEpoch.totalBids,
-                epochRandomSeed
-            );
-            require(pricePerShare >= fairPrice, "Price below fair value");
-        }
-        
-        // ENHANCED: Anti-sniping with unpredictable extensions
-        uint newEndTime = checkEpochExtensionSecure(currentEpochIndex, currentEpoch, epochRandomSeed);
-        currentEpoch.endTime = newEndTime;
-        
-        // Create bid
-        bidId = nextBidId;
-        allBids[bidId] = AuctionStructs.Bid({
-            bidder: bidder,
-            usdAmount: usdReceived,
-            pricePerShare: pricePerShare,
-            sharesRequested: sharesRequested,
-            sharesAllocated: 0,
-            epochIndex: currentEpochIndex,
-            timestamp: block.timestamp,
-            isYes: isYes,
-            processed: false
-        });
-        
-        // Add to sorted set
-        uint sortKey = (type(uint).max - pricePerShare) << 32 | bidId;
-        currentEpoch.sortedBidIds.insert(sortKey);
-        currentEpoch.totalBids++;
-        
-        userBidIds[bidder].push(bidId);
-        currentEpoch.totalGasCollected += gasContribution;
-        
-        return (bidId, usdReceived, sharesRequested, gasContribution);
+    struct InitParams {
+        string name;
+        string symbol;
+        uint32 auctionDuration;
+        uint32 totalEpochs;
+        address owner;
+        address settlementSystem;
+        address rover;
+        address aux;
+        address basket;
     }
     
-    /// @notice SECURE: Enhanced velocity tracking that's harder to game
-    function calculateDynamicGasFeeSecure(
-        mapping(address => uint) storage lastBidTime,
-        mapping(address => uint) storage bidVelocity,
-        address bidder,
-        uint epochRandomSeed
-    ) internal returns (uint feeBps) {
-        uint currentTime = block.timestamp;
-        uint lastBid = lastBidTime[bidder];
+    struct BidContext {
+        address bidder;
+        uint amount;
+        uint price;
+        bool isYes;
+        bool isETH;
+        uint96 epochIndex;
+        uint96 nextBidId;
+        bool bettingWindowClosed;
+        bool resolved;
+    }
+    
+    struct ClearResult {
+        uint newTotalYesShares;
+        uint newTotalNoShares;
+        uint newTotalPoolUSD;
+        uint totalBidsCleared;
+        uint compensation;
+        address[] yesTraders;
+        uint[] yesAmounts;
+        address[] noTraders;
+        uint[] noAmounts;
+    }
+    
+    // Storage access helpers
+    function getLastClearBlock(address auction) internal view returns (uint) {
+        bytes32 slot = keccak256(abi.encode(auction, LAST_CLEAR_BLOCK_SLOT));
+        uint value;
+        assembly {
+            value := sload(slot)
+        }
+        return value;
+    }
+    
+    function setLastClearBlock(address auction, uint blockNumber) internal {
+        bytes32 slot = keccak256(abi.encode(auction, LAST_CLEAR_BLOCK_SLOT));
+        assembly {
+            sstore(slot, blockNumber)
+        }
+    }
+    
+    // Main bid processing
+    function processBidLogic(
+        BidContext memory ctx,
+        address auxSystem,
+        address basketAddress,
+        mapping(address => bool) storage hasParticipated,
+        address[] storage participants
+    ) external returns (uint bidId, uint usdAmount, uint protocolFee) {
+        validateBid(ctx.price, ctx.amount, ctx.bettingWindowClosed, ctx.resolved);
         
-        uint timeSinceLastBid;
-        if (lastBid == 0) {
-            timeSinceLastBid = type(uint).max;
-        } else if (currentTime >= lastBid) {
-            timeSinceLastBid = currentTime - lastBid;
+        // Track participant
+        if (!hasParticipated[ctx.bidder]) {
+            participants.push(ctx.bidder);
+        }
+        
+        // Simple flat fee - no gaming possible
+        uint feeBps = BASE_FEE_BPS;
+        
+        if (ctx.isETH) {
+            protocolFee = (ctx.amount * feeBps) / 10000;
+            uint actualBetETH = ctx.amount - protocolFee;
+            // Mock conversion for testing
+            usdAmount = actualBetETH * 3000; // Assume $3000/ETH
         } else {
-            timeSinceLastBid = type(uint).max;
+            usdAmount = ctx.amount;
+            protocolFee = (usdAmount * feeBps) / 10000;
+            usdAmount -= protocolFee;
         }
         
-        // ENHANCED: More sophisticated velocity calculation
-        uint velocityIncrease = 0;
-        if (timeSinceLastBid < 15) {
-            // Very rapid - maximum penalty
-            velocityIncrease = 400;
-        } else if (timeSinceLastBid < 45) {
-            // Rapid - high penalty  
-            velocityIncrease = 200;
-        } else if (timeSinceLastBid < 120) {
-            // Moderate - medium penalty
-            velocityIncrease = 80;
-        } else if (timeSinceLastBid < 300) {
-            // Slow - small penalty
-            velocityIncrease = 20;
-        } else if (timeSinceLastBid != type(uint).max) {
-            // Decay velocity more gradually to prevent reset gaming
-            uint decayMinutes = timeSinceLastBid / 60;
-            uint decay = decayMinutes * VELOCITY_DECAY_RATE;
-            if (bidVelocity[bidder] > decay) {
-                bidVelocity[bidder] = bidVelocity[bidder] - decay;
-            } else {
-                bidVelocity[bidder] = 0;
-            }
-        }
+        require(usdAmount >= MIN_BET_USD, "Below min");
         
-        // Apply velocity increase
-        if (velocityIncrease > 0) {
-            bidVelocity[bidder] = Math.min(bidVelocity[bidder] + velocityIncrease, MAX_VELOCITY_PENALTY);
-        }
-        
-        lastBidTime[bidder] = currentTime;
-        
-        // ENHANCED: Add randomized component to prevent exact calculation
-        uint randomComponent = (epochRandomSeed % 20); // 0-19 basis points of randomness
-        uint baseVelocityFee = (GAS_FEE_BPS * bidVelocity[bidder]) / 100;
-        
-        return GAS_FEE_BPS + baseVelocityFee + randomComponent;
+        bidId = ctx.nextBidId;
+        return (bidId, usdAmount, protocolFee);
     }
     
-    /// @notice SECURE: Fair price with enhanced unpredictability
-    function calculateFairPriceSecure(
-        uint epochIndex,
-        uint sharesAvailable,
-        uint sharesAllocated,
-        uint totalBids,
-        uint epochRandomSeed
-    ) internal view returns (uint) {
-        if (totalBids == 0) return PRICE_INCREMENT;
+    function depositToken(
+        address basketAddress,
+        address from,
+        address token,
+        uint amount
+    ) external returns (uint) {
+        // TEMPORARY: Mock conversion for testing
+        // TODO: Uncomment for production
+        // return Basket(basketAddress).deposit(from, token, amount);
         
-        uint fillRate = 0;
-        if (sharesAvailable > 0) {
-            fillRate = (sharesAllocated * 100) / sharesAvailable;
-        }
-        
-        // ENHANCED: Multiple sources of randomness
-        uint blockRandomness = uint(keccak256(abi.encode(
-            blockhash(block.number > 0 ? block.number - 1 : 0),
-            block.timestamp,
-            epochIndex,
-            totalBids,
-            epochRandomSeed
-        ))) % 50; // Increased variance
-        
-        // ENHANCED: Non-linear pricing curve that's harder to predict
-        uint basePrice = PRICE_INCREMENT;
-        
-        // Exponential component based on fill rate
-        if (fillRate > 0) {
-            uint exponentialComponent = (fillRate * fillRate * PRICE_INCREMENT) / 2500; // Non-linear
-            basePrice += exponentialComponent;
-        }
-        
-        // Random component
-        uint randomComponent = (blockRandomness * PRICE_INCREMENT) / 200;
-        basePrice += randomComponent;
-        
-        // ENHANCED: Time-based component with unpredictability
-        uint timeElapsed = block.timestamp % 3600;
-        uint timeRandomness = uint(keccak256(abi.encode(timeElapsed, epochRandomSeed))) % 30;
-        uint timeFactor = 70 + (timeElapsed * 20 / 3600) + timeRandomness; // 70-120% range
-        
-        return (basePrice * timeFactor) / 100;
+        // Mock: assume 1:1 conversion for testing
+        return amount;
     }
     
-    /// @notice SECURE: Anti-sniping with unpredictable extensions
-    function checkEpochExtensionSecure(
-        uint epochIndex,
+    // Batch clearing with improved memory management
+    function clearBatchesForBlock(
+        mapping(uint => AuctionStructs.Batch) storage batchesYes,
+        mapping(uint => AuctionStructs.Batch) storage batchesNo,
+        uint blockToClear,
         AuctionStructs.Epoch storage epoch,
-        uint epochRandomSeed
-    ) internal returns (uint newEndTime) {
-        uint currentTime = block.timestamp;
-        uint timeRemaining = 0;
-        if (epoch.endTime > currentTime) {
-            timeRemaining = epoch.endTime - currentTime;
+        mapping(address => uint128) storage userYesShares,
+        mapping(address => uint128) storage userNoShares,
+        uint totalYesShares,
+        uint totalNoShares,
+        uint totalPoolUSD,
+        address basketAddress
+    ) external returns (ClearResult memory result) {
+        result.newTotalYesShares = totalYesShares;
+        result.newTotalNoShares = totalNoShares;
+        result.newTotalPoolUSD = totalPoolUSD;
+        
+        // Process YES batch
+        if (batchesYes[blockToClear].trades.length > 0) {
+            uint poolAdded;
+            (result.yesTraders, result.yesAmounts, poolAdded) = processBatchAndAllocate(
+                batchesYes[blockToClear],
+                true,
+                epoch,
+                userYesShares,
+                basketAddress
+            );
+            result.newTotalYesShares += sumArray(result.yesAmounts);
+            result.newTotalPoolUSD += poolAdded;
+            result.totalBidsCleared += batchesYes[blockToClear].trades.length;
+            delete batchesYes[blockToClear];
         }
         
-        if (timeRemaining < EXTENSION_THRESHOLD && epoch.extensionCount < MAX_EXTENSIONS) {
-            // ENHANCED: Unpredictable extension duration
-            uint randomExtension = uint(keccak256(abi.encode(
-                currentTime, epochIndex, epochRandomSeed, block.difficulty
-            ))) % (8 * 60); // 0-8 minutes variance
-            
-            uint extensionDuration = (3 * 60) + randomExtension; // 3-11 minutes
-            
-            newEndTime = epoch.endTime + extensionDuration;
-            epoch.extensionCount++;
-            emit EpochExtended(epochIndex, newEndTime);
-            return newEndTime;
+        // Process NO batch
+        if (batchesNo[blockToClear].trades.length > 0) {
+            uint poolAdded;
+            (result.noTraders, result.noAmounts, poolAdded) = processBatchAndAllocate(
+                batchesNo[blockToClear],
+                false,
+                epoch,
+                userNoShares,
+                basketAddress
+            );
+            result.newTotalNoShares += sumArray(result.noAmounts);
+            result.newTotalPoolUSD += poolAdded;
+            result.totalBidsCleared += batchesNo[blockToClear].trades.length;
+            delete batchesNo[blockToClear];
         }
-        return epoch.endTime;
+        
+        // Calculate compensation
+        if (result.totalBidsCleared > 0) {
+            result.compensation = calculateGasCompensation(result.totalBidsCleared, tx.gasprice, totalPoolUSD / 100);
+        }
     }
     
-    /// @notice SECURE: Pro-rata allocation with MEV resistance
-    function allocateProRataSecure(
-        SortedSetLib.Set storage sortedBidIds,
-        mapping(uint => AuctionStructs.Bid) storage allBids,
-        uint sharesAvailable,
-        uint sharesAllocated,
-        uint epochRandomSeed
-    ) external returns (uint newSharesAllocated) {
-        uint[] memory sortedKeys = sortedBidIds.getSortedSet();
-        newSharesAllocated = sharesAllocated;
+    function processBatchAndAllocate(
+        AuctionStructs.Batch storage batch,
+        bool isYes,
+        AuctionStructs.Epoch storage epoch,
+        mapping(address => uint128) storage userShares,
+        address basketAddress
+    ) internal returns (address[] memory traders, uint[] memory amounts, uint poolAdded) {
+        uint length = batch.trades.length;
+        traders = new address[](length);
+        amounts = new uint[](length);
         
-        if (sortedKeys.length == 0) return newSharesAllocated;
+        // Sort by price (simplified bubble sort for small batches)
+        uint[] memory indices = new uint[](length);
+        for (uint i = 0; i < length; i++) {
+            indices[i] = i;
+        }
         
-        // ENHANCED: True pro-rata allocation by price tiers
-        uint currentPrice = type(uint).max;
-        uint tierStartIndex = 0;
-        
-        for (uint i = 0; i <= sortedKeys.length; i++) {
-            bool lastIteration = (i == sortedKeys.length);
-            uint bidPrice = lastIteration ? 0 : (type(uint).max - (sortedKeys[i] >> 32));
-            
-            // Process tier when price changes or at end
-            if (bidPrice != currentPrice || lastIteration) {
-                if (i > tierStartIndex) {
-                    newSharesAllocated = allocateTierSecure(
-                        sortedKeys, 
-                        allBids, 
-                        tierStartIndex, 
-                        i - 1, 
-                        sharesAvailable, 
-                        newSharesAllocated,
-                        epochRandomSeed
-                    );
+        for (uint i = 0; i < length - 1; i++) {
+            for (uint j = 0; j < length - i - 1; j++) {
+                if (batch.trades[indices[j]].pricePerShare < batch.trades[indices[j + 1]].pricePerShare) {
+                    uint temp = indices[j];
+                    indices[j] = indices[j + 1];
+                    indices[j + 1] = temp;
                 }
-                currentPrice = bidPrice;
-                tierStartIndex = i;
             }
         }
+        
+        // Allocate shares
+        uint remaining = epoch.sharesAvailable > epoch.sharesAllocated ? 
+                        epoch.sharesAvailable - epoch.sharesAllocated : 0;
+        
+        for (uint i = 0; i < length; i++) {
+            AuctionStructs.Trade memory trade = batch.trades[indices[i]];
+            traders[i] = trade.sender;
+            
+            uint sharesRequested = (trade.amount * 1e18) / trade.pricePerShare;
+            uint sharesAllocated = Math.min(sharesRequested, remaining);
+            
+            if (sharesAllocated > 0) {
+                userShares[trade.sender] += uint128(sharesAllocated);
+                amounts[i] = sharesAllocated;
+                epoch.sharesAllocated += sharesAllocated;
+                remaining -= sharesAllocated;
+                
+                uint usdUsed = (sharesAllocated * trade.pricePerShare) / 1e18;
+                poolAdded += usdUsed;
+                
+                if (sharesAllocated < sharesRequested) {
+                    uint refund = trade.amount - usdUsed;
+                    processRefund(basketAddress, trade.sender, refund);
+                }
+            } else {
+                processRefund(basketAddress, trade.sender, trade.amount);
+            }
+            
+            if (remaining == 0) break;
+        }
     }
     
-    /// @notice SECURE: Tier allocation with anti-gaming measures
-    function allocateTierSecure(
-        uint[] memory sortedKeys,
+    function clearEpochWithSortedSet(
+        AuctionStructs.Epoch storage epoch,
         mapping(uint => AuctionStructs.Bid) storage allBids,
-        uint startIndex,
-        uint endIndex,
-        uint sharesAvailable,
-        uint sharesAllocated,
-        uint epochRandomSeed
-    ) internal returns (uint newSharesAllocated) {
-        // Safe subtraction
-        if (sharesAllocated >= sharesAvailable) {
-            return sharesAllocated;
-        }
+        mapping(address => uint128) storage userYesShares,
+        mapping(address => uint128) storage userNoShares,
+        address basketAddress
+    ) external returns (uint totalYesAllocated, uint totalNoAllocated, uint totalUSDUsed) {
+        require(!epoch.cleared, "Cleared");
+        require(block.timestamp >= epoch.endTime, "Not ended");
         
-        uint sharesRemaining = sharesAvailable - sharesAllocated;
-        if (sharesRemaining == 0) return sharesAllocated;
+        uint allocated = allocateWithSortedSet(epoch.sortedBidIds, allBids, epoch.sharesAvailable);
         
-        // Calculate total demand in this price tier
-        uint tierDemand = 0;
-        for (uint i = startIndex; i <= endIndex; i++) {
+        uint[] memory sortedKeys = epoch.sortedBidIds.getSortedSet();
+        for (uint i = 0; i < sortedKeys.length; i++) {
             uint bidId = uint32(sortedKeys[i]);
             AuctionStructs.Bid storage bid = allBids[bidId];
-            if (!bid.processed) {
-                tierDemand += bid.sharesRequested;
+            
+            if (bid.sharesAllocated > 0) {
+                if (bid.isYes) {
+                    userYesShares[bid.bidder] += uint128(bid.sharesAllocated);
+                    totalYesAllocated += bid.sharesAllocated;
+                } else {
+                    userNoShares[bid.bidder] += uint128(bid.sharesAllocated);
+                    totalNoAllocated += bid.sharesAllocated;
+                }
+                
+                uint usdUsed = (bid.sharesAllocated * bid.pricePerShare) / 1e18;
+                totalUSDUsed += usdUsed;
+                
+                if (bid.sharesAllocated < bid.sharesRequested) {
+                    uint refund = bid.usdAmount - usdUsed;
+                    processRefund(basketAddress, bid.bidder, refund);
+                }
+            } else if (bid.processed) {
+                processRefund(basketAddress, bid.bidder, bid.usdAmount);
             }
         }
         
-        if (tierDemand == 0) return sharesAllocated;
+        epoch.sharesAllocated = allocated;
+        epoch.cleared = true;
+        epoch.clearer = msg.sender;
+    }
+    
+    function allocateWithSortedSet(
+        SortedSetLib.Set storage sortedBids,
+        mapping(uint => AuctionStructs.Bid) storage allBids,
+        uint sharesAvailable
+    ) internal returns (uint sharesAllocated) {
+        uint[] memory sortedKeys = sortedBids.getSortedSet();
+        if (sortedKeys.length == 0) return 0;
         
-        newSharesAllocated = sharesAllocated;
+        uint remaining = sharesAvailable;
+        uint currentPrice = type(uint).max;
+        uint tierStart = 0;
         
-        // ENHANCED: True pro-rata allocation within tier
+        for (uint i = 0; i <= sortedKeys.length; i++) {
+            bool lastIter = (i == sortedKeys.length);
+            uint bidPrice = lastIter ? 0 : (type(uint).max - (sortedKeys[i] >> 32));
+            
+            if (bidPrice != currentPrice || lastIter) {
+                if (i > tierStart) {
+                    uint allocated = allocateTier(sortedKeys, allBids, tierStart, i - 1, remaining);
+                    sharesAllocated += allocated;
+                    remaining -= allocated;
+                    if (remaining == 0) break;
+                }
+                currentPrice = bidPrice;
+                tierStart = i;
+            }
+        }
+    }
+    
+    function allocateTier(
+        uint[] memory sortedKeys,
+        mapping(uint => AuctionStructs.Bid) storage allBids,
+        uint startIdx,
+        uint endIdx,
+        uint sharesRemaining
+    ) internal returns (uint allocated) {
+        if (sharesRemaining == 0) return 0;
+        
+        uint tierDemand = 0;
+        for (uint i = startIdx; i <= endIdx; i++) {
+            uint bidId = uint32(sortedKeys[i]);
+            if (!allBids[bidId].processed) {
+                tierDemand += allBids[bidId].sharesRequested;
+            }
+        }
+        
+        if (tierDemand == 0) return 0;
+        
         if (tierDemand <= sharesRemaining) {
-            // Everyone gets full allocation
-            for (uint i = startIndex; i <= endIndex; i++) {
+            for (uint i = startIdx; i <= endIdx; i++) {
                 uint bidId = uint32(sortedKeys[i]);
                 AuctionStructs.Bid storage bid = allBids[bidId];
                 if (!bid.processed) {
                     bid.sharesAllocated = bid.sharesRequested;
-                    newSharesAllocated += bid.sharesRequested;
+                    allocated += bid.sharesRequested;
                     bid.processed = true;
                 }
             }
         } else {
-            // Pro-rata allocation with small randomization to prevent gaming
-            for (uint i = startIndex; i <= endIndex; i++) {
+            for (uint i = startIdx; i <= endIdx; i++) {
                 uint bidId = uint32(sortedKeys[i]);
                 AuctionStructs.Bid storage bid = allBids[bidId];
                 if (!bid.processed) {
-                    uint baseAllocation = (bid.sharesRequested * sharesRemaining) / tierDemand;
-                    
-                    // ENHANCED: Add tiny random component to prevent precise gaming
-                    uint randomAdjustment = uint(keccak256(abi.encode(epochRandomSeed, bidId))) % 3;
-                    if (randomAdjustment == 1 && baseAllocation > 0) {
-                        baseAllocation = baseAllocation + 1;
-                    } else if (randomAdjustment == 2 && baseAllocation > 1) {
-                        baseAllocation = baseAllocation - 1;
-                    }
-                    
-                    bid.sharesAllocated = baseAllocation;
-                    newSharesAllocated += baseAllocation;
+                    uint allocation = (bid.sharesRequested * sharesRemaining) / tierDemand;
+                    bid.sharesAllocated = allocation;
+                    allocated += allocation;
                     bid.processed = true;
                 }
             }
         }
     }
     
-    /// @notice SECURE: Enhanced epoch timing with unpredictability
-    function startNewEpochSecure(
-        uint epochIndex,
-        uint baseStartTime,
-        uint epochRandomSeed
-    ) external view returns (uint startTime, uint endTime, uint sharesAvailable) {
-        // ENHANCED: Multiple sources of randomness
-        uint combinedSeed = uint(keccak256(abi.encode(
-            epochRandomSeed,
-            block.timestamp,
-            blockhash(block.number > 0 ? block.number - 1 : 0),
-            epochIndex
-        )));
-        
-        // ENHANCED: Less predictable timing
-        uint randomOffset = combinedSeed % (30 * 60); // 30 minutes range
-        
-        if (randomOffset >= (15 * 60)) {
-            startTime = baseStartTime + (randomOffset - (15 * 60));
-        } else {
-            uint subtraction = (15 * 60) - randomOffset;
-            startTime = baseStartTime >= subtraction ? baseStartTime - subtraction : baseStartTime;
-        }
-        
-        if (startTime < block.timestamp) startTime = block.timestamp;
-        
-        // ENHANCED: More variable duration
-        uint durationVariance = (combinedSeed / 1000) % (40 * 60); // 40 minutes variance
-        if (EPOCH_DURATION >= (20 * 60)) {
-            endTime = startTime + (EPOCH_DURATION - (20 * 60)) + durationVariance;
-        } else {
-            endTime = startTime + EPOCH_DURATION + durationVariance;
-        }
-        
-        // ENHANCED: Share calculation with randomness
-        sharesAvailable = INITIAL_SHARES_PER_EPOCH;
-        uint effectiveEpochIndex = epochIndex > 20 ? 20 : epochIndex;
-        for (uint i = 0; i < effectiveEpochIndex; i++) {
-            sharesAvailable = (sharesAvailable * (100 - SHARES_DECAY_RATE)) / 100;
-        }
-        
-        // ENHANCED: More random share adjustment
-        uint shareRandomness = (combinedSeed / 3000) % 21; // 0-20
-        uint adjustment = 90 + shareRandomness; // 90-110%
-        sharesAvailable = (sharesAvailable * adjustment) / 100;
-        
-        if (sharesAvailable < 1000e18) {
-            sharesAvailable = 1000e18;
-        }
-    }
-    
-    // ============ Utility Functions (Same as before) ============
-    
+    // View functions
     function getCurrentEpochInfo(
         AuctionStructs.Epoch storage epoch,
+        uint currentEpochIndex,
+        uint totalEpochs,
         bool bettingWindowClosed
-    ) external view returns (
-        uint currentPrice,
-        uint timeRemaining,
-        uint bidCount,
-        bool isActive
-    ) {
-        if (epoch.sharesAvailable > 0 && epoch.sharesAllocated < epoch.sharesAvailable) {
-            uint sharesRemaining = epoch.sharesAvailable - epoch.sharesAllocated;
-            currentPrice = (1e18 * (epoch.sharesAvailable - sharesRemaining)) / epoch.sharesAvailable;
-            currentPrice = Math.max(currentPrice, 0.01e18);
-            currentPrice = Math.min(currentPrice, 1e18);
-        } else {
-            currentPrice = 1e18;
-        }
+    ) external view returns (uint index, uint currentPrice, uint timeRemaining, uint bidCount, bool isActive) {
+        index = currentEpochIndex;
+        if (index >= totalEpochs) return (index, 0, 0, 0, false);
         
-        timeRemaining = 0;
-        if (epoch.endTime > block.timestamp) {
-            timeRemaining = epoch.endTime - block.timestamp;
-        }
-        
+        uint allocated = epoch.sharesAllocated;
+        uint available = epoch.sharesAvailable;
+        currentPrice = available > 0 ? (allocated * 1e18) / available : 1e18;
+        currentPrice = currentPrice < 0.01e18 ? 0.01e18 : (currentPrice > 1e18 ? 1e18 : currentPrice);
+        timeRemaining = epoch.endTime > block.timestamp ? epoch.endTime - block.timestamp : 0;
         bidCount = epoch.totalBids;
         isActive = !bettingWindowClosed && !epoch.cleared;
     }
     
-    function calculateFairPrice(
-        uint epochIndex,
-        uint sharesAvailable,
-        uint sharesAllocated,
-        uint totalBids
-    ) external view returns (uint) {
-        // Use simplified version for view function
-        if (totalBids == 0) return PRICE_INCREMENT;
-        
-        uint fillRate = 0;
-        if (sharesAvailable > 0) {
-            fillRate = (sharesAllocated * 100) / sharesAvailable;
-        }
-        
-        uint blockRandomness = uint(keccak256(abi.encode(
-            blockhash(block.number > 0 ? block.number - 1 : 0),
-            block.timestamp,
-            epochIndex,
-            totalBids
-        ))) % 30;
-        
-        uint basePrice = PRICE_INCREMENT + (fillRate * PRICE_INCREMENT / 25) + (blockRandomness * PRICE_INCREMENT / 150);
-        uint timeElapsed = block.timestamp % 3600;
-        uint timeFactor = 80 + (timeElapsed * 20 / 3600);
-        
-        return (basePrice * timeFactor) / 100;
+    function getMarketMetrics(
+        uint marketDepth,
+        uint protocolFees,
+        uint lastClear
+    ) external pure returns (uint, uint, uint, uint, uint) {
+        uint threshold = calculateBatchThreshold(marketDepth);
+        return (marketDepth, threshold, 0, protocolFees, lastClear); // 0 for removed entropy
     }
     
-    function getMinimumPriceForAllocation(uint totalSharesWanted, uint epochShares) external pure returns (uint) {
-        if (epochShares == 0) return 1e18;
+    function calculateMarketDepth(
+        uint totalYesShares,
+        uint totalNoShares,
+        uint totalPoolUSD
+    ) external pure returns (uint) {
+        return totalPoolUSD;
+    }
+    
+    function calculateUserPayout(
+        address user,
+        bool outcome,
+        uint128 userYesShares,
+        uint128 userNoShares,
+        uint totalYesShares,
+        uint totalNoShares,
+        uint totalPoolUSD
+    ) external pure returns (uint) {
+        uint userWinningShares = outcome ? userYesShares : userNoShares;
+        uint totalWinningShares = outcome ? totalYesShares : totalNoShares;
         
-        uint percentOfEpoch = (totalSharesWanted * 100) / epochShares;
+        if (userWinningShares == 0 || totalWinningShares == 0) return 0;
+        return (userWinningShares * totalPoolUSD) / totalWinningShares;
+    }
+    
+    // Price tier functions
+    function getPriceTierAt(uint index) internal pure returns (uint) {
+        if (index == 0) return 0.10e18;
+        if (index == 1) return 0.20e18;
+        if (index == 2) return 0.30e18;
+        if (index == 3) return 0.40e18;
+        if (index == 4) return 0.50e18;
+        if (index == 5) return 0.60e18;
+        if (index == 6) return 0.70e18;
+        if (index == 7) return 0.80e18;
+        if (index == 8) return 0.90e18;
+        return 1.00e18;
+    }
+    
+    function normalizePriceToTier(uint rawPrice) public pure returns (uint) {
+        for (uint i = 0; i < 10; i++) {
+            if (rawPrice <= getPriceTierAt(i)) {
+                return getPriceTierAt(i);
+            }
+        }
+        return getPriceTierAt(9);
+    }
+    
+    // Anti-sniping extension check
+    function checkEpochExtension(uint epochEndTime, uint extensionCount) public view returns (bool shouldExtend, uint newEndTime) {
+        uint timeRemaining = epochEndTime > block.timestamp ? epochEndTime - block.timestamp : 0;
         
-        if (percentOfEpoch <= 2) return 0.01e18;
-        if (percentOfEpoch <= 5) return 0.03e18;
-        if (percentOfEpoch <= 10) return 0.08e18;
-        if (percentOfEpoch <= 15) return 0.20e18;
-        if (percentOfEpoch <= 20) return 0.35e18;
-        if (percentOfEpoch <= 30) return 0.55e18;
-        if (percentOfEpoch <= 40) return 0.75e18;
-        if (percentOfEpoch <= 50) return 0.90e18;
-        return 0.98e18;
+        if (timeRemaining < EXTENSION_THRESHOLD && extensionCount < MAX_EXTENSIONS) {
+            shouldExtend = true;
+            newEndTime = epochEndTime + EXTENSION_DURATION;
+        } else {
+            shouldExtend = false;
+            newEndTime = epochEndTime;
+        }
+    }
+    
+    function checkEpochProgression(
+        AuctionStructs.Epoch storage epoch,
+        uint currentEpochIndex,
+        uint totalEpochs
+    ) public view returns (bool shouldProgress, bool shouldCloseWindow) {
+        if (currentEpochIndex >= totalEpochs) {
+            return (false, true);
+        }
+        
+        bool timeExpired = block.timestamp >= epoch.endTime;
+        bool nearlyAllocated = epoch.sharesAllocated >= (epoch.sharesAvailable * 95) / 100;
+        
+        shouldProgress = timeExpired || nearlyAllocated;
+        shouldCloseWindow = shouldProgress && (currentEpochIndex + 1 >= totalEpochs);
+    }
+    
+    function initializeEpoch(AuctionStructs.Epoch storage epoch, uint epochIndex) public {
+        epoch.startTime = block.timestamp;
+        epoch.endTime = block.timestamp + 1 hours;
+        epoch.sharesAvailable = calculateEpochShares(epochIndex);
+        epoch.sharesAllocated = 0;
+        epoch.totalBids = 0;
+        epoch.totalGasCollected = 0;
+        epoch.cleared = false;
+    }
+    
+    function queueBidToBatch(
+        mapping(uint => AuctionStructs.Batch) storage batches,
+        address bidder,
+        uint usdAmount,
+        uint pricePerShare,
+        uint maxBatchSize
+    ) external returns (uint targetBlock) {
+        targetBlock = block.number;
+        
+        while (batches[targetBlock].trades.length >= maxBatchSize) {
+            targetBlock++;
+        }
+        
+        batches[targetBlock].trades.push(AuctionStructs.Trade({
+            sender: bidder,
+            amount: usdAmount,
+            pricePerShare: pricePerShare
+        }));
+        batches[targetBlock].total += usdAmount;
+    }
+    
+    // Helper functions
+    function swapETHtoUSD(address auxAddress, address basketAddress, uint ethAmount) public returns (uint usdReceived) {
+        usdReceived = ethAmount * 3000; // Mock for testing
+    }
+    
+    function processRefund(address basketAddress, address user, uint amount) public {
+        if (amount > 0) {
+            Basket(basketAddress).mint(user, amount, basketAddress, 0);
+        }
+    }
+    
+    function calculateEpochShares(uint epochIndex) public pure returns (uint) {
+        uint shares = INITIAL_SHARES_PER_EPOCH;
+        
+        for (uint i = 0; i < epochIndex && i < 20; i++) {
+            shares = (shares * (100 - SHARES_DECAY_RATE)) / 100;
+        }
+        
+        return shares < 1000e18 ? 1000e18 : shares;
+    }
+    
+    function calculateGasCompensation(uint bidsCleared, uint gasPrice, uint availableFees) public pure returns (uint compensation) {
+        uint estimatedGas = CLEAR_GAS_PER_BID * bidsCleared + 50000;
+        compensation = estimatedGas * gasPrice * 2;
+        
+        uint maxCompensation = availableFees / 20;
+        if (compensation > maxCompensation) {
+            compensation = maxCompensation;
+        }
+    }
+    
+    function calculateBatchThreshold(uint totalMarketDepth) public pure returns (uint) {
+        if (totalMarketDepth < 10000e18) return 1000e18;
+        if (totalMarketDepth < 100000e18) return 2000e18;
+        if (totalMarketDepth < 1000000e18) return 5000e18;
+        return 10000e18;
+    }
+    
+    function shouldClearBatch(uint yesBidsCount, uint noBidsCount, uint yesTotal, uint noTotal) public pure returns (bool) {
+        return (yesBidsCount + noBidsCount >= 10) || (yesTotal + noTotal >= 50000e18);
+    }
+    
+    function validateBid(uint pricePerShare, uint amount, bool bettingWindowClosed, bool resolved) public pure {
+        require(!bettingWindowClosed && !resolved, "Closed");
+        
+        bool validTier = false;
+        for (uint i = 0; i < 10; i++) {
+            if (pricePerShare == getPriceTierAt(i)) {
+                validTier = true;
+                break;
+            }
+        }
+        require(validTier, "Invalid tier");
+        require(amount >= MIN_BET_USD || amount >= 0.03 ether, "Below min");
+    }
+    
+    // Additional anti-grief: Check if user has too many pending bids
+    function checkBidLimit(uint[] memory userBids, uint maxPendingBids) public pure {
+        require(userBids.length < maxPendingBids, "Too many bids");
+    }
+    
+    function sumArray(uint[] memory arr) internal pure returns (uint sum) {
+        for (uint i = 0; i < arr.length; i++) {
+            sum += arr[i];
+        }
     }
 }
 
@@ -479,7 +565,7 @@ library AuctionStructs {
         uint pricePerShare;
         uint sharesRequested;
         uint sharesAllocated;
-        uint epochIndex;
+        uint96 epochIndex;
         uint timestamp;
         bool isYes;
         bool processed;
@@ -492,10 +578,20 @@ library AuctionStructs {
         uint sharesAllocated;
         uint totalBids;
         uint totalGasCollected;
-        uint extensionCount;
         bool cleared;
-        bool gasCompensated;
         address clearer;
         SortedSetLib.Set sortedBidIds;
+        uint8 extensionCount;
+    }
+    
+    struct Trade {
+        address sender;
+        uint amount;
+        uint pricePerShare;
+    }
+    
+    struct Batch {
+        Trade[] trades;
+        uint total;
     }
 }

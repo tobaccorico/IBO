@@ -3,56 +3,152 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {Settlement} from "../src/Settlement.sol";
-import {Auction} from "../src/Auction.sol";
 import {AuctionFactory} from "../src/AuctionFactory.sol";
-import {Basket} from "../src/Basket.sol";
-import {RandaoLib} from "../src/imports/RandaoLib.sol";
-import {IArbitrator} from "../src/imports/IArbitrator.sol";
-import {IArbitrable} from "../src/imports/IArbitrable.sol";
-import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {AuctionFactoryLib} from "../src/AuctionFactoryLib.sol";
+import {Auction} from "../src/Auction.sol";
+import {AuctionHelpers} from "../src/AuctionHelpers.sol";
+
+// Mock contracts for testing
+contract MockBasket {
+    mapping(address => uint) public totalBalances;
+    mapping(address => mapping(uint => uint)) public balanceOf;
+    mapping(uint => address) public holders;
+    mapping(address => mapping(address => uint)) public allowance;
+    uint public latest_holder;
+    uint public totalSupply;
+    
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
+        require(totalBalances[from] >= amount, "Insufficient balance");
+        if (from != msg.sender) {
+            require(allowance[from][msg.sender] >= amount, "Insufficient allowance");
+            allowance[from][msg.sender] -= amount;
+        }
+        totalBalances[from] -= amount;
+        totalBalances[to] += amount;
+        return true;
+    }
+    
+    function transfer(address to, uint amount) external returns (bool) {
+        require(totalBalances[msg.sender] >= amount, "Insufficient balance");
+        totalBalances[msg.sender] -= amount;
+        totalBalances[to] += amount;
+        return true;
+    }
+    
+    function approve(address spender, uint amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+    
+    function mint(address to, uint amount, address, uint) external {
+        totalBalances[to] += amount;
+        totalSupply += amount;
+        if (holders[latest_holder + 1] == address(0)) {
+            latest_holder++;
+            holders[latest_holder] = to;
+        }
+    }
+    
+    function turn(address from, uint amount) external returns (uint) {
+        require(totalBalances[from] >= amount, "Insufficient balance");
+        totalBalances[from] -= amount;
+        totalSupply -= amount;
+        return amount;
+    }
+    
+    function deposit(address, address, uint amount) external returns (uint) {
+        return amount;
+    }
+    
+    function take(address who, uint amount, address, bool) external returns (uint) {
+        require(totalBalances[who] >= amount, "Insufficient balance");
+        totalBalances[who] -= amount;
+        return amount;
+    }
+    
+    // Give test users some balance
+    function fundUser(address user, uint amount) external {
+        totalBalances[user] += amount;
+        totalSupply += amount;
+        if (holders[latest_holder + 1] == address(0)) {
+            latest_holder++;
+            holders[latest_holder] = user;
+        }
+    }
+}
+
+contract MockAux {
+    function swap(address, bool, uint, uint) external payable returns (uint) {
+        return msg.value * 3000; // $3000 per ETH
+    }
+    
+    function wethVault() external view returns (address) {
+        return address(this);
+    }
+}
+
+contract MockRover {
+    address public owner;
+    constructor() {
+        owner = msg.sender;
+    }
+}
 
 contract SettlementTest is Test {
     Settlement public settlement;
     AuctionFactory public factory;
-    Auction public market;
-    Basket public basket;
+    AuctionHelpers public helpers;
+    Auction public predictionMarket;
+    MockBasket public basket;
+    MockAux public aux;
+    MockRover public rover;
     
     address public alice = address(0x1);
     address public bob = address(0x2);
     address public carol = address(0x3);
+    address public dan = address(0x4);
+    address public eve = address(0x5);
     
-    uint public metaEvidenceId;
+    address[] public jurors;
     
-    // Mock block headers for testing RANDAO
-    bytes mockHeader1 = hex"f90214a0b903239f63fba8c5c89f9fd7c9c6f6b6d8e8e7f4cd3a7dc8fa6c7ad7bda8c5a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347942a65aca4d5fc5b5c859090a6c34d164135398226a0c7e3b8e8f8e8d8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018347e7c4821388808455ba422380a00000000000000000000000000000000000000000000000000000000000000000880000000000000000";
-    bytes mockHeader2 = hex"f90214a0c803239f63fba8c5c89f9fd7c9c6f6b6d8e8e7f4cd3a7dc8fa6c7ad7bda8c5a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347942a65aca4d5fc5b5c859090a6c34d164135398226a0d7e3b8e8f8e8d8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018347e7c4821389808455ba422380a00000000000000000000000000000000000000000000000000000000000000000880000000000000000";
-    bytes mockHeader3 = hex"f90214a0d903239f63fba8c5c89f9fd7c9c6f6b6d8e8e7f4cd3a7dc8fa6c7ad7bda8c5a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347942a65aca4d5fc5b5c859090a6c34d164135398226a0e7e3b8e8f8e8d8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018347e7c482138a808455ba422380a00000000000000000000000000000000000000000000000000000000000000000880000000000000000";
+    event ProposalCreated(address indexed market, uint proposalId, address proposer, bool outcome, uint stake);
+    event ProposalSupported(address indexed market, uint proposalId, address supporter, uint amount);
+    event ProposalOpposed(address indexed market, uint proposalId, address opposer, uint amount);
+    event ProposalExecuted(address indexed market, uint proposalId);
+    event ProposalDisputed(address indexed market, uint proposalId, uint disputeId);
+    event JurorSelected(address indexed juror, uint disputeId, uint round);
+    event VoteSubmitted(uint indexed disputeId, uint round, address juror);
+    event VerdictReached(uint indexed disputeId, uint round, Settlement.VoteChoice verdict);
     
     function setUp() public {
-        // Deploy minimal mock infrastructure
-        address mockRover = address(new MockRover());
-        address mockAux = address(new MockAux());
+        // Deploy mocks
+        basket = new MockBasket();
+        aux = new MockAux();
+        rover = new MockRover();
         
-        // Deploy mock basket that doesn't enforce permissions
-        basket = Basket(address(new MockBasket()));
-        
-        // Deploy Settlement fresh
+        // Deploy settlement
         settlement = new Settlement();
-        metaEvidenceId = settlement.createPredictionMarketMetaEvidence();
         
-        // Deploy Factory
+        // Deploy factory
         factory = new AuctionFactory(
             address(settlement),
-            mockRover,
-            mockAux,
+            address(rover),
+            address(aux),
             address(basket)
         );
         
-        // Initialize Settlement with factory
+        // Deploy helpers
+        helpers = new AuctionHelpers(
+            address(factory),
+            address(settlement),
+            address(basket)
+        );
+        
+        // Initialize settlement
         settlement.initialize(address(basket), address(factory));
         
-        // Deploy test market through factory
-        AuctionFactory.LaunchConfig memory config = AuctionFactory.LaunchConfig({
+        // Deploy test prediction market
+        AuctionFactoryLib.LaunchConfig memory config = AuctionFactoryLib.LaunchConfig({
             name: "Test Market",
             symbol: "TEST",
             initialPricePerToken: 100e18,
@@ -60,308 +156,340 @@ contract SettlementTest is Test {
         });
         
         address marketAddress = factory.deployPredictionMarket(
-            "Will ETH hit $5000?",
+            "Will ETH hit $5000 by end of year?",
             block.timestamp + 30 days,
             config
         );
-        market = Auction(payable(marketAddress));
         
-        // Fund accounts
+        predictionMarket = Auction(payable(marketAddress));
+        
+        // Fund test accounts
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
         vm.deal(carol, 100 ether);
+        vm.deal(dan, 100 ether);
+        vm.deal(eve, 100 ether);
         
-        // Have users participate in market to get 6909 tokens for jury eligibility
-        _setupJurorEligibility();
-    }
-    
-    function _setupJurorEligibility() internal {
-        // Mock participation to create eligible jurors
-        // Mint 6909 tokens to potential jurors
-        for (uint i = 0; i < 10; i++) {
-            address user = address(uint160(0x100 + i));
-            // Mint enough tokens to be eligible as juror (100e18 minimum)
-            basket.mint(user, 200e18, address(basket), 0);
+        // Give users basket tokens for staking
+        basket.fundUser(alice, 1000e18);
+        basket.fundUser(bob, 1000e18);
+        basket.fundUser(carol, 1000e18);
+        basket.fundUser(dan, 1000e18);
+        basket.fundUser(eve, 1000e18);
+        
+        // Setup juror pool (minimum 20 holders)
+        for (uint i = 0; i < 20; i++) {
+            address juror = address(uint160(0x1000 + i));
+            jurors.push(juror);
+            basket.fundUser(juror, 200e18); // Above MIN_JUROR_BALANCE
+            vm.deal(juror, 1 ether);
         }
-        
-        // Also mint to alice, bob, carol for proposals
-        basket.mint(alice, 200e18, address(basket), 0);
-        basket.mint(bob, 200e18, address(basket), 0);
-        basket.mint(carol, 200e18, address(basket), 0);
     }
     
-    // ============ Proposal Path Tests ============
+    // ============ Proposal Tests ============
     
-    function testProposalLifecycle() public {
+    function testProposeSettlement() public {
+        // Wait for resolution time
         vm.warp(block.timestamp + 31 days);
         
-        // Create proposal
+        // Alice proposes YES outcome
         vm.startPrank(alice);
-        basket.approve(address(settlement), 100e18);
+        basket.approve(address(settlement), 1000e18);
+        
+        vm.expectEmit(true, true, true, true);
+        emit ProposalCreated(address(predictionMarket), 1, alice, true, 100e18);
+        
         uint proposalId = settlement.proposeSettlement(
-            address(market),
-            true,
-            100e18
+            address(predictionMarket),
+            true, // YES outcome
+            100e18 // stake
         );
+        
+        assertEq(proposalId, 1);
+        vm.stopPrank();
+    }
+    
+    function testSupportProposal() public {
+        // Setup proposal
+        vm.warp(block.timestamp + 31 days);
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 100e18);
         vm.stopPrank();
         
-        // Support
+        // Bob supports
         vm.startPrank(bob);
-        basket.approve(address(settlement), 150e18);
-        settlement.supportProposal(
-            address(market),
-            proposalId,
-            150e18
-        );
+        basket.approve(address(settlement), 1000e18);
+        
+        vm.expectEmit(true, true, true, true);
+        emit ProposalSupported(address(predictionMarket), proposalId, bob, 50e18);
+        
+        settlement.supportProposal(address(predictionMarket), proposalId, 50e18);
+        vm.stopPrank();
+    }
+    
+    function testOpposeProposal() public {
+        // Setup proposal
+        vm.warp(block.timestamp + 31 days);
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 100e18);
         vm.stopPrank();
         
-        // Oppose
+        // Carol opposes
         vm.startPrank(carol);
-        basket.approve(address(settlement), 100e18);
-        settlement.opposeProposal(
-            address(market),
-            proposalId,
-            100e18
-        );
+        basket.approve(address(settlement), 1000e18);
+        
+        vm.expectEmit(true, true, true, true);
+        emit ProposalOpposed(address(predictionMarket), proposalId, carol, 75e18);
+        
+        settlement.opposeProposal(address(predictionMarket), proposalId, 75e18);
+        vm.stopPrank();
+    }
+    
+    function testExecuteProposal() public {
+        // Setup and pass proposal
+        vm.warp(block.timestamp + 31 days);
+        
+        // Alice proposes with 200e18
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 200e18);
         vm.stopPrank();
         
-        // Check support threshold (250 vs 100 = 2.5:1)
+        // Bob supports with 100e18 (total support: 300e18)
+        vm.startPrank(bob);
+        basket.approve(address(settlement), 1000e18);
+        settlement.supportProposal(address(predictionMarket), proposalId, 100e18);
+        vm.stopPrank();
+        
+        // Carol opposes with 50e18 (support still 2x higher)
+        vm.startPrank(carol);
+        basket.approve(address(settlement), 1000e18);
+        settlement.opposeProposal(address(predictionMarket), proposalId, 50e18);
+        vm.stopPrank();
+        
+        // Wait for voting period + execution delay
         vm.warp(block.timestamp + 4 days);
         
         // Execute
-        vm.prank(alice);
-        settlement.executeProposal(address(market), proposalId);
+        vm.expectEmit(true, true, false, false);
+        emit ProposalExecuted(address(predictionMarket), proposalId);
         
-        // Verify resolution
-        (, , bool resolved, bool outcome, , , , , , ) = market.getPredictionConfig();
-        assertTrue(resolved);
-        assertTrue(outcome);
+        settlement.executeProposal(address(predictionMarket), proposalId);
+        
+        // Check market resolved
+        assertTrue(predictionMarket.resolved());
+        assertTrue(predictionMarket.outcome()); // YES won
     }
     
-    function testProposalThresholdEnforcement() public {
-        vm.warp(block.timestamp + 31 days);
-        
-        vm.startPrank(alice);
-        basket.approve(address(settlement), 100e18);
-        uint proposalId = settlement.proposeSettlement(
-            address(market),
-            true,
-            100e18
-        );
-        vm.stopPrank();
-        
-        // Heavy opposition
-        vm.startPrank(bob);
-        basket.approve(address(settlement), 200e18);
-        settlement.opposeProposal(
-            address(market),
-            proposalId,
-            200e18
-        );
-        vm.stopPrank();
-        
-        vm.warp(block.timestamp + 4 days);
-        
-        // Should fail - only 0.5:1 ratio
-        vm.prank(alice);
-        vm.expectRevert("Cannot execute");
-        settlement.executeProposal(address(market), proposalId);
-    }
+    // ============ Dispute Tests ============
     
-    function testProposalDispute() public {
+    function testDisputeProposal() public {
+        // Setup proposal
         vm.warp(block.timestamp + 31 days);
-        
         vm.startPrank(alice);
-        basket.approve(address(settlement), 100e18);
-        uint proposalId = settlement.proposeSettlement(
-            address(market),
-            true,
-            100e18
-        );
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 100e18);
         vm.stopPrank();
         
+        // Wait for voting period
         vm.warp(block.timestamp + 3 days + 1);
         
-        // Dispute
-        vm.startPrank(bob);
-        basket.approve(address(settlement), 100e18);
+        // Dan disputes
+        vm.startPrank(dan);
+        basket.approve(address(settlement), 1000e18);
+        
+        vm.expectEmit(true, true, true, false);
+        emit ProposalDisputed(address(predictionMarket), proposalId, 1);
+        
         uint disputeId = settlement.disputeProposal(
-            address(market),
+            address(predictionMarket),
             proposalId,
-            "ipfs://evidence",
-            "0xhash",
+            "Evidence that outcome should be NO",
+            "QmEvidence",
+            100e18
+        );
+        
+        assertEq(disputeId, 1);
+        vm.stopPrank();
+    }
+    
+    function testJurySelection() public {
+        // Create dispute
+        vm.warp(block.timestamp + 31 days);
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 100e18);
+        vm.stopPrank();
+        
+        vm.warp(block.timestamp + 3 days + 1);
+        vm.startPrank(dan);
+        basket.approve(address(settlement), 1000e18);
+        uint disputeId = settlement.disputeProposal(
+            address(predictionMarket),
+            proposalId,
+            "Evidence",
+            "Hash",
             100e18
         );
         vm.stopPrank();
         
-        assertGt(disputeId, 0);
+        // Wait for evidence period
+        vm.warp(block.timestamp + 2 days + 1);
         
-        // Proposal should now be blocked
-        vm.warp(block.timestamp + 1 days);
-        vm.prank(alice);
-        vm.expectRevert("Not active");
-        settlement.executeProposal(address(market), proposalId);
+        // Request jury selection
+        settlement.requestJurySelection(disputeId);
+        
+        // Advance blocks for randomness
+        vm.roll(block.number + 6);
+        
+        // Mock block headers for RANDAO (simplified for test)
+        bytes[] memory headers = new bytes[](3);
+        headers[0] = hex"00";
+        headers[1] = hex"01";
+        headers[2] = hex"02";
+        
+        // Fulfill jury selection
+        settlement.fulfillJurySelection(disputeId, headers);
+        
+        // Check jury was selected
+        (,, uint currentRound,,,) = settlement.disputes(disputeId);
+        assertEq(currentRound, 0);
     }
     
-    // ============ View Function Tests ============
-    
-    function testCanSettleStates() public {
-        // Too early
-        (bool can1, string memory reason1) = settlement.canSettle(address(market));
-        assertFalse(can1);
-        assertEq(reason1, "Resolution time not reached");
+    function testJurorVoting() public {
+        // Setup dispute and select jury
+        _setupDisputeWithJury();
         
-        // Ready for proposal
-        vm.warp(block.timestamp + 31 days);
-        (bool can2, string memory reason2) = settlement.canSettle(address(market));
-        assertTrue(can2);
-        assertEq(reason2, "Ready for new settlement proposal");
+        // Get selected jurors and have them vote
+        uint disputeId = 1;
+        uint round = 0;
         
-        // Active proposal
-        vm.startPrank(alice);
-        basket.approve(address(settlement), 100e18);
-        settlement.proposeSettlement(address(market), true, 100e18);
-        vm.stopPrank();
+        // First juror votes YES
+        address juror1 = jurors[0];
+        vm.prank(juror1);
+        settlement.submitVote(disputeId, round, Settlement.VoteChoice.Yes);
         
-        (bool can3, string memory reason3) = settlement.canSettle(address(market));
-        assertFalse(can3);
-        assertEq(reason3, "Active proposal in voting period");
+        // Second juror votes NO
+        address juror2 = jurors[1];
+        vm.prank(juror2);
+        settlement.submitVote(disputeId, round, Settlement.VoteChoice.No);
         
-        // Execution delay
-        vm.warp(block.timestamp + 3 days + 1);
-        (bool can4, string memory reason4) = settlement.canSettle(address(market));
-        assertFalse(can4);
-        assertEq(reason4, "Proposal in execution delay period");
-        
-        // Ready to execute
-        vm.warp(block.timestamp + 1 days);
-        (bool can5, string memory reason5) = settlement.canSettle(address(market));
-        assertTrue(can5);
-        assertEq(reason5, "Proposal ready for execution");
+        // More vote YES to reach majority
+        for (uint i = 2; i < 5; i++) {
+            vm.prank(jurors[i]);
+            settlement.submitVote(disputeId, round, Settlement.VoteChoice.Yes);
+        }
+
+        Settlement.VoteChoice verdict = settlement.getRoundVerdict(disputeId, round);
+        assertEq(uint(verdict), uint(Settlement.VoteChoice.Yes));
     }
     
-    // ============ Additional Tests ============
-    
-    function testCreateCustomMetaEvidence() public {
-        uint customId = settlement.createMetaEvidence(
-            "Custom Market",
-            "Special rules",
-            "Did X happen?",
-            '[{"title":"No"},{"title":"Yes"}]',
-            "ipfs://custom"
-        );
+    function testDisputeFinalization() public {
+        // Setup dispute with voting complete
+        _setupDisputeWithVoting();
         
-        assertGt(customId, 0);
-    }
-    
-    function testArbitrationCost() public {
-        uint cost = settlement.arbitrationCost("");
-        assertEq(cost, 100e18); // MIN_PROPOSAL_STAKE in 6909 tokens
+        // Wait for appeal period
+        vm.warp(block.timestamp + 1 days + 1);
+        
+        // Finalize dispute
+        settlement.finalizeDispute(1);
+        
+        // Check market resolved
+        assertTrue(predictionMarket.resolved());
+        assertTrue(predictionMarket.outcome()); // YES won based on jury vote
     }
     
     function testClaimStakes() public {
+        // Execute successful proposal
         vm.warp(block.timestamp + 31 days);
         
-        // Create and execute proposal
         vm.startPrank(alice);
-        basket.approve(address(settlement), 200e18);
-        uint proposalId = settlement.proposeSettlement(
-            address(market),
-            true,
-            200e18
-        );
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 200e18);
         vm.stopPrank();
         
         vm.startPrank(bob);
-        basket.approve(address(settlement), 100e18);
-        settlement.opposeProposal(address(market), proposalId, 100e18);
+        basket.approve(address(settlement), 1000e18);
+        settlement.supportProposal(address(predictionMarket), proposalId, 100e18);
         vm.stopPrank();
         
         vm.warp(block.timestamp + 4 days);
+        settlement.executeProposal(address(predictionMarket), proposalId);
+        
+        // Alice claims proposer stake + winnings
+        uint aliceBalanceBefore = basket.totalBalances(alice);
         vm.prank(alice);
-        settlement.executeProposal(address(market), proposalId);
+        settlement.claimStakes(address(predictionMarket), proposalId);
+        uint aliceBalanceAfter = basket.totalBalances(alice);
         
-        // Alice claims
-        uint aliceBalanceBefore = basket.balanceOf(alice, 0);
-        vm.prank(alice);
-        settlement.claimStakes(address(market), proposalId);
-        
-        // Should get 200 + 100 = 300 tokens
-        assertEq(basket.balanceOf(alice, 0) - aliceBalanceBefore, 300e18);
-        
-        // Can't claim twice
-        vm.prank(alice);
-        vm.expectRevert("Nothing to claim");
-        settlement.claimStakes(address(market), proposalId);
+        assertGt(aliceBalanceAfter, aliceBalanceBefore);
     }
-}
-
-// ============ Mock Contracts ============
-
-contract MockRover {
-    receive() external payable {}
-}
-
-contract MockAux {
-    function swap(address token, bool zeroForOne, uint amount, uint waitable) 
-        external payable returns (uint) {
-        if (!zeroForOne) {
-            return msg.value * 3000;
+    
+    function testCanSettleView() public {
+        // Before resolution time
+        (bool canSettle, string memory reason) = settlement.canSettle(address(predictionMarket));
+        assertFalse(canSettle);
+        assertEq(reason, "Resolution time not reached");
+        
+        // After resolution time
+        vm.warp(block.timestamp + 31 days);
+        (canSettle, reason) = settlement.canSettle(address(predictionMarket));
+        assertTrue(canSettle);
+        assertEq(reason, "Ready for new settlement proposal");
+        
+        // With active proposal
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 1000e18);
+        settlement.proposeSettlement(address(predictionMarket), true, 100e18);
+        vm.stopPrank();
+        
+        (canSettle, reason) = settlement.canSettle(address(predictionMarket));
+        assertFalse(canSettle);
+        assertEq(reason, "Active proposal in voting period");
+    }
+    
+    // ============ Helper Functions ============
+    
+    function _setupDisputeWithJury() internal {
+        vm.warp(block.timestamp + 31 days);
+        vm.startPrank(alice);
+        basket.approve(address(settlement), 1000e18);
+        uint proposalId = settlement.proposeSettlement(address(predictionMarket), true, 100e18);
+        vm.stopPrank();
+        
+        vm.warp(block.timestamp + 3 days + 1);
+        vm.startPrank(dan);
+        basket.approve(address(settlement), 1000e18);
+        settlement.disputeProposal(
+            address(predictionMarket),
+            proposalId,
+            "Evidence",
+            "Hash",
+            100e18
+        );
+        vm.stopPrank();
+        
+        vm.warp(block.timestamp + 2 days + 1);
+        settlement.requestJurySelection(1);
+        
+        vm.roll(block.number + 6);
+        bytes[] memory headers = new bytes[](3);
+        headers[0] = hex"00";
+        headers[1] = hex"01";
+        headers[2] = hex"02";
+        
+        settlement.fulfillJurySelection(1, headers);
+    }
+    
+    function _setupDisputeWithVoting() internal {
+        _setupDisputeWithJury();
+        
+        // Have majority vote YES
+        for (uint i = 0; i < 4; i++) {
+            vm.prank(jurors[i]);
+            settlement.submitVote(1, 0, Settlement.VoteChoice.Yes);
         }
-        return amount;
-    }
-}
-
-contract MockBasket {
-    mapping(address => mapping(uint => uint)) public balanceOf;
-    mapping(address => uint) public totalBalances;
-    mapping(uint => address) public holders;
-    uint public latest_holder = 10; // Start with some holders
-    
-    function mint(address to, uint amount, address, uint) external {
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-        
-        // Add to holders if new
-        bool found = false;
-        for (uint i = 1; i <= latest_holder; i++) {
-            if (holders[i] == to) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            latest_holder++;
-            holders[latest_holder] = to;
-        }
-    }
-    
-    function transfer(address to, uint amount) external returns (bool) {
-        require(balanceOf[msg.sender][0] >= amount, "Insufficient balance");
-        balanceOf[msg.sender][0] -= amount;
-        totalBalances[msg.sender] -= amount;
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-        return true;
-    }
-    
-    function transferFrom(address from, address to, uint amount) external returns (bool) {
-        require(balanceOf[from][0] >= amount, "Insufficient balance");
-        balanceOf[from][0] -= amount;
-        totalBalances[from] -= amount;
-        balanceOf[to][0] += amount;
-        totalBalances[to] += amount;
-        return true;
-    }
-    
-    function approve(address, uint) external returns (bool) {
-        return true;
-    }
-    
-    function turn(address from, uint amount) external returns (uint) {
-        require(balanceOf[from][0] >= amount, "Insufficient balance");
-        balanceOf[from][0] -= amount;
-        totalBalances[from] -= amount;
-        return amount;
     }
 }

@@ -4,47 +4,29 @@ pragma solidity ^0.8.20;
 import "./Auction.sol";
 import "./Settlement.sol";
 import "./AuctionFactoryLib.sol";
-import "@openzeppelin/contracts/proxy/Clones.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title AuctionFactory - Deploy Belgian Auctions for Social Betting
-/// @notice Factory for deploying prediction markets using minimal proxy pattern
-/// @dev All markets use shared infrastructure (Settlement, Rover, Aux, Basket)
 contract AuctionFactory is Ownable {
-    using Clones for address;
     
-    // ============ Structs ============
-    
-    /// @dev Configuration for launching new markets
-    struct LaunchConfig {
-        string name;
-        string symbol;
-        uint initialPricePerToken;
-        uint auctionDuration;
-    }
-    
-    // ============ State Variables ============
-    
-    // Core infrastructure (shared across all markets)
+    // Core infrastructure
     address public immutable auctionImplementation;
     Settlement public immutable settlementSystem;
     address public immutable rover;
     address public immutable aux;
     address public immutable basket;
     
-    // Deployed auction tracking
+    // Tracking
     address[] public auctions;
-    mapping(address => LaunchConfig) public configs;
+    mapping(address => AuctionFactoryLib.LaunchConfig) public configs;
     mapping(address => address[]) public creatorAuctions;
     mapping(address => bool) public isValidAuction;
     
-    // Default values
+    // Settings
     uint public defaultInitialPrice = 100e18;
     uint public defaultDuration = 24 hours;
     uint public protocolFeeRate = 250;
     address public protocolFeeRecipient;
-    
-    // ============ Events ============
     
     event AuctionDeployed(
         address indexed auction,
@@ -56,8 +38,6 @@ contract AuctionFactory is Ownable {
     
     event DefaultsUpdated(uint initialPrice, uint duration);
     event ProtocolFeeUpdated(uint rate, address recipient);
-    
-    // ============ Constructor ============
     
     constructor(
         address _settlementSystem,
@@ -75,26 +55,14 @@ contract AuctionFactory is Ownable {
         aux = _aux;
         basket = _basket;
         protocolFeeRecipient = msg.sender;
-        
-        // Deploy implementation once
         auctionImplementation = address(new Auction());
     }
     
-    // ============ Market Deployment ============
-
     function deployPredictionMarket(
         string memory question,
         uint resolutionTime,
-        LaunchConfig memory config
+        AuctionFactoryLib.LaunchConfig memory config
     ) external returns (address) {
-        return _deployPredictionMarket(question, resolutionTime, config);
-    }
-    
-    function _deployPredictionMarket(
-        string memory question,
-        uint resolutionTime,
-        LaunchConfig memory config
-    ) internal returns (address) {
         require(bytes(question).length > 0, "Empty question");
         
         // Apply defaults
@@ -107,113 +75,91 @@ contract AuctionFactory is Ownable {
         
         require(resolutionTime > block.timestamp + config.auctionDuration, "Invalid resolution time");
         
-        // Deploy clone
-        address clone = auctionImplementation.clone();
-        
-        // Initialize using library
-        AuctionFactoryLib.initializeAuction(
-            clone,
-            config.name,
-            config.symbol,
-            config.auctionDuration,
-            protocolFeeRecipient,
-            address(settlementSystem),
-            rover,
-            aux,
-            basket
+        // Deploy market
+        address market = AuctionFactoryLib.deployMarket(
+            auctionImplementation,
+            config,
+            [address(settlementSystem), rover, aux, basket],
+            protocolFeeRecipient
         );
         
-        // Initialize prediction market using library
-        AuctionFactoryLib.initializePredictionMarket(
-            clone,
+        // Setup prediction
+        AuctionFactoryLib.setupPrediction(
+            market,
+            address(settlementSystem),
             question,
             resolutionTime,
-            address(settlementSystem),
             false,
-            0,
             0
         );
         
-        // Register and track
-        _registerAuction(clone, config);
+        // Register
+        _registerAuction(market, config);
         
-        emit AuctionDeployed(clone, msg.sender, config.name, true, question);
-        
-        return clone;
+        emit AuctionDeployed(market, msg.sender, config.name, true, question);
+        return market;
     }
     
     function deployRapBattleMarket(
         string memory challenger,
         string memory challenged,
         uint responseDeadline,
-        LaunchConfig memory config
+        AuctionFactoryLib.LaunchConfig memory config
     ) external returns (address) {
         require(responseDeadline > block.timestamp, "Invalid response deadline");
         require(bytes(challenger).length > 0 && bytes(challenged).length > 0, "Empty names");
         
         string memory question = string(abi.encodePacked(
-            "Rap Battle: ",
-            challenger,
-            " vs ",
-            challenged
+            "Rap Battle: ", challenger, " vs ", challenged
         ));
         
         uint resolutionTime = responseDeadline + 7 days;
         
-        // Apply defaults
+        // Apply defaults and update name if needed
         if (config.initialPricePerToken == 0) {
             config.initialPricePerToken = defaultInitialPrice;
         }
         if (config.auctionDuration == 0) {
             config.auctionDuration = defaultDuration;
         }
+        if (bytes(config.name).length == 0) {
+            config.name = string(abi.encodePacked(
+                "D: ", 
+                AuctionFactoryLib.substring(challenger, 0, 10), 
+                " vs ", 
+                AuctionFactoryLib.substring(challenged, 0, 10)
+            ));
+        }
+        if (bytes(config.symbol).length == 0) {
+            config.symbol = "D";
+        }
         
-        // Deploy clone
-        address clone = auctionImplementation.clone();
-        
-        // Initialize using library
-        AuctionFactoryLib.initializeAuction(
-            clone,
-            string(abi.encodePacked("D: ", _substring(challenger, 0, 10), " vs ", _substring(challenged, 0, 10))),
-            "D",
-            config.auctionDuration,
-            protocolFeeRecipient,
-            address(settlementSystem),
-            rover,
-            aux,
-            basket
+        // Deploy market
+        address market = AuctionFactoryLib.deployMarket(
+            auctionImplementation,
+            config,
+            [address(settlementSystem), rover, aux, basket],
+            protocolFeeRecipient
         );
         
-        // Create meta evidence using library
-        uint metaEvidenceId = AuctionFactoryLib.createRapBattleMetaEvidence(
+        // Setup as content-required prediction
+        AuctionFactoryLib.setupPrediction(
+            market,
             address(settlementSystem),
-            challenger,
-            challenged,
-            question
-        );
-        
-        // Initialize as content-required prediction market
-        Auction(payable(clone)).initializePredictionMarket(
             question,
             resolutionTime,
-            metaEvidenceId,
             true,
-            responseDeadline,
-            2
+            responseDeadline
         );
         
-        // Set authorized content submitters
-        Auction(payable(clone)).setAuthorizedSubmitters(
-            msg.sender,
-            address(0)
-        );
+        // Set authorized submitters
+        Auction(payable(market)).setAuthorizedSubmitters(msg.sender, address(0));
         
-        // Register and track
-        _registerAuction(clone, config);
+        // Register
+        _registerAuction(market, config);
         
-        emit AuctionDeployed(clone, msg.sender, config.name, true, question);
-        
-        return clone;
+        emit AuctionDeployed(market, msg.sender, config.name, true, question);
+        return market;
     }
     
     function deploySimplePrediction(
@@ -222,8 +168,8 @@ contract AuctionFactory is Ownable {
     ) external returns (address) {
         require(daysUntilResolution >= 1 && daysUntilResolution <= 365, "Invalid duration");
         
-        LaunchConfig memory config = LaunchConfig({
-            name: string(abi.encodePacked("Q: ", _substring(question, 0, 20))),
+        AuctionFactoryLib.LaunchConfig memory config = AuctionFactoryLib.LaunchConfig({
+            name: string(abi.encodePacked("Q: ", AuctionFactoryLib.substring(question, 0, 20))),
             symbol: "Q",
             initialPricePerToken: defaultInitialPrice,
             auctionDuration: defaultDuration
@@ -231,24 +177,42 @@ contract AuctionFactory is Ownable {
         
         uint resolutionTime = block.timestamp + (daysUntilResolution * 1 days);
         
-        return _deployPredictionMarket(question, resolutionTime, config);
+        // Inline the logic instead of calling deployPredictionMarket
+        require(bytes(question).length > 0, "Empty question");
+        
+        // Deploy market
+        address market = AuctionFactoryLib.deployMarket(
+            auctionImplementation,
+            config,
+            [address(settlementSystem), rover, aux, basket],
+            protocolFeeRecipient
+        );
+        
+        // Setup prediction
+        AuctionFactoryLib.setupPrediction(
+            market,
+            address(settlementSystem),
+            question,
+            resolutionTime,
+            false,
+            0
+        );
+        
+        // Register
+        _registerAuction(market, config);
+        
+        emit AuctionDeployed(market, msg.sender, config.name, true, question);
+        return market;
+    }
+
+    function _registerAuction(address auction, AuctionFactoryLib.LaunchConfig memory config) internal {
+        auctions.push(auction);
+        configs[auction] = config;
+        creatorAuctions[msg.sender].push(auction);
+        isValidAuction[auction] = true;
     }
     
-    // ============ Internal Functions ============
-    
-    function _registerAuction(address clone, LaunchConfig memory config) internal {
-        auctions.push(clone);
-        configs[clone] = config;
-        creatorAuctions[msg.sender].push(clone);
-        isValidAuction[clone] = true;
-    }
-    
-    function _substring(string memory str, uint start, uint end) internal pure returns (string memory) {
-        return AuctionFactoryLib.substring(str, start, end);
-    }
-    
-    // ============ View Functions ============
-    
+    // View functions
     function getAuctions() external view returns (address[] memory) {
         return auctions;
     }
@@ -258,7 +222,7 @@ contract AuctionFactory is Ownable {
     }
     
     function getAuctionInfo(address auction) external view returns (
-        LaunchConfig memory config,
+        AuctionFactoryLib.LaunchConfig memory config,
         bool isPrediction,
         string memory question,
         uint currentPrice,
@@ -271,7 +235,7 @@ contract AuctionFactory is Ownable {
         config = configs[auction];
         Auction auctionContract = Auction(payable(auction));
         
-        isPrediction = true;
+        isPrediction = true; // All our markets are predictions
         
         // Get prediction market details
         (
@@ -294,12 +258,14 @@ contract AuctionFactory is Ownable {
     }
     
     function getInfrastructure() external view returns (
+        address _implementation,
         address _settlement,
         address _rover,
         address _aux,
         address _basket
     ) {
         return (
+            auctionImplementation,
             address(settlementSystem),
             rover,
             aux,
@@ -307,8 +273,7 @@ contract AuctionFactory is Ownable {
         );
     }
     
-    // ============ Admin Functions ============
-    
+    // Admin functions
     function setDefaults(uint _initialPrice, uint _duration) external onlyOwner {
         require(_initialPrice >= 1e18, "Price too low");
         require(_duration >= 1 hours, "Duration too short");
@@ -321,7 +286,7 @@ contract AuctionFactory is Ownable {
     }
     
     function setProtocolFee(uint _rate, address _recipient) external onlyOwner {
-        require(_rate <= 1000, "Fee too high");
+        require(_rate <= 1000, "Fee too high"); // Max 10%
         require(_recipient != address(0), "Invalid recipient");
         
         protocolFeeRate = _rate;
