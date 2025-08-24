@@ -8,6 +8,10 @@ import {AuctionFactory} from "../src/AuctionFactory.sol";
 import {AuctionHelpers} from "../src/AuctionHelpers.sol";
 import {Auction} from "../src/Auction.sol";
 
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
+
+
 // ============ Enhanced Dummy Contracts for Testing ============
 
 // Comprehensive Dummy Basket that works with Settlement
@@ -289,7 +293,7 @@ contract Deploy is Script {
     IERC20 public USDT = IERC20(0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2);
     // Ethereum : 0xdAC17F958D2ee523a2206206994597C13D831ec7
     // Polygon : 0xc2132D05D31c914a87C6611C10748AEb04B58e8F
-    // Unichain : 0x588CE4F028D8e7B53B687865d6A67b3A54C75518
+    // Unichain : 0x9151434b16b9763660705744891fA906F660EcC5
     // Arbi : 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9
     // Base : 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
 
@@ -302,13 +306,12 @@ contract Deploy is Script {
 
     IERC20 public DAI = IERC20(0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb);
     // Ethereum : 0x6B175474E89094C44Da98b954EedeAC495271d0F
-    // Polygon : 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063
-    // Unichain : 0x20CAb320A855b39F724131C69424240519573f81
     // Base : 0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb
     // Arbi : 0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1
 
     IERC20 public USDS = IERC20(0x820C137fa70C8691f0e44Dc420a5e53c168921Dc);
     // Ethereum : 0xdC035D45d973E3EC169d2276DDab16f1e407384F
+    // Unichain : 0x7E10036Acc4B56d4dFCa3b77810356CE52313F9C
     // Base : 0x820C137fa70C8691f0e44Dc420a5e53c168921Dc
     // Arbi : 0x6491c05a82219b8d1479057361ff1654749b876b
 
@@ -331,19 +334,28 @@ contract Deploy is Script {
     address[] public VAULTS;
     IERC4626 public gauntletWETHvault = IERC4626(0x27D8c7273fd3fcC6956a0B370cE5Fd4A7fc65c18);
     // ^ L1 Ethereum : 0x4881Ef0BF6d2365D3dd6499ccd7532bcdBCE0658
-    // Base : 
+    // Base : 0x27D8c7273fd3fcC6956a0B370cE5Fd4A7fc65c18
+    // Unichain : 0x830898200F0E8Be8Dc1C9A836f4AB29ECEdf76eb
+    // Polygon : 0xF5C81d25ee174d83f1FD202cA94AE6070d073cCF
+    // Arbitrum : 0x0623a67D69bB2F59D266897A15dC1509d291D631
   
     IERC4626 public USDCvault = IERC4626(0xbeeF010f9cb27031ad51e3333f9aF9C6B1228183);
     // ^ L1 Ethereum : 0xBEeFFF209270748ddd194831b3fa287a5386f5bC
+    // Base : 0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61
+    // Unichain : 0x38f4f3B6533de0023b9DCd04b02F93d36ad1F9f9
+    // Polygon : 0x781FB7F6d845E3bE129289833b04d43Aa8558c42
+    // Arbitrum : 0x7c574174DA4b2be3f705c6244B4BfA0815a8B3Ed
     
     IERC4626 public sUSDSvault = IERC4626(0xB17B070A56043e1a5a1AB7443AfAFDEbcc1168D7);
     // ^ only on Base
+    // Uni
 
-    // 0xBEef03f0BF3cb2e348393008a826538AaDD7d183
-    // wUSDM
-
-    // IERC4626 public smokehouseUSDTvault = IERC4626(0xA0804346780b4c2e3bE118ac957D1DB82F9d7484);
+    IERC4626 public smokehouseUSDTvault = IERC4626(0xA0804346780b4c2e3bE118ac957D1DB82F9d7484);
     // ^ L1 Ethereum : 
+    // Unichain : 0x89849B6e57e1c61e447257242bDa97c70FA99b6b
+    // Polygon : 0xfD06859A671C21497a2EB8C5E3fEA48De924D6c8
+    // Base : 
+    // Arbitrum : 0x4739E2c293bDCD835829aA7c5d7fBdee93565D1a
 
     // unlike other vaults, SGHO has its own interface (similar to ERC4626)
     // IERC20 public SGHO = IERC20(0x1a88Df1cFe15Af22B3c4c783D4e6F7F9e0C1885d);
@@ -359,8 +371,11 @@ contract Deploy is Script {
     // Arbi : 0x5Bff88cA1442c2496f7E475E9e7786383Bc070c0
 
     IERC4626 public SUSDS = IERC4626(0x5875eEE11Cf8398102FdAd704C9E96607675467a);
+    // Ethereum: 0xa3931d71877c0e7a3148cb7eb4463524fec27fbd 
+    // Base: 0x5875eEE11Cf8398102FdAd704C9E96607675467a
     // Arbi : 0xdDb46999F8891663a8F2828d25298f70416d7610
-    
+    // Unichain : 0xA06b10Db9F390990364A3984C04FaDf1c13691b5
+
     IERC4626 public SUSDE = IERC4626(0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2);
     // Arbi : 0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2
 
@@ -458,6 +473,8 @@ contract Deploy is Script {
         Settlement settlement = new Settlement();
         console.log("Settlement deployed:", address(settlement));
         
+        // TODO auction factory should deploy Uni pools
+        // between Basket token and the 404 ?
         AuctionFactory factory = new AuctionFactory(
             address(settlement),
             address(V4router),

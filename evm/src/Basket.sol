@@ -84,9 +84,6 @@ contract Basket is ERC6909 { // extended
     mapping(uint => mapping(uint => uint)) public medianK; 
     // epoch => stableIndex => current median position
 
-    // Add fee toggle for testing
-    bool public feesEnabled = false;
-
     /// @notice Restricts access to core system contracts
     /// @dev Only Rover (V4), Aux, or Settlement can call restricted functions
     modifier onlyUs { 
@@ -187,13 +184,6 @@ contract Basket is ERC6909 { // extended
         }   V4 = payable(_router);
     }
 
-    /// @notice Enable/disable rebalancing fees (for testing)
-    /// @dev Only callable by system contracts
-    /// @param _enabled Whether fees are enabled
-    function setFeesEnabled(bool _enabled) external onlyUs {
-        feesEnabled = _enabled;
-    }
-
     /// @notice Set the Settlement contract address
     /// @dev Can only be set once during initialization
     /// @param _settlement Settlement contract address
@@ -243,25 +233,41 @@ contract Basket is ERC6909 { // extended
         uint ghoIndex = stables.length - 1;
         for (uint i = 0; i < ghoIndex; i++) { 
             uint multiplier = i > 1 ? 1 : 1e12;
-            uint noTouching = i == 0 ? 
-               AUX.untouchable() : 0;
-            // ^ scale precision for USDC/USDT
-            // because the rest are all 1e18
             vault = vaults[stables[i]];
             shares = perVault[vault].shares;
+            
             if (shares > 0) {
-                shares = (IERC4626(vault).convertToAssets(shares) - noTouching) * multiplier;
-                amounts[i + 1] = shares; amounts[0] += shares; // track total;
-                amounts[9] += FullMath.mulDiv(shares, // < weighted sum of
-                    IERC4626(vault).totalAssets() * multiplier, // APY 
-                    IERC4626(vault).totalSupply()); // for staking...
+                uint assets = IERC4626(vault).convertToAssets(shares);
+                
+                // Only subtract untouchable from USDC vault (index 0)
+                if (i == 0) {
+                    uint noTouching = AUX.untouchable();
+                    // Make sure we don't underflow
+                    if (noTouching > assets) {
+                        assets = 0;
+                    } else {
+                        assets -= noTouching;
+                    }
+                }
+                shares = assets * multiplier;
+                amounts[i + 1] = shares; 
+                amounts[0] += shares; // track total
+                
+                // Calculate weighted APY
+                if (IERC4626(vault).totalSupply() > 0) {
+                    amounts[9] += FullMath.mulDiv(shares,
+                        IERC4626(vault).totalAssets() * multiplier,
+                        IERC4626(vault).totalSupply());
+                }
             }
-        } vault = vaults[stables[ghoIndex]];
-        shares = IStakeToken(vault).previewRedeem(
-                 IStakeToken(vault).balanceOf(
-                                address(this)));
-        amounts[stables.length] = shares;
-        amounts[0] += shares; // our total
+        } 
+        vault = vaults[stables[ghoIndex]];
+        if (IStakeToken(vault).balanceOf(address(this)) > 0) {
+            shares = IStakeToken(vault).previewRedeem(
+                     IStakeToken(vault).balanceOf(address(this)));
+            amounts[stables.length] = shares;
+            amounts[0] += shares; // our total
+        }
     }
 
     /// @notice Withdraw tokens from basket to recipient
@@ -278,27 +284,43 @@ contract Basket is ERC6909 { // extended
         if (token != address(this)) {
             vault = vaults[token];
             uint max = perVault[vault].cash;
+            
+            // Check if we have anything to withdraw
+            require(max > 0, "No liquidity");
+            
             // if strict is true, we don't care about
             // AAVE obligations; we want USDC strictly 
-            max -= (token == stables[0] && !strict) ? 
-                 AUX.untouchable() : 0; // bonded...
-
-            if (feesEnabled) {
-                uint fee = getFee(token, false, amount);
-                amount = FullMath.mulDiv(amount, WAD + fee, WAD); 
-            } // Increase amount to account for fee
-
-            if (max >= amount) { // can be covered wholly...
-                uint withdrawn = withdraw(who, vault, amount);
-                if (feesEnabled) {
-                    uint fee = getFee(token, false, withdrawn);
-                    return FullMath.mulDiv(withdrawn, WAD - fee, WAD);
+            if (token == stables[0] && !strict) {
+                uint reserved = AUX.untouchable();
+                if (reserved >= max) {
+                    // All funds are reserved for AAVE
+                    revert("Insufficient unreserved funds");
                 }
-                return withdrawn;
+                max -= reserved;
+            }
+
+            uint fee = getFee(token, false, amount);
+            // Ensure fee doesn't cause overflow
+            if (fee > WAD / 10) fee = WAD / 10; // Cap at 10% max
+            
+            uint amountNeeded;
+            if (fee > 0) {
+                amountNeeded = FullMath.mulDiv(amount, WAD + fee, WAD);
+            } else {
+                amountNeeded = amount;
+            }
+
+            if (max >= amountNeeded) { // can be covered wholly...
+                uint withdrawn = withdraw(who, vault, amountNeeded);
+                if (fee > 0) {
+                    return FullMath.mulDiv(withdrawn, WAD - fee, WAD);
+                } else {
+                    return withdrawn;
+                }
             } 
-            else { uint withdrawn = withdraw(who, vault, max);
-                if (feesEnabled) {
-                    uint fee = getFee(token, false, max);
+            else { 
+                uint withdrawn = withdraw(who, vault, max);
+                if (fee > 0) {
                     sent = FullMath.mulDiv(withdrawn, WAD - fee, WAD);
                 } else {
                     sent = withdrawn;
@@ -371,13 +393,14 @@ contract Basket is ERC6909 { // extended
             amount = Math.min(allowed, IERC4626(token).convertToShares(amount));
             usd = IERC4626(token).convertToAssets(amount);
             
+            uint fee = getFee(token, true, usd);
             uint totalNeeded = amount;
-            if (feesEnabled) {
-                uint fee = getFee(token, true, usd);
+            if (fee > 0 && fee < WAD / 10) { // Cap fee at 10%
                 uint feeInShares = FullMath.mulDiv(amount, fee, WAD);
                 totalNeeded = amount + feeInShares;
-                require(totalNeeded <= allowed, "allowance");
             }
+            require(totalNeeded <= allowed, "allowance");
+            
             IERC4626(token).transferFrom(msg.sender, address(this), totalNeeded);
             require(usd >= 50 * (10 ** IERC20(IERC4626(token).asset()).decimals()), "grant");
             perVault[token].shares += amount; // Not totalNeeded!
@@ -387,12 +410,13 @@ contract Basket is ERC6909 { // extended
             uint allowed = IERC20(token).allowance(from, address(this));
             usd = Math.min(amount, allowed);
             
+            uint fee = getFee(token, true, usd);
             uint totalNeeded = usd;
-            if (feesEnabled) {
-                uint fee = getFee(token, true, usd);
+            if (fee > 0 && fee < WAD / 10) { // Cap fee at 10%
                 totalNeeded = FullMath.mulDiv(usd, WAD + fee, WAD);
-                require(totalNeeded <= allowed, "insufficient allowance for fee");
             }
+            require(totalNeeded <= allowed, "insufficient allowance for fee");
+            
             IERC20(token).transferFrom(from, address(this), totalNeeded);                
             require(usd >= 50 * (10 ** IERC20(token).decimals()), "grant");
 
@@ -566,7 +590,7 @@ contract Basket is ERC6909 { // extended
     }
 
     /// @notice Main transfer function with rebalancing
-    /// @dev Updates concentrations after transfers if fees enabled
+    /// @dev Updates concentrations after transfers
     /// @param from Source address
     /// @param to Destination address
     /// @param amount Amount to transfer
@@ -586,7 +610,7 @@ contract Basket is ERC6909 { // extended
         uint oldBalanceTo = totalBalances[to];
         uint value = _transferHelper(from, 
                           to, amount); 
-        if (update && feesEnabled) {
+        if (update) {
             _recomputeConcentrations(block.timestamp / 1 weeks);
         }
         return true;
@@ -698,33 +722,38 @@ contract Basket is ERC6909 { // extended
     /// @dev Penalizes deposits/withdrawals that move away from target
     /// @param actual Current concentration
     /// @param target Target concentration
-    /// @param multiplier Fee multiplier (higher for deposits)
+    /// @param multiplier Fee multiplier
     /// @return fee18 Fee in WAD units
     function sigmoidFee(uint actual, 
         uint target, uint multiplier) public pure returns (uint fee18) {
         // Manhattan distance approach for multi-dimensional optimization
-        int deviation = int(actual) - int(target);
-        int rel = (deviation * int(WAD)) / int(target);
-        // Sigmoid-like, more off-target is sharper penalty 
-        int expTerm = rel * 5e17; // Slope parameter
-        if (expTerm > 100e18) expTerm = 100e18;
-        if (expTerm < -100e18) expTerm = -100e18;
-        // Using approximation for exp function
-        uint penalty;
-        if (expTerm >= 0) {
-            penalty = uint(1e18 + expTerm + 
-            (expTerm * expTerm) / (2 * 1e18));
+        // Calculate relative deviation
+        uint deviation;
+        if (actual > target) {
+            deviation = ((actual - target) * WAD) / target;
         } else {
-            uint absExp = uint(-expTerm);
-            uint denominator = 1e18 + absExp + 
-            (absExp * absExp) / (2 * 1e18);
-            penalty = (1e36) / denominator;
-        } // Remove baseline 1.0,
-        // multiply by multiplier
-        if (penalty > 1e18) {
-            fee18 = ((penalty - 1e18) *
-                 multiplier) / 1e18;
-        } else { fee18 = 0; }
+            deviation = ((target - actual) * WAD) / target;
+        }
+        
+        // Sigmoid approximation: f(x) = x / (1 + |x|)
+        // This avoids exponentials and large numbers
+        // For x = deviation/WAD, output ranges from 0 to 1
+        
+        // Scale deviation for sensitivity (equivalent to slope in original)
+        // Using smaller scale factor to prevent overflow
+        deviation = deviation / 2; // Divide by 2 instead of multiply by 0.5
+        
+        // Sigmoid: deviation / (WAD + deviation)
+        // This gives us a smooth curve from 0 to 1
+        uint sigmoidOutput = (deviation * WAD) / (WAD + deviation);
+        
+        // Apply multiplier to get final fee
+        fee18 = (sigmoidOutput * multiplier) / WAD;
+        
+        // Cap maximum fee at 0.2% (20 basis points)
+        if (fee18 > 2e15) {
+            fee18 = 2e15;
+        }
     }
 
     /// @notice Get rebalancing fee for a stablecoin operation
@@ -736,25 +765,68 @@ contract Basket is ERC6909 { // extended
     function getFee(address stable, 
         bool isMinting, uint amount) 
         public view returns (uint fee18) {
-        if (!feesEnabled) return 0; // Fees disabled
-        
-        uint totalValue = get_deposits()[0];
-        if (totalValue == 0) return 0;
+        // For initial setup or empty basket, no fees
         address vault = vaults[stable];
-        uint actual = (perVault[vault].cash * WAD) / totalValue;
-        uint target = currentConcentrations[stable]; // smoothed 
+        uint vaultCash = perVault[vault].cash;
         
-        // For minting: higher fee if overweight
-        // For redeeming: lower fee if overweight
-        uint multiplier = isMinting ? 2e16 : 1e16; 
+        if (vaultCash == 0) {
+            return 0;
+        }
+        
+        // Simply call get_deposits() and use the total value
+        uint[10] memory deposits = get_deposits();
+        uint totalValue = deposits[0];
+        
+        // No fees when basket is empty
+        if (totalValue == 0) {
+            return 0;
+        }
+        
+        // Normalize vaultCash to 18 decimals for comparison
+        // USDC and USDT are 6 decimals, others are 18
+        uint normalizedCash = vaultCash;
+        if (stable == stables[0] || stable == stables[1]) {
+            normalizedCash = vaultCash * 1e12; // Scale USDC/USDT to 18 decimals
+        }
+        
+        uint actual = (normalizedCash * WAD) / totalValue;
+        
+        uint target = currentConcentrations[stable];
+        
+        // Ensure target is not zero - use equal weight as default
+        if (target == 0) {
+            target = WAD / stables.length;
+        }
+        
+        // For single asset basket (100% concentration), no fees
+        if (actual >= WAD * 99 / 100) { // If > 99% in one asset
+            return 0;
+        }
+        
+        // No fee if close to target (within 5%)
+        uint deviation = actual > target ? actual - target : target - actual;
+        
+        if (deviation < WAD / 20) {
+            return 0;
+        }
+        
+        // Very small base fee: 0.04% (4 basis points)
+        uint multiplier = 4e14;
+        
         if (isMinting) {
-            return sigmoidFee(actual,
-                 target, multiplier);
-        } else {
+            // Only charge fee if depositing to overweight vault
             if (actual > target) {
-                uint baseFee = sigmoidFee(target, actual, multiplier);
-                return baseFee > multiplier ? 0 : multiplier - baseFee;
-            } else { return sigmoidFee(target, actual, multiplier); }
+                fee18 = sigmoidFee(actual, target, multiplier);
+                return fee18;
+            }
+            return 0;
+        } else {
+            // Only charge fee if withdrawing from underweight vault  
+            if (actual < target) {
+                fee18 = sigmoidFee(target, actual, multiplier);
+                return fee18;
+            }
+            return 0;
         }
     }
 }

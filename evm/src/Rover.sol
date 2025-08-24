@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
@@ -446,8 +445,9 @@ contract Rover is SafeCallback, Ownable {
                     scale = IERC20(out).decimals() - 6; 
                     amount *= scale > 0 ? (10 ** scale) : 1;
                     
-                    require(stdMath.delta(amount, QUID.take(
-                    forZero.swaps[i].sender, amount, out, false)) <= 5);
+                    // Increase tolerance for fees - allow up to 2% difference
+                    uint actualReceived = QUID.take(forZero.swaps[i].sender, amount, out, false);
+                    require(stdMath.delta(amount, actualReceived) <= amount / 50, "fee delta");
                 }
                 delete swapsOneForZero[lastBlock];
             }
@@ -536,8 +536,9 @@ contract Rover is SafeCallback, Ownable {
                 if (scale > 0) {
                     delta0 *= 10 ** scale;
                 }
-                require(stdMath.delta(delta0, QUID.take(
-                     who, delta0, token, false)) <= 5); 
+                // Increase tolerance for fees - allow up to 2% difference
+                uint actualReceived = QUID.take(who, delta0, token, false);
+                require(stdMath.delta(delta0, actualReceived) <= delta0 / 50, "fee delta");
             } // keep is for preventing disbursal of $ 
             // when single-sided LPs withdraw their ETH 
         }
