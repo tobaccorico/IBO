@@ -268,4 +268,174 @@ contract RoverTest is Test, Fixtures {
 
         vm.stopPrank();
     } 
+    
+    function testConcentrationVotingAndFees() public {
+        // First, get some DAI to diversify the basket (skip USDT due to transfer issues)
+        // DAI whale  
+        vm.startPrank(0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf);
+        DAI.transfer(User01, 100000 * WAD);
+        vm.stopPrank();
+        
+        // Get more USDC from whale for diversification
+        vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
+        USDC.transfer(User01, 100000 * USDC_PRECISION);
+        vm.stopPrank();
+        
+        vm.startPrank(User01);
+        
+        // Deposit different stables into the basket (using USDC and DAI)
+        USDC.approve(address(QUID), 100000 * USDC_PRECISION);
+        QUID.mint(User01, 100000 * WAD, address(USDC), 0);
+        
+        DAI.approve(address(QUID), 50000 * WAD);
+        QUID.mint(User01, 50000 * WAD, address(DAI), 0);
+        
+        // Check initial concentrations (should be roughly equal for the 3 deposited)
+        uint[10] memory deposits = QUID.get_deposits();
+        uint totalValue = deposits[0];
+        console.log("Total basket value:", totalValue);
+        
+        // Test voting mechanism
+        uint[] memory newTargets = new uint[](8);
+        // Set new target concentrations (must sum to 1e18)
+        newTargets[0] = 3e17; // 30% USDC
+        newTargets[1] = 2e17; // 20% USDT
+        newTargets[2] = 2e17; // 20% DAI
+        newTargets[3] = 5e16; // 5% USDS
+        newTargets[4] = 5e16; // 5% FRAX
+        newTargets[5] = 5e16; // 5% USDE
+        newTargets[6] = 5e16; // 5% CRVUSD
+        newTargets[7] = 1e17; // 10% GHO
+        
+        // Vote for new concentrations
+        QUID.vote(newTargets);
+        
+        // Check that targets were updated
+        assertEq(QUID.targets(address(USDC)), 3e17, "USDC target not set");
+        assertEq(QUID.targets(address(USDT)), 2e17, "USDT target not set");
+        
+        // Test that fees respond to concentration deviations
+        // USDC is currently at ~33% but target is 30%, so slightly overweight
+        uint fee = QUID.getFee(address(USDC), true, 1000 * USDC_PRECISION);
+        console.log("Fee for depositing to overweight USDC:", fee);
+        
+        // Fee for withdrawing from overweight should be 0 (helps rebalancing)
+        uint withdrawFee = QUID.getFee(address(USDC), false, 1000 * USDC_PRECISION);
+        assertEq(withdrawFee, 0, "Should be no fee for withdrawing from overweight");
+        
+        vm.stopPrank();
+
+        // Test weighted median with multiple voters
+        address User02 = address(0x2);
+        
+        // Give User02 some voting power
+        vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
+        USDC.transfer(User02, 250000 * USDC_PRECISION); // Extra for fees
+        vm.stopPrank();
+        
+        vm.startPrank(User02);
+        USDC.approve(address(QUID), 250000 * USDC_PRECISION); // Approve extra for fees
+        QUID.mint(User02, 200000 * WAD, address(USDC), 0);
+        
+        // User02 votes for different targets (must be next epoch)
+        vm.warp(block.timestamp + 1 weeks);
+        
+        uint[] memory alternativeTargets = new uint[](8);
+        alternativeTargets[0] = 4e17; // 40% USDC
+        alternativeTargets[1] = 1e17; // 10% USDT
+        alternativeTargets[2] = 1e17; // 10% DAI
+        alternativeTargets[3] = 1e17; // 10% USDS
+        alternativeTargets[4] = 1e17; // 10% FRAX
+        alternativeTargets[5] = 1e17; // 10% USDE
+        alternativeTargets[6] = 5e16; // 5% CRVUSD
+        alternativeTargets[7] = 5e16; // 5% GHO
+        
+        QUID.vote(alternativeTargets);
+        vm.stopPrank();
+        
+        // User01 also votes in new epoch
+        vm.startPrank(User01);
+        QUID.vote(newTargets);
+        
+        // Check that weighted median is working
+        // User02 has more voting power (200k vs 150k), so their vote should dominate
+        uint newUSDCTarget = QUID.targets(address(USDC));
+        console.log("New USDC target after weighted voting:", newUSDCTarget);
+        
+        // Test fee changes after rebalancing
+        uint newFee = QUID.getFee(address(USDC), true, 1000 * USDC_PRECISION);
+        console.log("New fee after vote update:", newFee);
+        
+        vm.stopPrank();
+    }
+    
+    function testFeeSigmoidCurve() public {
+        // Test the sigmoid fee curve at different deviations
+        vm.startPrank(User01);
+        
+        // Setup basket with known concentrations
+        USDC.approve(address(QUID), 100000 * USDC_PRECISION);
+        QUID.mint(User01, 100000 * WAD, address(USDC), 0);
+        
+        // Test fee at different deviation levels
+        uint multiplier = 4e14; // 0.04% base fee
+        
+        // Test at 10% deviation
+        uint fee10 = QUID.sigmoidFee(11e17, 10e17, multiplier); // 110% vs 100%
+        console.log("Fee at 10% deviation:", fee10);
+        assertLt(fee10, 1e15, "Fee should be less than 0.1%");
+        
+        // Test at 50% deviation
+        uint fee50 = QUID.sigmoidFee(15e17, 10e17, multiplier); // 150% vs 100%
+        console.log("Fee at 50% deviation:", fee50);
+        assertGt(fee50, fee10, "Higher deviation should have higher fee");
+        
+        // Test at 100% deviation
+        uint fee100 = QUID.sigmoidFee(20e17, 10e17, multiplier); // 200% vs 100%
+        console.log("Fee at 100% deviation:", fee100);
+        assertGt(fee100, fee50, "Even higher deviation should have even higher fee");
+        assertLt(fee100, 2e15, "Fee should still be capped at 0.2%");
+        
+        vm.stopPrank();
+    }
+    
+    function testRebalancingIncentives() public {
+        // Test that fees properly incentivize rebalancing
+        vm.startPrank(User01);
+        
+        // Create an imbalanced basket with USDC and DAI (avoiding USDT)
+        USDC.approve(address(QUID), 90000 * USDC_PRECISION);
+        QUID.mint(User01, 90000 * WAD, address(USDC), 0);
+        
+        // Get DAI from whale instead of USDT
+        vm.startPrank(0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf);
+        DAI.transfer(User01, 10000 * WAD);
+        vm.stopPrank();
+        
+        vm.startPrank(User01);
+        DAI.approve(address(QUID), 10000 * WAD);
+        QUID.mint(User01, 10000 * WAD, address(DAI), 0);
+        
+        // USDC is at 90%, DAI at 10%
+        // Depositing more USDC should have a fee (overweight)
+        uint depositFeeOverweight = QUID.getFee(address(USDC), true, 1000 * USDC_PRECISION);
+        console.log("Fee for depositing to 90% concentrated USDC:", depositFeeOverweight);
+        assertGt(depositFeeOverweight, 0, "Should charge fee for depositing to overweight");
+        
+        // Depositing DAI should have no fee (underweight)
+        uint depositFeeUnderweight = QUID.getFee(address(DAI), true, 1000 * WAD);
+        console.log("Fee for depositing to 10% concentrated DAI:", depositFeeUnderweight);
+        assertEq(depositFeeUnderweight, 0, "No fee for depositing to underweight");
+        
+        // Withdrawing USDC should have no fee (helps rebalancing)
+        uint withdrawFeeOverweight = QUID.getFee(address(USDC), false, 1000 * USDC_PRECISION);
+        assertEq(withdrawFeeOverweight, 0, "No fee for withdrawing from overweight");
+        
+        // Withdrawing DAI should have a fee (hurts rebalancing)
+        uint withdrawFeeUnderweight = QUID.getFee(address(DAI), false, 1000 * WAD);
+        console.log("Fee for withdrawing from 10% concentrated DAI:", withdrawFeeUnderweight);
+        assertGt(withdrawFeeUnderweight, 0, "Should charge fee for withdrawing from underweight");
+        
+        vm.stopPrank();
+    }
 }

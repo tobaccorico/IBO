@@ -169,13 +169,6 @@ contract Aux is Ownable {
                         address(USDC), true);
     }
 
-    /// @notice Entry point for swaps with MEV protection
-    /// @dev Routes small swaps directly, large swaps through batch system
-    /// @param token Target token (QUID or stablecoin)
-    /// @param zeroForOne True for USDC->ETH, false for ETH->USDC
-    /// @param amount Amount to swap
-    /// @param waitable Max blocks to wait for batch processing
-    /// @return blockNumber Block when trade will clear
     // In order to prevent sandwich attacks, we implemented 
     // a simple form of ASS: process buys first, then sells!
     // Minimum trade size is a form of DoS/spam protection.
@@ -185,10 +178,13 @@ contract Aux is Ownable {
     // we clear the entire batch as 1 swap, looping only to
     // distribute the output pro rata (as a % of the total).
 
-    // `amount` specifies only how much to sell,
-    // `token` specifies what you want to buy,
-    // `waitable` specifies 
-    // returns which block trade will clear in
+
+    /// @dev Routes small swaps directly, large swaps through batch system
+    /// @param token Target token (QUID or stablecoin)
+    /// @param zeroForOne True for USDC->ETH, false for ETH->USDC
+    /// @param amount Amount to swap
+    /// @param waitable Max blocks to wait for batch processing
+    /// @return blockNumber Block when trade will clear
     function swap(address token, bool zeroForOne, uint amount, 
         uint waitable) public payable returns (uint blockNumber) { 
         (uint160 sqrtPriceX96,,,) = V4.repack(); // TODO $ to $
