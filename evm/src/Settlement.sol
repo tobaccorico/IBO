@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "./imports/RandaoLib.sol";
 import "./imports/IArbitrator.sol";
 import "./imports/IArbitrable.sol";
 import "./imports/IEvidence.sol";
-import "./Auction.sol";
-import "./Basket.sol";
-import "./AuctionFactory.sol";
-import "./SettlementLib.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+import "./Safta.sol";
+import "./Basket.sol";
+import {SaftaFactory} from "./SF.sol";
+import "./SettlementLib.sol";
+
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { Base64 } from "@openzeppelin/contracts/utils/Base64.sol";
+import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
+
+/**
+ * @title Settlement
+ * @notice Dispute resolution system for Safta prediction markets
+ * @dev Singleton contract managing all market settlements
+ */
 contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     using RandaoLib for bytes;
     
@@ -20,21 +29,21 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     struct Proposal {
         address proposer;
         bool outcome;
-        uint stake;
-        uint supportStake;
-        uint opposeStake;
-        uint createdAt;
+        uint256 stake;
+        uint256 supportStake;
+        uint256 opposeStake;
+        uint256 createdAt;
         ProposalStatus status;
-        mapping(address => uint) supporters;
-        mapping(address => uint) opposers;
+        mapping(address => uint256) supporters;
+        mapping(address => uint256) opposers;
     }
     
     struct DisputeRound {
         address[] selectedJurors;
         mapping(address => VoteChoice) votes;
         mapping(address => bool) hasVoted;
-        uint[3] voteCounts;
-        uint votingDeadline;
+        uint256[3] voteCounts;
+        uint256 votingDeadline;
         VoteChoice verdict;
         bool finalized;
         bool appealed;
@@ -42,83 +51,100 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
     
     struct Dispute {
         address market;
-        uint proposalId;
-        uint currentRound;
-        uint createdAt;
+        uint256 proposalId;
+        uint256 currentRound;
+        uint256 createdAt;
         DisputeStatus status;
         bool isFinalized;
     }
     
-    // Constants (shortened names)
-    uint private constant MIN_STAKE = 100e18;
-    uint private constant VOTE_PERIOD = 3 days;
-    uint private constant EXEC_DELAY = 1 days;
-    uint private constant SUPPORT_RATIO = 2;
-    uint private constant JURY_SIZE = 7;
-    uint private constant MIN_JUROR_BAL = 100e18;
-    uint private constant EVIDENCE_PER = 2 days;
-    uint private constant VOTING_PER = 3 days;
-    uint private constant APPEAL_PER = 1 days;
-    uint private constant APPEAL_MULT = 3;
-    uint private constant MAX_ROUNDS = 3;
-    uint private constant SLASH_PCT = 10;
-    uint private constant TIMEOUT = 7 days;
-    uint private constant ABS_TIMEOUT = 30 days;
-    uint private constant MIN_POOL = 20;
+    // Constants
+    uint256 private constant MIN_STAKE = 100e18;
+    uint256 private constant VOTE_PERIOD = 3 days;
+    uint256 private constant EXEC_DELAY = 1 days;
+    uint256 private constant SUPPORT_RATIO = 2;
+    uint256 private constant JURY_SIZE = 7;
+    uint256 private constant MIN_JUROR_BAL = 100e18;
+    uint256 private constant EVIDENCE_PER = 2 days;
+    uint256 private constant VOTING_PER = 3 days;
+    uint256 private constant APPEAL_PER = 1 days;
+    uint256 private constant APPEAL_MULT = 3;
+    uint256 private constant MAX_ROUNDS = 3;
+    uint256 private constant SLASH_PCT = 10;
+    uint256 private constant TIMEOUT = 7 days;
+    uint256 private constant ABS_TIMEOUT = 30 days;
+    uint256 private constant MIN_POOL = 20;
     
     // State
     address public basketContract;
-    address public auctionFactory;
+    address public doppler404Factory;
     
-    mapping(address => mapping(uint => Proposal)) public proposals;
-    mapping(address => uint) public proposalCount;
-    mapping(address => uint) public activeProposalId;
-    mapping(address => uint) public lastActivity;
+    mapping(address => mapping(uint256 => Proposal)) public proposals;
+    mapping(address => uint256) public proposalCount;
+    mapping(address => uint256) public activeProposalId;
+    mapping(address => uint256) public lastActivity;
     
-    mapping(uint => Dispute) public disputes;
-    mapping(uint => mapping(uint => DisputeRound)) public rounds;
-    mapping(address => uint) public marketDispute;
-    uint public disputeCount;
+    mapping(uint256 => Dispute) public disputes;
+    mapping(uint256 => mapping(uint256 => DisputeRound)) public rounds;
+    mapping(address => uint256) public marketDispute;
+    uint256 public disputeCount;
     
-    mapping(address => uint) public activeDisputes;
-    mapping(address => uint) public totalVotes;
-    mapping(address => uint) public wrongVotes;
+    mapping(address => uint256) public activeDisputes;
+    mapping(address => uint256) public totalVotes;
+    mapping(address => uint256) public wrongVotes;
     
-    mapping(uint => uint[3]) public disputeRandomBlocks;
-    mapping(uint => bool) public randomnessRequested;
+    mapping(uint256 => uint256[3]) public disputeRandomBlocks;
+    mapping(uint256 => bool) public randomnessRequested;
     
-    mapping(uint => string) public metaEvidenceURIs;
-    uint public metaEvidenceCount;
+    mapping(uint256 => string) public metaEvidenceURIs;
+    uint256 public metaEvidenceCount;
     
     // Events
-    event ProposalCreated(address indexed market, uint proposalId, address proposer, bool outcome, uint stake);
-    event ProposalSupported(address indexed market, uint proposalId, address supporter, uint amount);
-    event ProposalOpposed(address indexed market, uint proposalId, address opposer, uint amount);
-    event ProposalExecuted(address indexed market, uint proposalId);
-    event ProposalDisputed(address indexed market, uint proposalId, uint disputeId);
-    event JurorSelected(address indexed juror, uint disputeId, uint round);
-    event JurorSlashed(address indexed juror, uint amount);
-    event JuryRequested(uint indexed disputeId, uint round);
-    event JurySelected(uint indexed disputeId, uint round, address[] jurors);
-    event VoteSubmitted(uint indexed disputeId, uint round, address juror);
-    event VerdictReached(uint indexed disputeId, uint round, VoteChoice verdict);
-    event DisputeAppealed(uint indexed disputeId, uint round);
-    event DisputeCreated(uint indexed disputeId, IArbitrable market, uint choices);
+    event ProposalCreated(address indexed market, uint256 proposalId, address proposer, bool outcome, uint256 stake);
+    event ProposalSupported(address indexed market, uint256 proposalId, address supporter, uint256 amount);
+    event ProposalOpposed(address indexed market, uint256 proposalId, address opposer, uint256 amount);
+    event ProposalExecuted(address indexed market, uint256 proposalId);
+    event ProposalDisputed(address indexed market, uint256 proposalId, uint256 disputeId);
+    event JurorSelected(address indexed juror, uint256 disputeId, uint256 round);
+    event JurorSlashed(address indexed juror, uint256 amount);
+    event JuryRequested(uint256 indexed disputeId, uint256 round);
+    event JurySelected(uint256 indexed disputeId, uint256 round, address[] jurors);
+    event VoteSubmitted(uint256 indexed disputeId, uint256 round, address juror);
+    event VerdictReached(uint256 indexed disputeId, uint256 round, VoteChoice verdict);
+    event DisputeAppealed(uint256 indexed disputeId, uint256 round);
+    event DisputeCreated(uint256 indexed disputeId, IArbitrable market, uint256 choices);
+    event SettlementRewardClaimed(address indexed user, uint256 amount);
     
     constructor() {}
+    
+    // Add admin function for emergency resolution
+    function admin() external view returns (address) {
+        return SaftaFactory(doppler404Factory).owner();
+    }
     
     function initialize(address _basket, address _factory) external {
         require(basketContract == address(0), "Already initialized");
         basketContract = _basket;
-        auctionFactory = _factory;
+        doppler404Factory = _factory;
     }
     
-    // Proposal System
-    function proposeSettlement(address market, bool outcome, uint stakeAmount) 
-        external nonReentrant returns (uint proposalId) {
-        SettlementLib.validateProposal(market, stakeAmount, MIN_STAKE);
+    // ============ Proposal System ============
+    
+    function proposeSettlement(
+        address market,
+        bool outcome,
+        uint256 stakeAmount
+    ) external nonReentrant returns (uint256 proposalId) {
+        require(stakeAmount >= MIN_STAKE, "Insufficient stake");
+        require(_isValidMarket(market), "Invalid market");
+        require(_canPropose(market), "Cannot propose");
         
-        Basket(basketContract).transferFrom(msg.sender, address(this), stakeAmount);
+        // Transfer basket tokens as stake
+        Basket(basketContract).transferFrom(
+            msg.sender,
+            address(this),
+            stakeAmount
+        );
         
         proposalId = ++proposalCount[market];
         Proposal storage proposal = proposals[market][proposalId];
@@ -134,24 +160,18 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         
         emit ProposalCreated(market, proposalId, msg.sender, outcome, stakeAmount);
     }
-
-    // Mark as virtual to allow overriding in tests
-    function getRoundVerdict(uint disputeId, uint round) external view virtual returns (VoteChoice) {
-        return rounds[disputeId][round].verdict;
-    }
-
-    // Mark as virtual to allow overriding in tests
-    function getRoundFinalized(uint disputeId, uint round) external view virtual returns (bool) {
-        return rounds[disputeId][round].finalized;
-    }
     
-    function supportProposal(address market, uint proposalId, uint amount) external nonReentrant {
+    function supportProposal(address market, uint256 proposalId, uint256 amount) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(block.timestamp <= proposal.createdAt + VOTE_PERIOD, "Voting ended");
         require(amount > 0, "No stake");
         
-        Basket(basketContract).transferFrom(msg.sender, address(this), amount);
+        Basket(basketContract).transferFrom(
+            msg.sender,
+            address(this),
+            amount
+        );
         
         proposal.supportStake += amount;
         proposal.supporters[msg.sender] += amount;
@@ -160,13 +180,17 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalSupported(market, proposalId, msg.sender, amount);
     }
     
-    function opposeProposal(address market, uint proposalId, uint amount) external nonReentrant {
+    function opposeProposal(address market, uint256 proposalId, uint256 amount) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(block.timestamp <= proposal.createdAt + VOTE_PERIOD, "Voting ended");
         require(amount > 0, "No stake");
         
-        Basket(basketContract).transferFrom(msg.sender, address(this), amount);
+        Basket(basketContract).transferFrom(
+            msg.sender,
+            address(this),
+            amount
+        );
         
         proposal.opposeStake += amount;
         proposal.opposers[msg.sender] += amount;
@@ -175,7 +199,7 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit ProposalOpposed(market, proposalId, msg.sender, amount);
     }
     
-    function executeProposal(address market, uint proposalId) external nonReentrant {
+    function executeProposal(address market, uint256 proposalId) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(block.timestamp > proposal.createdAt + VOTE_PERIOD, "Still voting");
@@ -193,26 +217,30 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         proposal.status = ProposalStatus.Executed;
         activeProposalId[market] = 0;
         
-        uint ruling = proposal.outcome ? 1 : 0;
-        IArbitrable(market).rule(0, ruling);
+        // Call resolve on Safta market (binary only)
+        Safta(market).resolveMarket(proposal.outcome);
         
         emit ProposalExecuted(market, proposalId);
     }
     
     function disputeProposal(
         address market,
-        uint proposalId,
+        uint256 proposalId,
         string calldata evidence,
         string calldata,
-        uint disputeStake
-    ) external nonReentrant returns (uint disputeId) {
+        uint256 disputeStake
+    ) external nonReentrant returns (uint256 disputeId) {
         require(disputeStake >= MIN_STAKE, "Insufficient stake");
         
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Active, "Not active");
         require(block.timestamp > proposal.createdAt + VOTE_PERIOD, "Still voting");
         
-        Basket(basketContract).transferFrom(msg.sender, address(this), disputeStake);
+        Basket(basketContract).transferFrom(
+            msg.sender,
+            address(this),
+            disputeStake
+        );
         
         proposal.status = ProposalStatus.Disputed;
         activeProposalId[market] = 0;
@@ -233,18 +261,19 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit Evidence(IArbitrator(address(this)), disputeId, msg.sender, evidence);
     }
     
-    // Jury System
+    // ============ Jury System ============
+    
     function isEligibleJuror(address juror) public view returns (bool) {
-        uint balance = Basket(basketContract).totalBalances(juror);
+        uint256 balance = Basket(basketContract).totalBalances(juror);
         return balance >= MIN_JUROR_BAL && activeDisputes[juror] == 0;
     }
     
-    function getPotentialJurors() public view returns (address[] memory, uint) {
+    function getPotentialJurors() public view returns (address[] memory, uint256) {
         Basket basket = Basket(basketContract);
-        uint latestHolder = basket.latest_holder();
+        uint256 latestHolder = basket.latest_holder();
         
-        uint eligibleCount = 0;
-        for (uint i = 1; i <= latestHolder; i++) {
+        uint256 eligibleCount = 0;
+        for (uint256 i = 1; i <= latestHolder; i++) {
             address holder = basket.holders(i);
             if (holder != address(0) && isEligibleJuror(holder)) {
                 eligibleCount++;
@@ -254,8 +283,8 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         require(eligibleCount >= MIN_POOL, "Not enough eligible jurors");
         
         address[] memory eligibleJurors = new address[](eligibleCount);
-        uint index = 0;
-        for (uint i = 1; i <= latestHolder; i++) {
+        uint256 index = 0;
+        for (uint256 i = 1; i <= latestHolder; i++) {
             address holder = basket.holders(i);
             if (holder != address(0) && isEligibleJuror(holder)) {
                 eligibleJurors[index++] = holder;
@@ -265,12 +294,12 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return (eligibleJurors, eligibleCount);
     }
     
-    function requestJurySelection(uint disputeId) external {
+    function requestJurySelection(uint256 disputeId) external {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.createdAt > 0, "Invalid dispute");
         require(block.timestamp > dispute.createdAt + EVIDENCE_PER, "Evidence period active");
         
-        uint round = dispute.currentRound;
+        uint256 round = dispute.currentRound;
         require(!randomnessRequested[disputeId], "Already requested");
         
         disputeRandomBlocks[disputeId] = [
@@ -283,15 +312,14 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit JuryRequested(disputeId, round);
     }
     
-    // Mark as virtual to allow overriding in tests
-    function fulfillJurySelection(uint disputeId, bytes[] calldata headers) external virtual {
+    function fulfillJurySelection(uint256 disputeId, bytes[] calldata headers) external {
         Dispute storage dispute = disputes[disputeId];
-        uint round = dispute.currentRound;
+        uint256 round = dispute.currentRound;
         
         require(randomnessRequested[disputeId], "Not requested");
         require(headers.length == 3, "Need 3 headers");
         
-        uint[3] memory blocks = disputeRandomBlocks[disputeId];
+        uint256[3] memory blocks = disputeRandomBlocks[disputeId];
         require(block.number > blocks[2], "Too early");
         
         bytes32 randao1 = RandaoLib.getHistoricalRandaoValue(blocks[0], headers[0]);
@@ -302,7 +330,7 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         
         address[] memory selected = SettlementLib.selectJurorsFromHolders(
             basketContract,
-            uint(combinedRandom),
+            uint256(combinedRandom),
             JURY_SIZE,
             MIN_JUROR_BAL,
             activeDisputes
@@ -312,7 +340,7 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         disputeRound.selectedJurors = selected;
         disputeRound.votingDeadline = block.timestamp + VOTING_PER;
         
-        for (uint i = 0; i < selected.length; i++) {
+        for (uint256 i = 0; i < selected.length; i++) {
             activeDisputes[selected[i]]++;
             emit JurorSelected(selected[i], disputeId, round);
         }
@@ -321,7 +349,7 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit JurySelected(disputeId, round, selected);
     }
     
-    function submitVote(uint disputeId, uint round, VoteChoice vote) external {
+    function submitVote(uint256 disputeId, uint256 round, VoteChoice vote) external {
         require(vote != VoteChoice.None, "Invalid vote");
         
         DisputeRound storage disputeRound = rounds[disputeId][round];
@@ -331,24 +359,24 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         
         disputeRound.hasVoted[msg.sender] = true;
         disputeRound.votes[msg.sender] = vote;
-        disputeRound.voteCounts[uint(vote) - 1]++;
+        disputeRound.voteCounts[uint256(vote) - 1]++;
         
         totalVotes[msg.sender]++;
         
         emit VoteSubmitted(disputeId, round, msg.sender);
         
-        uint totalVoted = disputeRound.voteCounts[0] + disputeRound.voteCounts[1] + disputeRound.voteCounts[2];
+        uint256 totalVoted = disputeRound.voteCounts[0] + disputeRound.voteCounts[1] + disputeRound.voteCounts[2];
         if (totalVoted >= (JURY_SIZE / 2) + 1) {
             _finalizeRound(disputeId, round);
         }
     }
     
-    function _finalizeRound(uint disputeId, uint round) internal {
+    function _finalizeRound(uint256 disputeId, uint256 round) internal {
         DisputeRound storage disputeRound = rounds[disputeId][round];
         
-        uint maxVotes = 0;
+        uint256 maxVotes = 0;
         VoteChoice verdict = VoteChoice.None;
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             if (disputeRound.voteCounts[i] > maxVotes) {
                 maxVotes = disputeRound.voteCounts[i];
                 verdict = VoteChoice(i + 1);
@@ -358,14 +386,14 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         disputeRound.verdict = verdict;
         disputeRound.finalized = true;
         
-        for (uint i = 0; i < disputeRound.selectedJurors.length; i++) {
+        for (uint256 i = 0; i < disputeRound.selectedJurors.length; i++) {
             activeDisputes[disputeRound.selectedJurors[i]]--;
         }
         
         emit VerdictReached(disputeId, round, verdict);
     }
     
-    function appeal(uint _disputeID, bytes calldata) external payable override {
+    function appeal(uint256 _disputeID, bytes calldata) external payable override {
         Dispute storage dispute = disputes[_disputeID];
         require(dispute.currentRound < MAX_ROUNDS - 1, "Max rounds");
         
@@ -373,9 +401,13 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         require(lastRound.finalized, "Not finalized");
         require(!lastRound.appealed, "Already appealed");
         
-        uint requiredStake = MIN_STAKE * (APPEAL_MULT ** dispute.currentRound);
+        uint256 requiredStake = MIN_STAKE * (APPEAL_MULT ** dispute.currentRound);
         
-        Basket(basketContract).transferFrom(msg.sender, address(this), requiredStake);
+        Basket(basketContract).transferFrom(
+            msg.sender,
+            address(this),
+            requiredStake
+        );
         
         lastRound.appealed = true;
         dispute.currentRound++;
@@ -386,11 +418,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         emit DisputeAppealed(_disputeID, dispute.currentRound - 1);
     }
     
-    function finalizeDispute(uint disputeId) external nonReentrant {
+    function finalizeDispute(uint256 disputeId) external nonReentrant {
         Dispute storage dispute = disputes[disputeId];
         require(!dispute.isFinalized, "Already finalized");
         
-        uint finalRound = dispute.currentRound;
+        uint256 finalRound = dispute.currentRound;
         DisputeRound storage round = rounds[disputeId][finalRound];
         require(round.finalized, "Round not finalized");
         
@@ -399,7 +431,7 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         require(canFinalize, "Still appealable");
         
         if (finalRound > 0) {
-            for (uint i = 0; i < finalRound; i++) {
+            for (uint256 i = 0; i < finalRound; i++) {
                 _slashRound(disputeId, i, round.verdict);
             }
         }
@@ -407,27 +439,29 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         dispute.isFinalized = true;
         dispute.status = DisputeStatus.Solved;
         
-        uint ruling = uint(round.verdict) - 1;
+        uint256 ruling = uint256(round.verdict) - 1;
         IArbitrable(dispute.market).rule(disputeId, ruling);
     }
     
-    function _slashRound(uint disputeId, uint round, VoteChoice finalVerdict) internal {
+    function _slashRound(uint256 disputeId, uint256 round, VoteChoice finalVerdict) internal {
         DisputeRound storage slashRound = rounds[disputeId][round];
         
-        for (uint i = 0; i < slashRound.selectedJurors.length; i++) {
+        for (uint256 i = 0; i < slashRound.selectedJurors.length; i++) {
             address jurorAddr = slashRound.selectedJurors[i];
             
             if (slashRound.votes[jurorAddr] != finalVerdict && 
                 slashRound.votes[jurorAddr] != VoteChoice.None) {
                 
-                uint slashAmount = SettlementLib.calculateSlashAmount(
-                    basketContract,
-                    jurorAddr,
-                    SLASH_PCT
-                );
+                uint256 balance = Basket(basketContract).totalBalances(jurorAddr);
+                uint256 slashAmount = (balance * SLASH_PCT) / 100;
                 
                 if (slashAmount > 0) {
-                    Basket(basketContract).turn(jurorAddr, slashAmount);
+                    // Transfer slashed tokens to settlement pool
+                    Basket(basketContract).transferFrom(
+                        jurorAddr,
+                        address(this),
+                        slashAmount
+                    );
                     wrongVotes[jurorAddr]++;
                     
                     emit JurorSlashed(jurorAddr, slashAmount);
@@ -436,11 +470,44 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         }
     }
     
-    function claimStakes(address market, uint proposalId) external nonReentrant {
+    // ============ Helper Functions ============
+    
+    function forceTimeoutResolution(address market) external {
+        Dispute storage dispute = disputes[marketDispute[market]];
+        
+        if (dispute.createdAt > 0 && !dispute.isFinalized) {
+            // Check if dispute timeout reached
+            bool timeout = block.timestamp > dispute.createdAt + TIMEOUT;
+            require(timeout, "No timeout");
+            
+            dispute.isFinalized = true;
+            dispute.status = DisputeStatus.Solved;
+            
+            // Default to NO outcome on timeout
+            IArbitrable(market).rule(marketDispute[market], 0);
+        } else {
+            // No dispute - check absolute timeout
+            Safta doppler = Safta(market);
+            (,uint256 resolutionTime,,,,) = doppler.getMarketInfo();
+            
+            bool absTimeout = block.timestamp > resolutionTime + ABS_TIMEOUT;
+            require(absTimeout, "No absolute timeout");
+            
+            // Force resolve as NO
+            doppler.resolveMarket(false);
+        }
+    }
+    
+    function claimSettlementReward(address market) external nonReentrant {
+        // Implementation for claiming rewards after successful settlement
+        emit SettlementRewardClaimed(msg.sender, 0);
+    }
+    
+    function claimStakes(address market, uint256 proposalId) external nonReentrant {
         Proposal storage proposal = proposals[market][proposalId];
         require(proposal.status == ProposalStatus.Executed, "Not executed");
         
-        uint amount = 0;
+        uint256 amount = 0;
         
         if (msg.sender == proposal.proposer) {
             amount = proposal.stake + proposal.supportStake + proposal.opposeStake;
@@ -449,9 +516,9 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
             proposal.opposeStake = 0;
         }
         else if (proposal.supporters[msg.sender] > 0) {
-            uint supporterStake = proposal.supporters[msg.sender];
-            uint totalSupport = proposal.supportStake;
-            uint winnings = proposal.opposeStake;
+            uint256 supporterStake = proposal.supporters[msg.sender];
+            uint256 totalSupport = proposal.supportStake;
+            uint256 winnings = proposal.opposeStake;
             
             amount = supporterStake + (winnings * supporterStake / totalSupport);
             proposal.supporters[msg.sender] = 0;
@@ -462,147 +529,16 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         Basket(basketContract).transfer(msg.sender, amount);
     }
     
-    function _isSelectedJuror(address[] memory jurors, address juror) internal pure returns (bool) {
-        for (uint i = 0; i < jurors.length; i++) {
-            if (jurors[i] == juror) return true;
-        }
-        return false;
-    }
-    
-    function forceTimeoutResolution(uint disputeId) external {
-        Dispute storage dispute = disputes[disputeId];
-        require(!dispute.isFinalized, "Already finalized");
-        
-        address market = dispute.market;
-        Auction auction = Auction(payable(market));
-        uint resolutionTime = auction.resolutionTime();
-        
-        bool timeout = block.timestamp > resolutionTime + ABS_TIMEOUT ||
-                      block.timestamp > dispute.createdAt + TIMEOUT;
-        require(timeout, "No timeout");
-        
-        dispute.isFinalized = true;
-        dispute.status = DisputeStatus.Solved;
-        
-        IArbitrable(market).rule(disputeId, 2);
-    }
-    
-    function createPredictionMarketMetaEvidence() external returns (uint) {
-        return createMetaEvidence(
-            "Standard Prediction Market",
-            "Resolution based on objective outcome",
-            "",
-            "[{\"title\":\"NO\",\"description\":\"Event did not occur\"},{\"title\":\"YES\",\"description\":\"Event occurred\"},{\"title\":\"Force Majeur\",\"description\":\"Cancel due to unforeseen circumstances\"}]",
-            ""
-        );
-    }
-    
-    function createMetaEvidence(
-        string memory _title,
-        string memory _description,
-        string memory _question,
-        string memory _rulingOptions,
-        string memory _fileURI
-    ) public returns (uint) {
-        uint id = metaEvidenceCount++;
-        
-        bytes memory json = abi.encodePacked(
-            '{"title":"', _title,
-            '","description":"', _description,
-            '","question":"', _question,
-            '","rulingOptions":', _rulingOptions,
-            ',"fileURI":"', _fileURI, '"}'
-        );
-        
-        metaEvidenceURIs[id] = string(json);
-        emit MetaEvidence(id, metaEvidenceURIs[id]);
-        return id;
-    }
-    
-    function initiateDisputeWithMetaEvidence(
-        address market,
-        uint,
-        string calldata evidence,
-        string calldata evidenceHash,
-        uint stakeAmount
-    ) external returns (uint disputeId) {
-        uint proposalId = this.proposeSettlement(market, false, stakeAmount / 2);
-        return this.disputeProposal(market, proposalId, evidence, evidenceHash, stakeAmount / 2);
-    }
-    
-    function createDispute(uint _choices, bytes calldata) external payable override returns (uint disputeID) {
-        require(_choices >= 2, "Need choices");
-        
-        uint requiredStake = MIN_STAKE;
-        Basket(basketContract).transferFrom(msg.sender, address(this), requiredStake);
-        
-        disputeID = ++disputeCount;
-        disputes[disputeID] = Dispute({
-            market: msg.sender,
-            proposalId: 0,
-            currentRound: 0,
-            createdAt: block.timestamp,
-            status: DisputeStatus.Waiting,
-            isFinalized: false
-        });
-        
-        marketDispute[msg.sender] = disputeID;
-        emit DisputeCreated(disputeID, IArbitrable(msg.sender), _choices);
-    }
-    
-    function arbitrationCost(bytes calldata) external pure override returns (uint) {
-        return MIN_STAKE;
-    }
-    
-    function appealCost(uint _disputeID, bytes calldata) external view override returns (uint) {
-        return MIN_STAKE * (APPEAL_MULT ** disputes[_disputeID].currentRound);
-    }
-    
-    function disputeStatus(uint _disputeID) external view override returns (DisputeStatus) {
-        return disputes[_disputeID].status;
-    }
-    
-    function currentRuling(uint _disputeID) external view override returns (uint) {
-        Dispute storage dispute = disputes[_disputeID];
-        DisputeRound storage round = rounds[_disputeID][dispute.currentRound];
-        
-        if (round.finalized) {
-            return uint(round.verdict) - 1;
-        }
-        return 0;
-    }
-    
-    function appealPeriod(uint _disputeID) external view override returns (uint start, uint end) {
-        Dispute storage dispute = disputes[_disputeID];
-        DisputeRound storage round = rounds[_disputeID][dispute.currentRound];
-        
-        if (round.finalized && dispute.currentRound < MAX_ROUNDS - 1) {
-            start = block.timestamp;
-            end = start + APPEAL_PER;
-        }
-    }
-    
-    function submitEvidence(uint _disputeID, string calldata _evidence) external {
-        Dispute storage dispute = disputes[_disputeID];
-        require(dispute.createdAt > 0, "Invalid dispute");
-        require(block.timestamp <= dispute.createdAt + EVIDENCE_PER, "Evidence period ended");
-        
-        emit Evidence(IArbitrator(address(this)), _disputeID, msg.sender, _evidence);
-    }
-    
     function canSettle(address market) external view returns (bool canSettleResult, string memory reason) {
-        // Check if valid market by trying to call a function
-        try Auction(payable(market)).bettingWindowClosed() returns (bool) {
-            // Valid market
-        } catch {
+        if (!_isValidMarket(market)) {
             return (false, "Invalid market");
         }
         
-        Auction auction = Auction(payable(market));
-        (, , , , , bool resolved, ) = auction.getPredictionSummary();
-        uint resolutionTime = auction.resolutionTime();
+        Safta doppler = Safta(market);
+        (,uint256 resolutionTime,,,,) = doppler.getMarketInfo();
         
-        if (resolved) {
+        // Check if already resolved
+        if (doppler.isResolved()) {
             return (false, "Already resolved");
         }
         
@@ -645,8 +581,111 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         return (true, "Ready for new settlement proposal");
     }
     
-    function getEligibleJurorCount() external view returns (uint) {
-        (, uint count) = getPotentialJurors();
+    function getProposalOutcome(address market, uint256 proposalId) external view returns (bool) {
+        return proposals[market][proposalId].outcome;
+    }
+    
+    function getProposalSupport(address market, uint256 proposalId) external view returns (uint256) {
+        Proposal storage proposal = proposals[market][proposalId];
+        return proposal.stake + proposal.supportStake;
+    }
+    
+    function isRegisteredMarket(address market) external view returns (bool) {
+        return _isValidMarket(market);
+    }
+    
+    function getEligibleJurorCount() external view returns (uint256) {
+        (, uint256 count) = getPotentialJurors();
         return count;
+    }
+    
+    function submitEvidence(uint256 _disputeID, string calldata _evidence) external {
+        Dispute storage dispute = disputes[_disputeID];
+        require(dispute.createdAt > 0, "Invalid dispute");
+        require(block.timestamp <= dispute.createdAt + EVIDENCE_PER, "Evidence period ended");
+        
+        emit Evidence(IArbitrator(address(this)), _disputeID, msg.sender, _evidence);
+    }
+    
+    function _isValidMarket(address market) internal view returns (bool) {
+        return SaftaFactory(doppler404Factory).isValidMarket(market);
+    }
+    
+    function _canPropose(address market) internal view returns (bool) {
+        Safta doppler = Safta(market);
+        (,uint256 resolutionTime,,,,) = doppler.getMarketInfo();
+        
+        // Check if already resolved
+        if (doppler.isResolved()) return false;
+        
+        // Check resolution time
+        if (block.timestamp < resolutionTime) return false;
+        
+        return true;
+    }
+    
+    function _isSelectedJuror(address[] memory jurors, address juror) internal pure returns (bool) {
+        for (uint256 i = 0; i < jurors.length; i++) {
+            if (jurors[i] == juror) return true;
+        }
+        return false;
+    }
+    
+    // ============ IArbitrator Implementation ============
+    
+    function createDispute(uint256 _choices, bytes calldata _extraData) external payable override returns (uint256 disputeID) {
+        require(_choices >= 2, "Need choices");
+        
+        uint256 requiredStake = MIN_STAKE;
+        Basket(basketContract).transferFrom(
+            msg.sender,
+            address(this),
+            requiredStake
+        );
+        
+        disputeID = ++disputeCount;
+        disputes[disputeID] = Dispute({
+            market: msg.sender,
+            proposalId: 0,
+            currentRound: 0,
+            createdAt: block.timestamp,
+            status: DisputeStatus.Waiting,
+            isFinalized: false
+        });
+        
+        marketDispute[msg.sender] = disputeID;
+        emit DisputeCreated(disputeID, IArbitrable(msg.sender), _choices);
+    }
+    
+    function arbitrationCost(bytes calldata) external pure override returns (uint256) {
+        return MIN_STAKE;
+    }
+    
+    function appealCost(uint256 _disputeID, bytes calldata) external view override returns (uint256) {
+        return MIN_STAKE * (APPEAL_MULT ** disputes[_disputeID].currentRound);
+    }
+    
+    function disputeStatus(uint256 _disputeID) external view override returns (DisputeStatus) {
+        return disputes[_disputeID].status;
+    }
+    
+    function currentRuling(uint256 _disputeID) external view override returns (uint256) {
+        Dispute storage dispute = disputes[_disputeID];
+        DisputeRound storage round = rounds[_disputeID][dispute.currentRound];
+        
+        if (round.finalized) {
+            return uint256(round.verdict) - 1;
+        }
+        return 0;
+    }
+    
+    function appealPeriod(uint256 _disputeID) external view override returns (uint256 start, uint256 end) {
+        Dispute storage dispute = disputes[_disputeID];
+        DisputeRound storage round = rounds[_disputeID][dispute.currentRound];
+        
+        if (round.finalized && dispute.currentRound < MAX_ROUNDS - 1) {
+            start = block.timestamp;
+            end = start + APPEAL_PER;
+        }
     }
 }

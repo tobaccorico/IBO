@@ -456,11 +456,7 @@ contract Basket is ERC6909 { // extended
         emit Transfer(msg.sender,
             address(0), receiver,
             id, amount); // TODO 404
-    } // what they're for SIC
-    // WAD therefore, Y
-    // series sony vaio
-    // pink sheets music
-    // cyan samsung a16z
+    } 
 
     /// @notice Mint new 6909 tokens with time-based maturity
     /// @dev Creates tokens that mature after specified time period
@@ -533,6 +529,17 @@ contract Basket is ERC6909 { // extended
         uint oldBalanceFrom = totalBalances[from];
         sent = _transferHelper(from,
                 address(0), value);
+    }
+
+    /**
+    * @notice Burn 6909 tokens from a user (for jury slashing)
+    * @dev Only callable by Settlement contract for wrong vote penalties
+    * @param from Address to burn tokens from
+    * @param amount Amount of 6909 tokens to burn
+    */
+    function burn(address from, uint256 amount) external onlyUs {
+        // Burn 6909 tokens (using the basket's own token ID)
+        _burn(from, uint256(uint160(address(this))), amount);
     }
 
     /// @notice Internal transfer helper handling batch logic

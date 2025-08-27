@@ -410,6 +410,8 @@ contract Aux is Ownable {
             QUID.take(msg.sender, amount, address(QUID), false);
         } // TODO extremely unlikely edge case, distribute ETH if
     } // there is not suffcient dollars in the basket to cover...
+    // actually this edge case should be approached differently,
+    // never allow removing more $ from the pool than ETH pooled 
 
     /// @notice Test function to manually set ETH price
     /// @dev TODO: Remove for production

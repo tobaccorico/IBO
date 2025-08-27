@@ -2,16 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import {
   FACTORY_ABI,
-  HELPERS_ABI,
+  DOPPLER404_ABI,
   SETTLEMENT_ABI,
-  AUCTION_ABI,
   BASKET_ABI,
+  AUX_ABI,
 } from './contracts/abis';
 import { 
   FACTORY_ADDRESS, 
-  HELPERS_ADDRESS, 
   SETTLEMENT_ADDRESS,
   BASKET_ADDRESS,
+  AUX_ADDRESS,
 } from './contracts/addresses';
 
 import { MetaMaskInpageProvider } from "@metamask/providers";
@@ -25,23 +25,24 @@ declare global {
 interface Market {
   address: string;
   question: string;
-  currentPrice: number;
-  timeRemaining: number;
+  resolutionTime: number;
   totalYesShares: number;
   totalNoShares: number;
-  totalPoolUSD: number;
-  impliedProbability: number;
-  isActive: boolean;
+  weightedYesShares: number;
+  weightedNoShares: number;
+  currentEpoch: number;
+  currentPrice: number;
+  timeUntilNextEpoch: number;
   isResolved: boolean;
   outcome: boolean;
-  epochSharesRemaining: number;
-  minimumPriceFor10Percent: number;
 }
 
 interface UserPosition {
   yesShares: number;
   noShares: number;
-  claimable: number;
+  deposited: number;
+  avgConfidence: number;
+  hasClaimed: boolean;
 }
 
 function App() {
@@ -51,20 +52,22 @@ function App() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [betAmount, setBetAmount] = useState<string>('');
-  const [evidenceLink, setEvidenceLink] = useState<string>('');
+  const [confidence, setConfidence] = useState<string>('50');
   const [activeTab, setActiveTab] = useState<'markets' | 'create' | 'settle'>('markets');
   const [newMarketQuestion, setNewMarketQuestion] = useState<string>('');
-  const [newMarketDuration, setNewMarketDuration] = useState<string>('24');
+  const [newMarketDuration, setNewMarketDuration] = useState<string>('7');
+  const [newMarketEpochLength, setNewMarketEpochLength] = useState<string>('1');
   const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
   const [quidBalance, setQuidBalance] = useState<string>('0');
   const [loading, setLoading] = useState<boolean>(false);
   const [txStatus, setTxStatus] = useState<string>('');
+  const [currentEpochBatch, setCurrentEpochBatch] = useState<number>(0);
 
   // Contract instances
   const [factoryContract, setFactoryContract] = useState<ethers.Contract | null>(null);
-  const [helpersContract, setHelpersContract] = useState<ethers.Contract | null>(null);
   const [settlementContract, setSettlementContract] = useState<ethers.Contract | null>(null);
-  const [quidContract, setQuidContract] = useState<ethers.Contract | null>(null);
+  const [basketContract, setBasketContract] = useState<ethers.Contract | null>(null);
+  const [auxContract, setAuxContract] = useState<ethers.Contract | null>(null);
 
   // Connect wallet
   const connectWallet = async () => {
@@ -85,31 +88,18 @@ function App() {
 
       // Initialize contracts
       const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
-      const helpers = new ethers.Contract(HELPERS_ADDRESS, HELPERS_ABI, signer);
       const settlement = new ethers.Contract(SETTLEMENT_ADDRESS, SETTLEMENT_ABI, signer);
-      const quid = new ethers.Contract(BASKET_ADDRESS, BASKET_ABI, signer);
+      const basket = new ethers.Contract(BASKET_ADDRESS, BASKET_ABI, signer);
+      const aux = new ethers.Contract(AUX_ADDRESS, AUX_ABI, signer);
 
       setFactoryContract(factory);
-      setHelpersContract(helpers);
       setSettlementContract(settlement);
-      setQuidContract(quid);
+      setBasketContract(basket);
+      setAuxContract(aux);
 
-      // Auto-faucet check
-      const balance = await quid.balanceOf(address);
+      // Get 6909 balance
+      const balance = await basket.balanceOf(address, ethers.toBigInt(BASKET_ADDRESS));
       setQuidBalance(ethers.formatEther(balance));
-      
-      if (balance === 0n) {
-        setTxStatus('Getting your free QUID tokens...');
-        try {
-          const tx = await quid.faucet();
-          await tx.wait();
-          const newBalance = await quid.balanceOf(address);
-          setQuidBalance(ethers.formatEther(newBalance));
-          setTxStatus('✅ Received 1000 QUID tokens!');
-        } catch (err) {
-          console.error('Faucet error:', err);
-        }
-      }
 
     } catch (error) {
       console.error('Connection error:', error);
@@ -119,16 +109,16 @@ function App() {
 
   // Load markets
   const loadMarkets = async () => {
-    if (!helpersContract || !factoryContract) return;
+    if (!factoryContract) return;
     
     setLoading(true);
     try {
       // Get all markets from factory
-      const marketCount = await factoryContract.marketCount();
+      const marketCount = await factoryContract.getMarketCount();
       const marketPromises = [];
       
       for (let i = 0; i < marketCount; i++) {
-        marketPromises.push(factoryContract.markets(i));
+        marketPromises.push(factoryContract.getMarket(i));
       }
       
       const marketAddresses = await Promise.all(marketPromises);
@@ -136,21 +126,24 @@ function App() {
       // Get detailed info for each market
       const marketInfoPromises = marketAddresses.map(async (address: string) => {
         try {
-          const info = await helpersContract.getMarketInfo(address);
+          const marketContract = new ethers.Contract(address, DOPPLER404_ABI, signer);
+          const info = await marketContract.getMarketInfo();
+          const epochInfo = await marketContract.getCurrentEpochInfo();
+          const marketData = await marketContract.market();
+          
           return {
             address,
             question: info.question,
-            currentPrice: Number(ethers.formatEther(info.currentPrice)),
-            timeRemaining: Number(info.timeRemaining),
-            totalYesShares: Number(ethers.formatEther(info.totalYesShares)),
-            totalNoShares: Number(ethers.formatEther(info.totalNoShares)),
-            totalPoolUSD: Number(ethers.formatEther(info.totalPoolUSD)),
-            impliedProbability: Number(info.impliedProbability) / 100,
-            isActive: info.isActive,
-            isResolved: info.isResolved,
-            outcome: info.outcome,
-            epochSharesRemaining: Number(ethers.formatEther(info.epochSharesRemaining)),
-            minimumPriceFor10Percent: Number(ethers.formatEther(info.minimumPriceFor10Percent))
+            resolutionTime: Number(info.resolutionTime),
+            totalYesShares: Number(ethers.formatEther(info.totalYes)),
+            totalNoShares: Number(ethers.formatEther(info.totalNo)),
+            weightedYesShares: Number(ethers.formatEther(info.weightedYes)),
+            weightedNoShares: Number(ethers.formatEther(info.weightedNo)),
+            currentEpoch: Number(epochInfo.epochId),
+            currentPrice: Number(ethers.formatEther(epochInfo.currentPrice)),
+            timeUntilNextEpoch: Number(epochInfo.timeUntilNext),
+            isResolved: marketData.resolved,
+            outcome: marketData.binaryOutcome
           };
         } catch (err) {
           console.error(`Error loading market ${address}:`, err);
@@ -172,16 +165,15 @@ function App() {
     if (!signer || !account) return;
     
     try {
-      const auctionContract = new ethers.Contract(marketAddress, AUCTION_ABI, signer);
-      
-      // Get user shares
-      const yesShares = await auctionContract.userYesShares(account);
-      const noShares = await auctionContract.userNoShares(account);
+      const marketContract = new ethers.Contract(marketAddress, DOPPLER404_ABI, signer);
+      const position = await marketContract.getPosition(account);
       
       setUserPosition({
-        yesShares: Number(ethers.formatEther(yesShares)),
-        noShares: Number(ethers.formatEther(noShares)),
-        claimable: 0 // Will be calculated after resolution
+        yesShares: Number(ethers.formatEther(position.yesShares)),
+        noShares: Number(ethers.formatEther(position.noShares)),
+        deposited: Number(ethers.formatEther(position.deposited)),
+        avgConfidence: Number(position.avgConfidence),
+        hasClaimed: position.hasClaimed
       });
     } catch (error) {
       console.error('Error loading user position:', error);
@@ -196,10 +188,16 @@ function App() {
     setTxStatus('Creating market...');
     
     try {
-      const durationHours = parseInt(newMarketDuration);
-      const tx = await factoryContract.createMarket(
+      const durationDays = parseInt(newMarketDuration);
+      const epochHours = parseInt(newMarketEpochLength);
+      
+      const tx = await factoryContract.deployMarket(
         newMarketQuestion,
-        durationHours * 3600 // Convert to seconds
+        Math.floor(Date.now() / 1000) + (durationDays * 86400), // Resolution time
+        false, // Binary market (not scalar)
+        `DARE${Date.now()}`, // Name
+        `D${Date.now()}`, // Symbol
+        epochHours * 3600 // Epoch length in seconds
       );
       
       setTxStatus('⏳ Transaction pending...');
@@ -207,7 +205,8 @@ function App() {
       
       setTxStatus('✅ Market created successfully!');
       setNewMarketQuestion('');
-      setNewMarketDuration('24');
+      setNewMarketDuration('7');
+      setNewMarketEpochLength('1');
       
       // Reload markets
       await loadMarkets();
@@ -220,57 +219,72 @@ function App() {
     }
   };
 
-  // Place bet
+  // Place bet (queue bid)
   const placeBet = async (isYes: boolean) => {
-    if (!selectedMarket || !betAmount || !signer) return;
+    if (!selectedMarket || !betAmount || !signer || !basketContract || !auxContract) return;
     
     setLoading(true);
-    setTxStatus(`Placing ${isYes ? 'YES' : 'NO'} bet...`);
+    setTxStatus(`Placing ${isYes ? 'YES' : 'NO'} bet with ${confidence}% confidence...`);
     
     try {
-      const auctionContract = new ethers.Contract(selectedMarket.address, AUCTION_ABI, signer);
-      const ethAmount = ethers.parseEther(betAmount);
+      const marketContract = new ethers.Contract(selectedMarket.address, DOPPLER404_ABI, signer);
       
-      // Calculate price per share (confidence level)
-      const pricePerShare = isYes 
-        ? ethers.parseEther(String(selectedMarket.impliedProbability))
-        : ethers.parseEther(String(1 - selectedMarket.impliedProbability));
-      
-      // Place bet with optional evidence link
-      let tx;
-      if (evidenceLink) {
-        tx = await auctionContract.placePredictionBidWithContent(
-          pricePerShare,
-          isYes,
-          evidenceLink,
+      // First, convert ETH to 6909 tokens
+      if (parseFloat(betAmount) > 0) {
+        // Check if betting with ETH
+        const ethAmount = ethers.parseEther(betAmount);
+        
+        // Deposit ETH to Aux, get USD, then deposit to Basket for 6909
+        setTxStatus('Converting ETH to 6909 tokens...');
+        
+        // 1. Send ETH to Aux
+        const auxTx = await auxContract.swap(
+          ethers.ZeroAddress, // from ETH
+          false, // not for one (getting USD)
+          0, // amount (0 means use msg.value)
           { value: ethAmount }
         );
-      } else {
-        tx = await auctionContract.placePredictionBid(
-          pricePerShare,
-          isYes,
-          { value: ethAmount }
-        );
+        await auxTx.wait();
+        
+        // 2. The USD goes to Basket automatically, now we have 6909 tokens
       }
+      
+      // Get current 6909 balance
+      const balance6909 = await basketContract.balanceOf(account, ethers.toBigInt(BASKET_ADDRESS));
+      
+      // Approve market to spend 6909 tokens
+      setTxStatus('Approving 6909 spending...');
+      const approveTx = await basketContract.setApprovalForAll(selectedMarket.address, true);
+      await approveTx.wait();
+      
+      // Queue bid with confidence
+      setTxStatus('Queueing bid...');
+      const bidAmount = ethers.parseEther(betAmount); // Amount in 6909
+      const tx = await marketContract.queueBid(
+        bidAmount,
+        isYes,
+        parseInt(confidence)
+      );
       
       setTxStatus('⏳ Transaction pending...');
       await tx.wait();
       
-      // Try to clear the epoch if possible
-      try {
-        const epochInfo = await auctionContract.getCurrentEpochInfo();
-        if (epochInfo.bidCount >= 10 || !epochInfo.isActive) {
-          setTxStatus('🔄 Clearing epoch...');
-          const clearTx = await auctionContract.clearEpoch(epochInfo.index);
-          await clearTx.wait();
+      // Check if we should process the batch
+      const epochInfo = await marketContract.getCurrentEpochInfo();
+      if (epochInfo.epochId > currentEpochBatch && !epochInfo.processed) {
+        setTxStatus('Processing batch...');
+        try {
+          const processTx = await marketContract.processBatch(currentEpochBatch);
+          await processTx.wait();
+          setCurrentEpochBatch(Number(epochInfo.epochId));
+        } catch (err) {
+          console.log('Batch processing not ready yet');
         }
-      } catch (err) {
-        console.log('Epoch clearing not needed or failed:', err);
       }
       
-      setTxStatus(`✅ ${isYes ? 'YES' : 'NO'} bet placed successfully!`);
+      setTxStatus(`✅ ${isYes ? 'YES' : 'NO'} bet placed with ${confidence}% confidence!`);
       setBetAmount('');
-      setEvidenceLink('');
+      setConfidence('50');
       
       // Reload market data and user position
       await loadMarkets();
@@ -285,21 +299,19 @@ function App() {
 
   // Propose settlement
   const proposeSettlement = async (outcome: boolean) => {
-    if (!selectedMarket || !settlementContract || !quidContract) return;
+    if (!selectedMarket || !settlementContract || !basketContract) return;
     
     setLoading(true);
     setTxStatus(`Proposing ${outcome ? 'YES' : 'NO'} outcome...`);
     
     try {
-      // First approve QUID spending
+      // First approve 6909 spending
       const stakeAmount = ethers.parseEther('100'); // 100 QUID stake
-      const allowance = await quidContract.allowance(account, SETTLEMENT_ADDRESS);
+      const basketId = ethers.toBigInt(BASKET_ADDRESS);
       
-      if (allowance < stakeAmount) {
-        setTxStatus('Approving QUID spending...');
-        const approveTx = await quidContract.approve(SETTLEMENT_ADDRESS, stakeAmount);
-        await approveTx.wait();
-      }
+      setTxStatus('Approving 6909 spending...');
+      const approveTx = await basketContract.setApprovalForAll(SETTLEMENT_ADDRESS, true);
+      await approveTx.wait();
       
       // Propose settlement
       const tx = await settlementContract.proposeSettlement(
@@ -331,8 +343,8 @@ function App() {
     setTxStatus('Claiming winnings...');
     
     try {
-      const auctionContract = new ethers.Contract(selectedMarket.address, AUCTION_ABI, signer);
-      const tx = await auctionContract.claimPayout();
+      const marketContract = new ethers.Contract(selectedMarket.address, DOPPLER404_ABI, signer);
+      const tx = await marketContract.claimWinnings();
       
       setTxStatus('⏳ Transaction pending...');
       await tx.wait();
@@ -351,12 +363,12 @@ function App() {
 
   // Auto-refresh markets
   useEffect(() => {
-    if (factoryContract && helpersContract) {
+    if (factoryContract) {
       loadMarkets();
       const interval = setInterval(loadMarkets, 30000); // Refresh every 30 seconds
       return () => clearInterval(interval);
     }
-  }, [factoryContract, helpersContract]);
+  }, [factoryContract]);
 
   // Load user position when market is selected
   useEffect(() => {
@@ -365,12 +377,19 @@ function App() {
     }
   }, [selectedMarket, account]);
 
-  // Format time remaining
+  // Format time
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     if (hours > 0) return `${hours}h ${minutes}m`;
     return `${minutes}m`;
+  };
+
+  // Calculate implied probability
+  const getImpliedProbability = (market: Market) => {
+    const total = market.weightedYesShares + market.weightedNoShares;
+    if (total === 0) return 50;
+    return (market.weightedYesShares / total) * 100;
   };
 
   return (
@@ -380,12 +399,12 @@ function App() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
             <h1 className="text-3xl font-bold text-white">
-              🎭 Truth or Dare Markets
+              🎭 Truth or Dare Markets (Belgian Auction)
             </h1>
             <div className="flex items-center gap-4">
               {account && (
                 <div className="text-white/80 text-sm">
-                  💰 {parseFloat(quidBalance).toFixed(2)} QUID
+                  💰 {parseFloat(quidBalance).toFixed(2)} QUID (6909)
                 </div>
               )}
               <button
@@ -483,7 +502,7 @@ function App() {
                         </span>
                       ) : (
                         <span className="text-white/60 text-sm">
-                          ⏱️ {formatTime(market.timeRemaining)}
+                          Epoch {market.currentEpoch} • {formatTime(market.timeUntilNextEpoch)}
                         </span>
                       )}
                     </div>
@@ -492,7 +511,7 @@ function App() {
                       <div className="bg-green-500/10 rounded-lg p-3">
                         <div className="text-green-400 text-sm">YES</div>
                         <div className="text-white font-semibold">
-                          {(market.impliedProbability * 100).toFixed(1)}%
+                          {getImpliedProbability(market).toFixed(1)}%
                         </div>
                         <div className="text-white/60 text-xs">
                           {market.totalYesShares.toFixed(2)} shares
@@ -501,7 +520,7 @@ function App() {
                       <div className="bg-red-500/10 rounded-lg p-3">
                         <div className="text-red-400 text-sm">NO</div>
                         <div className="text-white font-semibold">
-                          {((1 - market.impliedProbability) * 100).toFixed(1)}%
+                          {(100 - getImpliedProbability(market)).toFixed(1)}%
                         </div>
                         <div className="text-white/60 text-xs">
                           {market.totalNoShares.toFixed(2)} shares
@@ -510,8 +529,8 @@ function App() {
                     </div>
                     
                     <div className="flex justify-between text-white/60 text-sm">
-                      <span>💰 Pool: ${market.totalPoolUSD.toFixed(2)}</span>
-                      <span>📊 Min for 10%: ${market.minimumPriceFor10Percent.toFixed(2)}</span>
+                      <span>💵 Current Price: ${market.currentPrice.toFixed(4)}</span>
+                      <span>⏰ Resolution: {new Date(market.resolutionTime * 1000).toLocaleDateString()}</span>
                     </div>
                   </div>
                 ))
@@ -528,29 +547,40 @@ function App() {
                     {userPosition && (
                       <div className="mb-4 p-3 bg-white/5 rounded-lg">
                         <div className="text-white/60 text-sm mb-1">Your Position</div>
-                        <div className="flex justify-between text-white">
-                          <span>YES: {userPosition.yesShares.toFixed(2)}</span>
-                          <span>NO: {userPosition.noShares.toFixed(2)}</span>
+                        <div className="grid grid-cols-2 gap-2 text-white text-sm">
+                          <div>YES: {userPosition.yesShares.toFixed(2)}</div>
+                          <div>NO: {userPosition.noShares.toFixed(2)}</div>
+                          <div>Deposited: ${userPosition.deposited.toFixed(2)}</div>
+                          <div>Avg Conf: {userPosition.avgConfidence}%</div>
                         </div>
                       </div>
                     )}
                     
-                    <input
-                      type="number"
-                      placeholder="ETH amount"
-                      value={betAmount}
-                      onChange={(e) => setBetAmount(e.target.value)}
-                      className="w-full px-4 py-2 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
-                      step="0.01"
-                    />
-                    
-                    <input
-                      type="text"
-                      placeholder="Evidence link (optional)"
-                      value={evidenceLink}
-                      onChange={(e) => setEvidenceLink(e.target.value)}
-                      className="w-full mt-3 px-4 py-2 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
-                    />
+                    <div className="space-y-3">
+                      <input
+                        type="number"
+                        placeholder="ETH amount"
+                        value={betAmount}
+                        onChange={(e) => setBetAmount(e.target.value)}
+                        className="w-full px-4 py-2 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
+                        step="0.01"
+                      />
+                      
+                      <div>
+                        <label className="text-white/60 text-sm">Confidence Level: {confidence}%</label>
+                        <input
+                          type="range"
+                          min="1"
+                          max="100"
+                          value={confidence}
+                          onChange={(e) => setConfidence(e.target.value)}
+                          className="w-full mt-1"
+                        />
+                        <div className="text-white/40 text-xs mt-1">
+                          Higher confidence = more shares but higher risk
+                        </div>
+                      </div>
+                    </div>
                     
                     <div className="grid grid-cols-2 gap-3 mt-4">
                       <button
@@ -569,7 +599,8 @@ function App() {
                       </button>
                     </div>
                     
-                    {selectedMarket.isResolved && userPosition && (userPosition.yesShares > 0 || userPosition.noShares > 0) && (
+                    {selectedMarket.isResolved && userPosition && !userPosition.hasClaimed && 
+                     (userPosition.yesShares > 0 || userPosition.noShares > 0) && (
                       <button
                         onClick={claimWinnings}
                         disabled={loading}
@@ -581,19 +612,22 @@ function App() {
                   </div>
                   
                   <div className="bg-black/30 backdrop-blur-md rounded-lg p-6">
-                    <h3 className="text-lg font-bold text-white mb-3">Market Stats</h3>
+                    <h3 className="text-lg font-bold text-white mb-3">Belgian Auction Info</h3>
                     <div className="space-y-2 text-white/80 text-sm">
                       <div className="flex justify-between">
-                        <span>Current Price:</span>
+                        <span>Current Epoch:</span>
+                        <span>#{selectedMarket.currentEpoch}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Epoch Price:</span>
                         <span>${selectedMarket.currentPrice.toFixed(4)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Epoch Shares:</span>
-                        <span>{selectedMarket.epochSharesRemaining.toFixed(2)}</span>
+                        <span>Next Epoch:</span>
+                        <span>{formatTime(selectedMarket.timeUntilNextEpoch)}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Status:</span>
-                        <span>{selectedMarket.isActive ? '🟢 Active' : '🔴 Inactive'}</span>
+                      <div className="text-white/60 text-xs mt-2">
+                        ⬆️ Prices increase over time (Belgian auction)
                       </div>
                     </div>
                   </div>
@@ -627,21 +661,40 @@ function App() {
                   />
                 </div>
                 
-                <div>
-                  <label className="block text-white/80 text-sm mb-2">
-                    Duration (hours)
-                  </label>
-                  <input
-                    type="number"
-                    value={newMarketDuration}
-                    onChange={(e) => setNewMarketDuration(e.target.value)}
-                    min="1"
-                    max="168"
-                    className="w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
-                  />
-                  <p className="text-white/60 text-xs mt-1">
-                    Market will be open for {newMarketDuration} hours
-                  </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-white/80 text-sm mb-2">
+                      Duration (days)
+                    </label>
+                    <input
+                      type="number"
+                      value={newMarketDuration}
+                      onChange={(e) => setNewMarketDuration(e.target.value)}
+                      min="1"
+                      max="30"
+                      className="w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-white/80 text-sm mb-2">
+                      Epoch Length (hours)
+                    </label>
+                    <input
+                      type="number"
+                      value={newMarketEpochLength}
+                      onChange={(e) => setNewMarketEpochLength(e.target.value)}
+                      min="1"
+                      max="24"
+                      className="w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                
+                <div className="text-white/60 text-sm">
+                  • Market will be open for {newMarketDuration} days<br/>
+                  • Prices will increase every {newMarketEpochLength} hour(s) (Belgian auction)<br/>
+                  • Early participants get better prices
                 </div>
                 
                 <button
@@ -662,13 +715,13 @@ function App() {
             <h2 className="text-2xl font-bold text-white mb-6">Market Settlement</h2>
             
             <div className="space-y-4">
-              {markets.filter(m => !m.isResolved && m.timeRemaining === 0).length === 0 ? (
+              {markets.filter(m => !m.isResolved && new Date(m.resolutionTime * 1000) < new Date()).length === 0 ? (
                 <div className="bg-black/30 backdrop-blur-md rounded-lg p-8 text-center text-white/60">
                   No markets ready for settlement yet.
                 </div>
               ) : (
                 markets
-                  .filter(m => !m.isResolved && m.timeRemaining === 0)
+                  .filter(m => !m.isResolved && new Date(m.resolutionTime * 1000) < new Date())
                   .map((market) => (
                     <div key={market.address} className="bg-black/30 backdrop-blur-md rounded-lg p-6">
                       <h3 className="text-lg font-semibold text-white mb-4">
@@ -677,15 +730,21 @@ function App() {
                       
                       <div className="grid grid-cols-2 gap-4 mb-4">
                         <div className="bg-white/5 rounded-lg p-4 text-center">
-                          <div className="text-white/60 text-sm mb-2">YES Shares</div>
+                          <div className="text-white/60 text-sm mb-2">Weighted YES</div>
                           <div className="text-2xl font-bold text-green-400">
-                            {market.totalYesShares.toFixed(2)}
+                            {getImpliedProbability(market).toFixed(1)}%
+                          </div>
+                          <div className="text-white/60 text-xs">
+                            {market.totalYesShares.toFixed(0)} shares
                           </div>
                         </div>
                         <div className="bg-white/5 rounded-lg p-4 text-center">
-                          <div className="text-white/60 text-sm mb-2">NO Shares</div>
+                          <div className="text-white/60 text-sm mb-2">Weighted NO</div>
                           <div className="text-2xl font-bold text-red-400">
-                            {market.totalNoShares.toFixed(2)}
+                            {(100 - getImpliedProbability(market)).toFixed(1)}%
+                          </div>
+                          <div className="text-white/60 text-xs">
+                            {market.totalNoShares.toFixed(0)} shares
                           </div>
                         </div>
                       </div>
@@ -714,7 +773,7 @@ function App() {
                       </div>
                       
                       <p className="text-white/60 text-xs mt-3 text-center">
-                        Requires 100 QUID stake • 2:1 support threshold
+                        Requires 100 QUID (6909) stake • 2:1 support threshold • Confidence-weighted outcomes
                       </p>
                     </div>
                   ))

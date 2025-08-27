@@ -1,10 +1,10 @@
 // src/contracts/addresses.ts
-// Update these addresses after deploying contracts with Deploy.s.sol
+// Update these addresses after deploying contracts
 
-export const FACTORY_ADDRESS = "0x..."; // AuctionFactory address
-export const HELPERS_ADDRESS = "0x..."; // AuctionHelpers address  
+export const FACTORY_ADDRESS = "0x..."; // Doppler404Factory address
 export const SETTLEMENT_ADDRESS = "0x..."; // Settlement address
-export const BASKET_ADDRESS = "0x..."; // Basket (QUID) address
+export const BASKET_ADDRESS = "0x..."; // Basket (QUID) address  
+export const AUX_ADDRESS = "0x..."; // Aux address
 
 // Chain configuration
 export const CHAIN_ID = 8453; // Base mainnet (update for your chain)
@@ -16,9 +16,9 @@ export const DEPLOYMENT_BLOCK = 0; // Update with actual deployment block
 // Export all addresses as a config object
 export const CONTRACT_ADDRESSES = {
   factory: FACTORY_ADDRESS,
-  helpers: HELPERS_ADDRESS,
   settlement: SETTLEMENT_ADDRESS,
-  basket: BASKET_ADDRESS
+  basket: BASKET_ADDRESS,
+  aux: AUX_ADDRESS
 };
 
 // Helper to validate addresses
