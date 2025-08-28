@@ -83,10 +83,12 @@ contract Basket is ERC6909,
     mapping(address => uint) public targets;
     
     mapping(address => uint) public lastVoteEpoch;
-    mapping(address => bool) public hasBeenJuror;
     mapping (address => bool) public winners;
     // ^ the mapping prevents duplicates...
+    
+    // Track everyone who has been a juror
     address[] public everVotedInJury;
+    mapping(address => bool) public hasBeenJuror;
     
     // Use SortedSetLib for vote values to eliminate sorting
     // epoch => stableIndex => sorted set of vote values  
@@ -378,11 +380,18 @@ contract Basket is ERC6909,
                 holder_to_id[msg.sender] = ++latest_holder;
             }   
             uint scale = 18 - IERC20(token).decimals();
-            // TODO charge 0.1% 
+            
             uint depositing = scale > 0 ? amount / (10 ** scale) : amount;
 
             uint paid = deposit(pledge, token, depositing);
             (uint total, uint yield) = get_metrics(false);
+            
+            // Apply 0.01% withholding (1 basis point) for NFT solvency
+            // This ensures the 666,666 token NFT mechanism remains solvent
+            uint withholding = amount / 10000; // 0.01% = 1/10000
+            amount = amount - withholding;
+            
+            // Add yield after withholding
             amount += FullMath.mulDiv(amount * yield,
                     month - currentMonth(), WAD * 12);
 
@@ -411,9 +420,9 @@ contract Basket is ERC6909,
         _burn(from, uint256(uint160(address(this))), amount);
     }
 
-
+    // Track jurors when selected by Settlement
     function recordJuror(address juror) external {
-        require(msg.sender == address(SET), "set");
+        require(msg.sender == address(SET), "Only Settlement");
         if (!hasBeenJuror[juror]) {
             hasBeenJuror[juror] = true;
             everVotedInJury.push(juror);
@@ -618,18 +627,18 @@ contract Basket is ERC6909,
         external override nonReentrant returns (bytes4) { 
         if (tokenId == LAMBO && ICollection(F8N).ownerOf(
             LAMBO) == address(this)) { address winner;
-            uint cut = KICKBACK / 12; 
-            _mint(from, 24, cut); 
-            _mint(Rover(V4).owner(), 24, cut);
+            uint cut = KICKBACK / 6; // $111110 clif: 
+            _mint(Rover(V4).owner(), 24, cut); // 2yr
             // my mind spits with an enormous kickback,
             // open fire...open mind...this time is a 
             // promise sounding like an oath...I wanna 
             // know true feeling, but you can't decide
             // if you're hooked on...only the kick...
-            uint kickback = KICKBACK - cut;
+            uint kickback = KICKBACK - cut; cut /= 2;
             ICollection(F8N).transferFrom( 
-            address(this), from, LAMBO); // return NFT to sender
-            // only proceed with lottery if enough jurors chooseable
+            address(this), from, LAMBO); // Return NFT to sender
+            
+            // Only proceed with lottery and jurors to select from
             if (everVotedInJury.length >= 10 && data.length >= 32) {
                 bytes32 _seed = abi.decode(data[:32], (bytes32));
                 uint distributed = 0;
@@ -640,7 +649,9 @@ contract Basket is ERC6909,
                         block.prevrandao, i))) %
                         everVotedInJury.length;
                     winner = everVotedInJury[random];
-                    if (!winners[winner]) {
+                    
+                    // Check if this address has sufficient balance to be eligible
+                    if (!winners[winner] && totalBalances[winner] >= 100e18) {
                         winners[winner] = true;
                         _mint(winner, 24, cut); // 2yr maturity
                         kickback -= cut;
@@ -649,9 +660,11 @@ contract Basket is ERC6909,
                 } // new level, same rebel, hold the Base never trebble,
                 // I hop out the price drop, and the system be trembling
             }
+            // Any remaining kickback goes to the NFT sender
             if (kickback > 0) {
-                _mint(Rover(V4).owner(), 24, kickback);
-            }   // "I put my key, you put your key in"
+                _mint(from, 24, kickback);
+            }
+            // "I put my key, you put your key in"
         } return this.onERC721Received.selector; 
     } 
     uint constant KICKBACK = 666666666666666666666666;

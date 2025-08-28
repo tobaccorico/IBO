@@ -143,7 +143,10 @@ contract Aux is Ownable {
     function setQuid(address _quid) external payable onlyOwner {    
         require(address(QUID) == address(0), "QUID");
         QUID = Basket(_quid); renounceOwnership();
-        
+        // TODO Unichain doesn't need these,
+        // and we can also comment out unwind
+        // but leveraged swaps would need to 
+        // use their own liquidity
         USDC.approve(address(QUID), 
                 type(uint).max);                    
         USDC.approve(address(v3Router),

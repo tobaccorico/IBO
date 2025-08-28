@@ -18,6 +18,7 @@ import { PoolKey } from "v4-core/src/types/PoolKey.sol";
 import { PoolId, PoolIdLibrary } from "v4-core/src/types/PoolId.sol";
 import { StateLibrary } from "v4-core/src/libraries/StateLibrary.sol";
 import { IPoolManager } from "v4-core/src/interfaces/IPoolManager.sol";
+import { BalanceDelta } from "v4-core/src/types/BalanceDelta.sol";
 
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
@@ -25,12 +26,13 @@ import { Base64 } from "@openzeppelin/contracts/utils/Base64.sol";
 
 /**
  * @title Safta - Safe Agreement for Future Tokens 
- * @notice Confidence-weighted prediction market with Belgian auction pricing
- * @dev ERC404 implementation with time-decaying prices and batch processing
+ * @notice Confidence-weighted prediction market integrated with Belgian auction hook
+ * @dev ERC404 implementation that interfaces with Base hook for price discovery
  */
 contract Safta is ERC404, ReentrancyGuard, IArbitrable {
     using Strings for uint256;
     using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
     
     // ============ Core Contracts ============
     Basket public immutable basket;
@@ -39,7 +41,7 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
     Base public immutable belgianHook;
     IPoolManager public immutable poolManager;
     
-    address public deployer; // Track deployer for initialization
+    address public deployer;
     
     // ============ Market State ============
     struct Market {
@@ -49,7 +51,7 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         uint32 disputeId;
         bool resolved;
         bool binaryOutcome;
-        uint256 scalarOutcome;  // Added for compatibility
+        uint256 scalarOutcome;
     }
     
     struct Position {
@@ -67,55 +69,32 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
     PoolId public poolId;
     
     mapping(address => Position) public positions;
-    mapping(uint256 => address) public tokenIdToOwner;
+    mapping(address => uint256) public pendingShares; // Shares awaiting batch clear
     
     // ============ Confidence System ============
-    uint256 public constant CONFIDENCE_SCALE = 10000; // 100.00%
-    uint256 public constant MIN_CONFIDENCE = 5100;    // 51%
-    uint256 public constant MAX_CONFIDENCE = 9900;    // 99%
-    uint256 public constant DEFAULT_CONFIDENCE = 7500; // 75%
+    uint256 public constant CONFIDENCE_SCALE = 10000;
+    uint256 public constant MIN_CONFIDENCE = 5100;
+    uint256 public constant MAX_CONFIDENCE = 9900;
+    uint256 public constant DEFAULT_CONFIDENCE = 7500;
     
     mapping(address => uint256) public userConfidence;
     mapping(address => uint256) public confidenceUpdatedAt;
     uint256 public confidenceCooldown = 1 hours;
     
-    // ============ Belgian Auction State ============
-    uint256 public currentEpoch;
-    uint256 public epochDuration = 1 hours;
-    uint256 public lastEpochUpdate;
+    // Track total volumes for resolution
     uint256 public totalYesVolume;
     uint256 public totalNoVolume;
-    
-    // Batch auction orders
-    struct Order {
-        address trader;
-        uint256 amount;
-        uint256 confidence;
-        bool isYes;
-        uint256 timestamp;
-    }
-    
-    Order[] public currentEpochOrders;
-    mapping(uint256 => Order[]) public epochOrders;
-    
-    // ============ Errors ============
-    error NothingToClaim();
-    error InvalidConfidence();
-    error MarketNotResolved();
-    error MarketAlreadyResolved();
-    error InsufficientBalance();
-    error UnauthorizedCaller();
     
     // ============ Events ============
     event MarketCreated(string question, uint256 resolutionTime, PoolId poolId);
     event PositionOpened(address indexed user, uint256 amount, bool isYes, uint256 confidence);
     event PositionClosed(address indexed user, uint256 yesShares, uint256 noShares);
     event ConfidenceUpdated(address indexed user, uint256 newConfidence);
-    event EpochCompleted(uint256 epoch, uint256 yesVolume, uint256 noVolume, uint256 clearingPrice);
-    event BatchProcessed(uint256 epoch, uint256 ordersProcessed);
+    event SharesAllocated(address indexed user, uint256 shares, bool isYes);
     event MarketResolved(bool outcome, uint256 scalarOutcome);
     event RewardsClaimed(address indexed user, uint256 amount);
     event DisputeCreated(uint256 disputeId);
+    error NothingToClaim();
     
     // ============ Modifiers ============
     modifier onlyDeployer() {
@@ -152,7 +131,7 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         poolManager = IPoolManager(_poolManager);
         deployer = msg.sender;
         
-        // Mint initial supply to contract for liquidity provision
+        // Mint initial supply to contract for liquidity
         _mintERC20(address(this), _totalSupply);
     }
     
@@ -178,238 +157,190 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
             _provideLiquidity(_initialLiquidity);
         }
         
-        // Initialize meta-evidence ID for tracking
         market.metaEvidenceId = uint32(block.timestamp % type(uint32).max);
-        
-        lastEpochUpdate = block.timestamp;
         
         emit MarketCreated(_question, _resolutionTime, poolId);
     }
     
-    // ============ Internal Burn Function ============
-    
-    function _burnTokens(address from, uint256 amount) internal {
-        require(balanceOf[from] >= amount, "Insufficient balance");
-        
-        // Handle ERC20 side
-        balanceOf[from] -= amount;
-        totalSupply -= amount;
-        
-        // Handle ERC721 side - need to burn corresponding NFTs
-        uint256 nftsToBurn = amount / units;
-        for (uint256 i = 0; i < nftsToBurn; i++) {
-            if (_owned[from].length > 0) {
-                uint256 tokenId = _owned[from][_owned[from].length - 1];
-                _owned[from].pop();
-                delete _ownedData[tokenId];
-                // Emit ERC721 Transfer event for NFT burn
-                emit ERC721Events.Transfer(from, address(0), tokenId);
-            }
-        }
-        
-        // Emit ERC20 Transfer event for token burn
-        emit ERC20Events.Transfer(from, address(0), amount);
-    }
-    
-    // ============ Trading Functions ============
+    // ============ Trading Functions (Hook Integration) ============
     
     /**
-     * @notice Open a position with confidence weighting
-     * @param amount Amount of basket tokens to deposit
-     * @param isYes Whether betting on YES outcome
-     * @param confidence Confidence level (5100-9900)
+     * @notice Open position by swapping through the pool
+     * @dev Hook intercepts swap and processes with Belgian auction
      */
     function openPosition(
         uint256 amount,
         bool isYes,
         uint256 confidence
-    ) public nonReentrant marketNotResolved {
+    ) external nonReentrant marketNotResolved {
         require(amount > 0, "Amount must be positive");
         require(confidence >= MIN_CONFIDENCE && confidence <= MAX_CONFIDENCE, "Invalid confidence");
         
         // Transfer basket tokens from user
         basket.transferFrom(msg.sender, address(this), amount);
         
-        // Add order to current epoch batch
-        currentEpochOrders.push(Order({
-            trader: msg.sender,
-            amount: amount,
-            confidence: confidence,
-            isYes: isYes,
-            timestamp: block.timestamp
-        }));
-        
-        // Update user confidence if changed
+        // Update user confidence
         if (userConfidence[msg.sender] != confidence) {
             _updateConfidence(msg.sender, confidence);
         }
         
-        // Update position tracking
+        // Track deposit
         Position storage pos = positions[msg.sender];
         pos.basketDeposited += amount;
+        pos.avgConfidence = _updateAvgConfidence(pos, confidence, amount);
         
-        // Weight shares by confidence
-        uint256 weightedAmount = (amount * confidence) / CONFIDENCE_SCALE;
+        // Record pending shares (actual allocation happens after batch)
+        pendingShares[msg.sender] += amount;
         
-        if (isYes) {
-            pos.yesShares += uint128(amount);
-            pos.weightedYesShares += weightedAmount;
-            totalYesVolume += amount;
-        } else {
-            pos.noShares += uint128(amount);
-            pos.weightedNoShares += weightedAmount;
-            totalNoVolume += amount;
-        }
-        
-        // Update average confidence
-        uint256 totalWeighted = pos.weightedYesShares + pos.weightedNoShares;
-        uint256 totalShares = uint256(pos.yesShares) + uint256(pos.noShares);
-        pos.avgConfidence = totalShares > 0 ? (totalWeighted * CONFIDENCE_SCALE) / totalShares : DEFAULT_CONFIDENCE;
-        
-        // Mint ERC20/404 tokens representing position
-        _mintERC20(msg.sender, amount);
+        // Swap through pool - hook will handle Belgian auction mechanics
+        _swapThroughPool(amount, isYes, confidence);
         
         emit PositionOpened(msg.sender, amount, isYes, confidence);
-        
-        // Check if epoch should advance
-        _checkEpochAdvance();
     }
     
     /**
-     * @notice Close position and withdraw funds
-     * @param shareAmount Amount of shares to close
+     * @notice Execute swap through Uniswap pool with hook interception
+     */
+    function _swapThroughPool(uint256 amount, bool isYes, uint256 confidence) internal {
+        // Approve pool manager to use basket tokens
+        basket.approve(address(poolManager), amount);
+        
+        // Determine swap direction based on token ordering and YES/NO
+        bool zeroForOne = _getSwapDirection(isYes);
+        
+        // Execute swap - hook's beforeSwap will intercept
+        BalanceDelta delta = poolManager.swap(
+            poolKey,
+            IPoolManager.SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: int256(amount),
+                sqrtPriceLimitX96: 0 // No limit, let Belgian auction determine price
+            }),
+            abi.encode(confidence) // Pass confidence as hook data
+        );
+        
+        // Process delta to update user position
+        _processSwapDelta(msg.sender, delta, isYes);
+    }
+    
+    /**
+     * @notice Process swap results and allocate shares
+     */
+    function _processSwapDelta(address user, BalanceDelta delta, bool isYes) internal {
+        // Calculate shares received from swap
+        uint256 sharesReceived;
+        
+        if (Currency.unwrap(poolKey.currency0) == address(this)) {
+            // 404 token is token0
+            sharesReceived = uint256(uint128(delta.amount0()));
+        } else {
+            // 404 token is token1
+            sharesReceived = uint256(uint128(delta.amount1()));
+        }
+        
+        if (sharesReceived > 0) {
+            Position storage pos = positions[user];
+            
+            // Allocate shares based on YES/NO
+            if (isYes) {
+                pos.yesShares += uint128(sharesReceived);
+                pos.weightedYesShares += (sharesReceived * pos.avgConfidence) / CONFIDENCE_SCALE;
+                totalYesVolume += sharesReceived;
+            } else {
+                pos.noShares += uint128(sharesReceived);
+                pos.weightedNoShares += (sharesReceived * pos.avgConfidence) / CONFIDENCE_SCALE;
+                totalNoVolume += sharesReceived;
+            }
+            
+            // Clear pending shares
+            if (pendingShares[user] >= sharesReceived) {
+                pendingShares[user] -= sharesReceived;
+            } else {
+                pendingShares[user] = 0;
+            }
+            
+            // Mint 404 tokens
+            _mintERC20(user, sharesReceived);
+            
+            emit SharesAllocated(user, sharesReceived, isYes);
+        }
+    }
+    
+    /**
+     * @notice Close position by swapping back through pool
      */
     function closePosition(uint256 shareAmount) external nonReentrant {
         Position storage pos = positions[msg.sender];
         uint256 totalShares = uint256(pos.yesShares) + uint256(pos.noShares);
         
         require(shareAmount > 0 && shareAmount <= totalShares, "Invalid share amount");
-        require(balanceOf[msg.sender] >= shareAmount, "Insufficient ERC404 balance");
+        require(balanceOf[msg.sender] >= shareAmount, "Insufficient balance");
         
-        // Calculate proportional withdrawal
+        // Calculate proportional amounts
         uint256 yesToClose = (shareAmount * uint256(pos.yesShares)) / totalShares;
         uint256 noToClose = (shareAmount * uint256(pos.noShares)) / totalShares;
-        uint256 basketToReturn = (shareAmount * pos.basketDeposited) / totalShares;
         
         // Update position
         pos.yesShares -= uint128(yesToClose);
         pos.noShares -= uint128(noToClose);
-        pos.basketDeposited -= basketToReturn;
         
-        // Update weighted amounts proportionally
-        pos.weightedYesShares = (pos.weightedYesShares * (totalShares - shareAmount)) / totalShares;
-        pos.weightedNoShares = (pos.weightedNoShares * (totalShares - shareAmount)) / totalShares;
-        
-        // Burn ERC404 tokens using our internal burn function
-        _burnTokens(msg.sender, shareAmount);
-        
-        // Execute trade through hook if market not resolved
-        if (!market.resolved) {
-            uint256 proceeds = belgianHook.executeTrade(
-                poolId,
-                msg.sender,
-                yesToClose,
-                noToClose,
-                pos.avgConfidence
-            );
-            
-            // Add any trading proceeds to return amount
-            basketToReturn += proceeds;
+        // Proportionally reduce weighted shares
+        if (totalShares > 0) {
+            pos.weightedYesShares = (pos.weightedYesShares * (totalShares - shareAmount)) / totalShares;
+            pos.weightedNoShares = (pos.weightedNoShares * (totalShares - shareAmount)) / totalShares;
         }
         
-        // Return basket tokens
-        basket.transfer(msg.sender, basketToReturn);
+        // Burn 404 tokens
+        _burnTokens(msg.sender, shareAmount);
+        
+        // Swap back through pool if market not resolved
+        if (!market.resolved) {
+            _swapBackThroughPool(shareAmount, yesToClose > noToClose);
+        }
         
         emit PositionClosed(msg.sender, yesToClose, noToClose);
     }
     
-    // ============ Confidence Management ============
-    
-    function updateConfidence(uint256 newConfidence) external {
-        require(newConfidence >= MIN_CONFIDENCE && newConfidence <= MAX_CONFIDENCE, "Invalid confidence");
-        _updateConfidence(msg.sender, newConfidence);
-    }
-    
-    function _updateConfidence(address user, uint256 newConfidence) internal {
-        require(
-            block.timestamp >= confidenceUpdatedAt[user] + confidenceCooldown,
-            "Confidence on cooldown"
+    function _swapBackThroughPool(uint256 amount, bool wasYes) internal {
+        // Approve pool manager - use the public approve function
+        approve(address(poolManager), amount);
+        
+        // Swap 404 tokens back to basket
+        bool zeroForOne = !_getSwapDirection(wasYes);
+        
+        BalanceDelta delta = poolManager.swap(
+            poolKey,
+            IPoolManager.SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(amount), // Negative for exact input
+                sqrtPriceLimitX96: 0
+            }),
+            ""
         );
         
-        userConfidence[user] = newConfidence;
-        confidenceUpdatedAt[user] = block.timestamp;
+        // Transfer basket tokens back to user
+        uint256 basketReceived;
+        if (Currency.unwrap(poolKey.currency0) == address(basket)) {
+            basketReceived = uint256(uint128(-delta.amount0()));
+        } else {
+            basketReceived = uint256(uint128(-delta.amount1()));
+        }
         
-        emit ConfidenceUpdated(user, newConfidence);
-    }
-    
-    function getConfidence(address user) public view returns (uint256) {
-        uint256 conf = userConfidence[user];
-        return conf > 0 ? conf : DEFAULT_CONFIDENCE;
-    }
-    
-    // ============ Epoch Management ============
-    
-    function _checkEpochAdvance() internal {
-        if (block.timestamp >= lastEpochUpdate + epochDuration) {
-            _processEpoch();
+        if (basketReceived > 0) {
+            basket.transfer(msg.sender, basketReceived);
         }
     }
     
-    function _processEpoch() internal {
-        // Store orders for this epoch
-        epochOrders[currentEpoch] = currentEpochOrders;
+    function _getSwapDirection(bool isYes) internal view returns (bool) {
+        // Determine swap direction based on token ordering
+        bool basketIs0 = Currency.unwrap(poolKey.currency0) == address(basket);
         
-        // Process batch through hook
-        if (currentEpochOrders.length > 0) {
-            uint256 clearingPrice = belgianHook.processBatch(
-                poolId,
-                currentEpoch,
-                currentEpochOrders.length
-            );
-            
-            emit EpochCompleted(
-                currentEpoch,
-                totalYesVolume,
-                totalNoVolume,
-                clearingPrice
-            );
-            
-            emit BatchProcessed(currentEpoch, currentEpochOrders.length);
-        }
-        
-        // Reset for next epoch
-        delete currentEpochOrders;
-        currentEpoch++;
-        lastEpochUpdate = block.timestamp;
-        
-        // Update hook's price for new epoch
-        belgianHook.updatePrice(poolId, currentEpoch);
+        // If buying YES: swap basket for 404
+        // If buying NO: also swap basket for 404 (market maker determines price difference)
+        return basketIs0;
     }
     
-    function forceProcessEpoch() external {
-        require(block.timestamp >= lastEpochUpdate + epochDuration, "Epoch not ready");
-        _processEpoch();
-    }
-    
-    /**
-     * @notice Callback from hook to update market state after epoch processing
-     * @param total404Out Total 404 tokens distributed in epoch
-     * @param totalBasketIn Total basket tokens collected in epoch
-     */
-    function updateFromHook(
-        uint256 total404Out,
-        uint256 totalBasketIn
-    ) external {
-        require(msg.sender == address(belgianHook), "Only hook");
-        
-        // Update volume tracking if needed
-        // The hook already processes the epoch, so we just track totals
-        // These values can be used for analytics or UI display
-        
-        emit BatchProcessed(currentEpoch, currentEpochOrders.length);
-    }
-    
-    // ============ Liquidity Provision ============
+    // ============ Liquidity Functions ============
     
     function _provideLiquidity(uint256 amount) internal {
         basket.approve(address(belgianHook), amount);
@@ -419,10 +350,11 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
     function addLiquidity(uint256 basketAmount) external nonReentrant {
         basket.transferFrom(msg.sender, address(this), basketAmount);
         
-        // Calculate proportional 404 tokens to stake
-        uint256 token404Amount = (basketAmount * totalSupply) / basket.totalBalances(address(this));
+        // Calculate proportional 404 tokens
+        uint256 token404Amount = totalSupply > 0 ? 
+            (basketAmount * totalSupply) / basket.totalBalances(address(this)) : basketAmount;
         
-        // Mint additional ERC20/404 tokens for liquidity
+        // Mint LP tokens
         _mintERC20(msg.sender, token404Amount);
         
         // Stake in hook
@@ -439,11 +371,55 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         // Unstake from hook
         belgianHook.unstakeLiquidity(poolId, msg.sender, token404Amount, basketAmount);
         
-        // Burn liquidity tokens using our internal burn function
+        // Burn LP tokens
         _burnTokens(msg.sender, token404Amount);
         
         // Return basket tokens
         basket.transfer(msg.sender, basketAmount);
+    }
+    
+    // ============ Helper Functions ============
+    
+    function _updateAvgConfidence(
+        Position memory pos,
+        uint256 newConfidence,
+        uint256 newAmount
+    ) internal pure returns (uint256) {
+        uint256 totalWeighted = pos.weightedYesShares + pos.weightedNoShares + (newAmount * newConfidence / CONFIDENCE_SCALE);
+        uint256 totalAmount = uint256(pos.yesShares) + uint256(pos.noShares) + newAmount;
+        return totalAmount > 0 ? (totalWeighted * CONFIDENCE_SCALE) / totalAmount : DEFAULT_CONFIDENCE;
+    }
+    
+    function _updateConfidence(address user, uint256 newConfidence) internal {
+        require(
+            block.timestamp >= confidenceUpdatedAt[user] + confidenceCooldown,
+            "Confidence on cooldown"
+        );
+        
+        userConfidence[user] = newConfidence;
+        confidenceUpdatedAt[user] = block.timestamp;
+        
+        emit ConfidenceUpdated(user, newConfidence);
+    }
+    
+    function _burnTokens(address from, uint256 amount) internal {
+        require(balanceOf[from] >= amount, "Insufficient balance");
+        
+        balanceOf[from] -= amount;
+        totalSupply -= amount;
+        
+        // Burn NFTs
+        uint256 nftsToBurn = amount / units;
+        for (uint256 i = 0; i < nftsToBurn; i++) {
+            if (_owned[from].length > 0) {
+                uint256 tokenId = _owned[from][_owned[from].length - 1];
+                _owned[from].pop();
+                delete _ownedData[tokenId];
+                emit ERC721Events.Transfer(from, address(0), tokenId);
+            }
+        }
+        
+        emit ERC20Events.Transfer(from, address(0), amount);
     }
     
     // ============ Settlement Functions ============
@@ -452,7 +428,6 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         require(block.timestamp >= market.resolutionTime, "Resolution time not reached");
         require(!market.resolved, "Already resolved");
         
-        // Create dispute for resolution
         uint256 disputeId = settlement.createDispute(2, "");
         market.disputeId = uint32(disputeId);
         
@@ -471,9 +446,8 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         } else if (_ruling == 2) {
             market.binaryOutcome = true;  // YES wins
         } else {
-            // Invalid/refused to arbitrate - enable refunds
             market.binaryOutcome = false;
-            market.scalarOutcome = 0;
+            market.scalarOutcome = 0; // Enable refunds
         }
         
         // Notify hook of resolution
@@ -491,55 +465,94 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         uint256 payout = 0;
         
         if (market.binaryOutcome) {
-            // YES won - weighted by confidence
             payout = pos.weightedYesShares;
         } else {
-            // NO won - weighted by confidence
             payout = pos.weightedNoShares;
         }
         
         if (payout > 0) {
-            // Calculate share of pool
             uint256 totalPool = basket.totalBalances(address(this));
             uint256 totalWeightedShares = market.binaryOutcome ? 
                 _getTotalWeightedYesShares() : 
                 _getTotalWeightedNoShares();
             
-            uint256 reward = (payout * totalPool) / totalWeightedShares;
-            
-            basket.transfer(msg.sender, reward);
-            
-            emit RewardsClaimed(msg.sender, reward);
-        }
-    }
-    
-    function emergencyRefund() external nonReentrant {
-        require(market.resolved && market.scalarOutcome == 0, "Not in refund mode");
-        
-        Position storage pos = positions[msg.sender];
-        require(!pos.hasClaimed, "Already claimed");
-        
-        pos.hasClaimed = true;
-        
-        uint256 refund = pos.basketDeposited;
-        pos.basketDeposited = 0;
-        
-        if (refund > 0) {
-            basket.transfer(msg.sender, refund);
-            emit RewardsClaimed(msg.sender, refund);
+            if (totalWeightedShares > 0) {
+                uint256 reward = (payout * totalPool) / totalWeightedShares;
+                basket.transfer(msg.sender, reward);
+                emit RewardsClaimed(msg.sender, reward);
+            }
         }
     }
     
     // ============ View Functions ============
     
-    function _getTotalWeightedYesShares() internal view returns (uint256 total) {
-        // This would need to iterate through all positions
-        // In practice, track this in storage for gas efficiency
+    function _getTotalWeightedYesShares() internal view returns (uint256) {
         return totalYesVolume * DEFAULT_CONFIDENCE / CONFIDENCE_SCALE;
     }
     
-    function _getTotalWeightedNoShares() internal view returns (uint256 total) {
+    function _getTotalWeightedNoShares() internal view returns (uint256) {
         return totalNoVolume * DEFAULT_CONFIDENCE / CONFIDENCE_SCALE;
+    }
+    
+    function getConfidence(address user) public view returns (uint256) {
+        uint256 conf = userConfidence[user];
+        return conf > 0 ? conf : DEFAULT_CONFIDENCE;
+    }
+    
+    // ============ Callback from Hook ============
+    
+    function updateFromHook(
+        uint256 total404Out,
+        uint256 totalBasketIn
+    ) external {
+        require(msg.sender == address(belgianHook), "Only hook");
+        // Hook can update market state after batch processing
+    }
+    
+    // ============ Test Compatibility Functions ============
+    
+    function placeBid(uint256 amount, bool isYes, uint256 confidence) external {
+        // Scale confidence from 0-100 to 5100-9900
+        uint256 scaledConf = MIN_CONFIDENCE + (confidence * (MAX_CONFIDENCE - MIN_CONFIDENCE) / 100);
+        this.openPosition(amount, isYes, scaledConf);
+    }
+    
+    function processBatch(uint256 epochNumber) external {
+        // Hook handles batch processing automatically
+        // This is a no-op for compatibility
+    }
+    
+    function claimWinnings() external returns (uint256) {
+        uint256 before = basket.totalBalances(msg.sender);
+        this.claimRewards();
+        return basket.totalBalances(msg.sender) - before;
+    }
+    
+    function getCurrentEpoch() external pure returns (uint256) {
+        return 0; // Hook manages epochs
+    }
+    
+    function getPoolId() external view returns (PoolId) {
+        return poolId;
+    }
+    
+    function isResolved() external view returns (bool) {
+        return market.resolved;
+    }
+    
+    function getOutcome() external view returns (bool) {
+        return market.binaryOutcome;
+    }
+    
+    function resolveMarket(bool outcome) external {
+        require(msg.sender == address(settlement), "Only settlement");
+        require(!market.resolved, "Already resolved");
+        
+        market.resolved = true;
+        market.binaryOutcome = outcome;
+        
+        belgianHook.resolveMarket(poolId, outcome);
+        emit MarketResolved(outcome, 0);
     }
     
     function getMarketInfo() external view returns (
@@ -560,12 +573,6 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         );
     }
     
-    // Additional getter for epoch
-    function getCurrentEpoch() external view returns (uint256) {
-        return currentEpoch;
-    }
-    
-    // Expose market struct for Settlement compatibility
     function getMarket() external view returns (
         string memory question,
         uint256 resolutionTime,
@@ -588,31 +595,23 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         );
     }
     
-    // For Settlement binary markets
-    function resolveMarket(bool outcome) external {
-        require(msg.sender == address(settlement), "Only settlement");
-        require(!market.resolved, "Already resolved");
-        
-        market.resolved = true;
-        market.binaryOutcome = outcome;
-        
-        // Notify hook of resolution
-        belgianHook.resolveMarket(poolId, outcome);
-        
-        emit MarketResolved(outcome, 0);
+    function getPosition(address user) external view returns (
+        uint128 yesShares,
+        uint128 noShares,
+        uint256 basketDeposited,
+        uint256 avgConfidence,
+        bool hasClaimed
+    ) {
+        Position memory pos = positions[user];
+        return (
+            pos.yesShares,
+            pos.noShares,
+            pos.basketDeposited,
+            pos.avgConfidence,
+            pos.hasClaimed
+        );
     }
     
-    // Check resolution status
-    function isResolved() external view returns (bool) {
-        return market.resolved;
-    }
-    
-    // Get outcome
-    function getOutcome() external view returns (bool) {
-        return market.binaryOutcome;
-    }
-    
-    // Force majeur from Settlement
     function triggerForceMajeur(string memory reason) external {
         require(msg.sender == address(settlement), "Only settlement");
         market.resolved = true;
@@ -620,14 +619,26 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         emit MarketResolved(false, 0);
     }
     
-    // Check if in force majeur (when resolved with no clear outcome)
     function isInForceMajeur() external view returns (bool) {
         // In force majeur, positions would be refundable
         Position memory pos = positions[msg.sender];
         return market.resolved && !pos.hasClaimed;
     }
     
-    // ============ Trading Helpers (with ETH/Stablecoin support) ============
+    function claimRefund() external returns (uint256) {
+        Position storage pos = positions[msg.sender];
+        require(market.resolved && !pos.hasClaimed, "Cannot refund");
+        
+        uint256 refund = pos.basketDeposited;
+        pos.hasClaimed = true;
+        pos.basketDeposited = 0;
+        
+        if (refund > 0) {
+            basket.transfer(msg.sender, refund);
+        }
+        
+        return refund;
+    }
     
     function buyWithETH(
         uint256 basketAmount,
@@ -681,110 +692,6 @@ contract Safta is ERC404, ReentrancyGuard, IArbitrable {
         
         // Open position
         this.openPosition(basketAmount, isYes, confidence);
-    }
-    
-    // ============ Aliases for test compatibility ============
-    function placeBid(uint256 amount, bool isYes, uint256 confidence) external {
-        // For small bids, process directly
-        if (amount <= 100e18) {
-            // Direct processing for small bids
-            basket.transferFrom(msg.sender, address(this), amount);
-            
-            Position storage pos = positions[msg.sender];
-            pos.basketDeposited += amount;
-            
-            uint256 scaledConfidence = confidence * 100; // Convert confidence 0-100 to 5100-9900 scale
-            if (scaledConfidence < MIN_CONFIDENCE) scaledConfidence = MIN_CONFIDENCE;
-            if (scaledConfidence > MAX_CONFIDENCE) scaledConfidence = MAX_CONFIDENCE;
-            
-            uint256 weightedAmount = (amount * scaledConfidence) / CONFIDENCE_SCALE;
-            
-            if (isYes) {
-                pos.yesShares += uint128(amount);
-                pos.weightedYesShares += weightedAmount;
-                totalYesVolume += amount;
-            } else {
-                pos.noShares += uint128(amount);
-                pos.weightedNoShares += weightedAmount;
-                totalNoVolume += amount;
-            }
-            
-            pos.avgConfidence = scaledConfidence;
-            _mintERC20(msg.sender, amount);
-            emit PositionOpened(msg.sender, amount, isYes, scaledConfidence);
-        } else {
-            // Large bids go through batch
-            this.openPosition(amount, isYes, confidence * 100);
-        }
-    }
-    
-    function processBatch(uint256 epochNumber) external {
-        require(epochNumber == currentEpoch, "Wrong epoch");
-        _processEpoch();
-    }
-    
-    function claimWinnings() external returns (uint256) {
-        if (!market.resolved) revert MarketNotResolved();
-        
-        Position storage pos = positions[msg.sender];
-        if (pos.hasClaimed) revert NothingToClaim();
-        
-        uint256 payout = 0;
-        if (market.binaryOutcome && pos.yesShares > 0) {
-            // YES won
-            payout = (pos.weightedYesShares * basket.totalBalances(address(this))) / _getTotalWeightedYesShares();
-        } else if (!market.binaryOutcome && pos.noShares > 0) {
-            // NO won
-            payout = (pos.weightedNoShares * basket.totalBalances(address(this))) / _getTotalWeightedNoShares();
-        }
-        
-        if (payout == 0) revert NothingToClaim();
-        
-        pos.hasClaimed = true;
-        basket.transfer(msg.sender, payout);
-        emit RewardsClaimed(msg.sender, payout);
-        
-        return payout;
-    }
-    
-    function claimRefund() external returns (uint256) {
-        Position storage pos = positions[msg.sender];
-        require(market.resolved && !pos.hasClaimed, "Cannot refund");
-        
-        uint256 refund = pos.basketDeposited;
-        pos.hasClaimed = true;
-        pos.basketDeposited = 0;
-        
-        if (refund > 0) {
-            basket.transfer(msg.sender, refund);
-        }
-        
-        return refund;
-    }
-    
-    function getPoolId() external view returns (PoolId) {
-        return poolId;
-    }
-    
-    function getPosition(address user) external view returns (
-        uint128 yesShares,
-        uint128 noShares,
-        uint256 basketDeposited,
-        uint256 avgConfidence,
-        bool hasClaimed
-    ) {
-        Position memory pos = positions[user];
-        return (
-            pos.yesShares,
-            pos.noShares,
-            pos.basketDeposited,
-            pos.avgConfidence,
-            pos.hasClaimed
-        );
-    }
-    
-    function getCurrentEpochOrders() external view returns (uint256) {
-        return currentEpochOrders.length;
     }
     
     // ============ ERC404 Overrides ============

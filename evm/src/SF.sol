@@ -12,7 +12,7 @@ import { IPoolManager } from "v4-core/src/interfaces/IPoolManager.sol";
 import { PoolKey } from "v4-core/src/types/PoolKey.sol";
 import { PoolId, PoolIdLibrary } from "v4-core/src/types/PoolId.sol";
 
-import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
+import { CurrencyLibrary, Currency } from "v4-core/src/types/Currency.sol";
 import { IHooks } from "v4-core/src/interfaces/IHooks.sol";
 import { Hooks } from "v4-core/src/libraries/Hooks.sol";
 import { TickMath } from "v4-core/src/libraries/TickMath.sol";
@@ -200,7 +200,6 @@ contract SaftaFactory {
             poolKey.toId(),
             block.timestamp,
             epochDuration,
-            epochDuration / 4, // price epoch
             10000,  // starting tick
             -10000, // ending tick
             (resolutionTime - block.timestamp) / epochDuration, // total epochs
