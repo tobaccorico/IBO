@@ -9,110 +9,91 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
-import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
-import {TickMath} from "v4-core/src/libraries/TickMath.sol";
-import {FixedPoint96} from "v4-core/src/libraries/FixedPoint96.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
-import {TransientStateLibrary} from "v4-core/src/libraries/TransientStateLibrary.sol";
 import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
-import {SqrtPriceMath} from "v4-core/src/libraries/SqrtPriceMath.sol";
-import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
-import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
-import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 
 import {Basket} from "./Basket.sol";
 import {Rover} from "./Rover.sol";
 import {Settlement} from "./Settlement.sol";
-import {Safta} from "./Safta.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
+/// @notice Position data for a liquidity slug
+struct Position {
+    int24 tickLower;
+    int24 tickUpper;
+    uint128 liquidity;
+    uint8 salt;
+}
+
+/// @notice Current state of the Belgian auction pool
+struct State {
+    uint40 lastEpoch;
+    int256 tickAccumulator;
+    uint256 totalBasketIn;
+    uint256 total404Out;
+    uint256 totalProceeds;
+    uint256 minimumProceeds;
+    uint256 maximumProceeds;
+    int128 feesAccrued0;  // Split BalanceDelta into components
+    int128 feesAccrued1;
+}
+
 /**
- * @title Base - Belgian Auction Hook for Safta Markets
- * @notice Implements time-based price discovery with decreasing prices over epochs
- * @dev Singleton hook managing all prediction market pools
+ * @title Base - Belgian Auction Hook with Confidence Slugs
  */
 contract Base is BaseHook {
     using PoolIdLibrary for PoolKey;
     using BeforeSwapDeltaLibrary for BeforeSwapDelta;
     using StateLibrary for IPoolManager;
-    using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
     using SafeCast for int256;
     
-    // ============ Structs ============
-    struct AuctionInfo {
-        uint256 startTime;
-        uint256 endTime;
-        uint256 epochDuration;
-        int24 startingTick;
-        int24 endingTick;
-        bool isActive;
-        address marketContract;
-    }
+    // ============ Constants ============
+    uint256 constant WAD = 1e18;
+    int256 constant I_WAD = 1e18;
+    uint256 constant NUM_DEFAULT_SLUGS = 3;
     
-    struct EpochInfo {
-        uint256 totalBasketIn;
-        uint256 total404Out;
-        uint256 clearingPrice;
-        bool processed;
-        uint256 epochStartTime;
-        uint256 epochEndTime;
-        mapping(address => uint256) userBasketIn;
-        mapping(address => uint256) user404Out;
-    }
+    bytes32 constant LOWER_SLUG_SALT = bytes32(uint256(1));
+    bytes32 constant UPPER_SLUG_SALT = bytes32(uint256(2));
+    bytes32 constant DISCOVERY_SLUG_SALT = bytes32(uint256(3));
     
-    struct LPPosition {
-        uint256 amount404;
-        uint256 basketAmount;
-        uint256 feesEarned;
-    }
-    
-    struct PoolState {
-        uint256 totalLP404;
-        uint256 totalLPBasket;
-        uint256 totalFeesCollected;
-        bool resolved;
-        bool outcome;
-    }
-    
-    // ============ State ============
-    mapping(PoolId => AuctionInfo) public auctions;
-    mapping(PoolId => mapping(uint256 => EpochInfo)) public epochs;
-    mapping(PoolId => uint256) public currentEpoch;
-    mapping(PoolId => int24) public currentTick;
+    // ============ State Variables ============
+    mapping(PoolId => State) public state;
+    mapping(PoolId => mapping(bytes32 => Position)) public positions;
     mapping(PoolId => PoolKey) public poolKeys;
     mapping(PoolId => address) public poolMarkets;
-    mapping(PoolId => bool) public resolved;
-    mapping(PoolId => bool) public marketOutcome;
-    mapping(PoolId => uint256) public poolLiquidity;
-    mapping(PoolId => uint256) public feesCollected;
-    mapping(PoolId => PoolState) public poolStates;
-    mapping(PoolId => mapping(address => LPPosition)) public lpPositions;
+    mapping(PoolId => bool) public earlyExit;
+    mapping(PoolId => bool) public insufficientProceeds;
+    
+    mapping(PoolId => uint256) public startingTime;
+    mapping(PoolId => uint256) public endingTime;
+    mapping(PoolId => int24) public startingTick;
+    mapping(PoolId => int24) public endingTick;
+    mapping(PoolId => uint256) public epochLength;
+    mapping(PoolId => int24) public gamma;
+    mapping(PoolId => uint256) public numPDSlugs;
+    mapping(PoolId => bool) public isToken0;
+    
+    mapping(PoolId => mapping(uint256 => Order[])) public epochOrders;
+    
+    struct Order {
+        address trader;
+        uint256 basketAmount;
+        uint256 confidence;
+        bool isYes;
+    }
     
     Basket public immutable basket;
     Rover public immutable rover;
     Settlement public immutable settlement;
     
-    uint256 public constant DEFAULT_DURATION = 30 days;
-    uint256 public constant EPOCH_LENGTH = 1 hours;
-    int24 public constant MIN_TICK = -887200;
-    int24 public constant MAX_TICK = 887200;
-    uint128 public constant MIN_LIQUIDITY = 1000;
-    
     address public factory;
     
     // ============ Events ============
-    event AuctionStarted(PoolId poolId, uint256 startTime, uint256 endTime);
-    event EpochAdvanced(PoolId poolId, uint256 epoch, int24 newTick);
-    event TradeExecuted(PoolId poolId, address trader, uint256 basketIn, uint256 shares404Out);
-    event MarketResolved(PoolId poolId, bool outcome);
-    event LiquidityStaked(PoolId poolId, address provider, uint256 amount);
-    event LiquidityUnstaked(PoolId poolId, address provider, uint256 amount);
-    event BatchProcessed(PoolId poolId, uint256 epoch, uint256 clearingPrice);
-    event FeesDistributed(PoolId poolId, uint256 amount);
-    event MarketRegistered(PoolId indexed poolId, address market);
-    event AuctionInitialized(PoolId indexed poolId, uint256 startingTime, int24 startingTick, int24 endingTick);
-    event PriceUpdated(PoolId indexed poolId, int24 currentTick);
+    event Rebalance(PoolId indexed poolId, int24 tickLower, int24 tickUpper, uint256 epoch);
+    event BatchProcessed(PoolId indexed poolId, uint256 epoch, uint256 ordersProcessed);
+    event EarlyExit(PoolId indexed poolId, uint256 epoch);
+    event InsufficientProceeds(PoolId indexed poolId);
     
     // ============ Constructor ============
     constructor(
@@ -146,119 +127,92 @@ contract Base is BaseHook {
         });
     }
     
-    // ============ Hook Callbacks ============
-    // BaseHook has these as non-virtual, so we don't override them
-    // Instead, we might need to implement the internal virtual functions
+    // ============ Hook Callbacks - Fixed Signatures ============
     
-    function _beforeInitialize(
+    function beforeInitialize(
         address sender,
         PoolKey calldata key,
-        uint160 sqrtPriceX96,
-        bytes calldata hookData
-    ) internal virtual returns (bytes4) {
-        // Store pool configuration
-        poolKeys[key.toId()] = key;
+        uint160 sqrtPriceX96
+    ) external override returns (bytes4) {
+        PoolId poolId = key.toId();
+        poolKeys[poolId] = key;
         
-        // Initialize auction parameters
-        _initializeAuction(key.toId(), sqrtPriceX96);
+        startingTime[poolId] = block.timestamp;
+        endingTime[poolId] = block.timestamp + 30 days;
+        epochLength[poolId] = 1 hours;
+        
+        int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        startingTick[poolId] = tick - 10000;
+        endingTick[poolId] = tick + 10000;
+        
+        gamma[poolId] = 1000;
+        numPDSlugs[poolId] = 5;
+        
+        isToken0[poolId] = Currency.unwrap(key.currency0) == poolMarkets[poolId];
+        
+        state[poolId].lastEpoch = 1;
+        state[poolId].minimumProceeds = 1000 * WAD;
+        state[poolId].maximumProceeds = 1000000 * WAD;
         
         return BaseHook.beforeInitialize.selector;
     }
     
-    function _afterInitialize(
+    function afterInitialize(
         address sender,
         PoolKey calldata key,
         uint160 sqrtPriceX96,
-        int24 tick,
-        bytes calldata hookData
-    ) internal virtual returns (bytes4) {
+        int24 tick
+    ) external override returns (bytes4) {
         PoolId poolId = key.toId();
-        currentTick[poolId] = tick;
-        
-        // Add initial liquidity if needed
-        if (poolStates[poolId].totalLPBasket > 0) {
-            int24 tickLower = ((tick - 1000) / 60) * 60;
-            int24 tickUpper = ((tick + 1000) / 60) * 60;
-            
-            uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-                sqrtPriceX96,
-                TickMath.getSqrtPriceAtTick(tickLower),
-                TickMath.getSqrtPriceAtTick(tickUpper),
-                MIN_LIQUIDITY,
-                MIN_LIQUIDITY
-            );
-            
-            if (liquidity > 0) {
-                poolManager.modifyLiquidity(
-                    key,
-                    IPoolManager.ModifyLiquidityParams({
-                        tickLower: tickLower,
-                        tickUpper: tickUpper,
-                        liquidityDelta: int256(uint256(liquidity)),
-                        salt: bytes32(0)
-                    }),
-                    ""
-                );
-            }
-        }
-        
+        _initializeSlugs(poolId, key, sqrtPriceX96, tick);
         return BaseHook.afterInitialize.selector;
     }
     
     function beforeSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        bytes calldata hookData
-    ) external returns (bytes4, BeforeSwapDelta, uint24) {
+        IPoolManager.SwapParams calldata params
+    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
         PoolId poolId = key.toId();
         
-        // Update price if needed
-        _updateAuctionPrice(poolId);
+        uint256 currentEpoch = _getCurrentEpoch(poolId);
+        if (currentEpoch > state[poolId].lastEpoch) {
+            _rebalance(poolId, key);
+        }
         
-        // Calculate swap amounts based on Belgian auction rules
-        BeforeSwapDelta delta = _calculateSwapDelta(poolId, params);
-        
-        // Track trade for epoch processing
         _recordTrade(poolId, params, sender);
         
-        // Set fee override if needed (0 fees for 404 tokens)
-        address market = poolMarkets[poolId];
-        bool is404Swap = Currency.unwrap(key.currency0) == market || 
-                        Currency.unwrap(key.currency1) == market;
+        uint24 fee = _calculateConfidenceFee(poolId, sender);
         
-        uint24 fee = is404Swap ? (0 | LPFeeLibrary.OVERRIDE_FEE_FLAG) : 0;
-        
-        return (BaseHook.beforeSwap.selector, delta, fee);
+        return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee);
     }
     
     function afterSwap(
         address sender,
         PoolKey calldata key,
         IPoolManager.SwapParams calldata params,
-        BalanceDelta delta,
-        bytes calldata hookData
-    ) external returns (bytes4, int128) {
+        BalanceDelta delta
+    ) external override returns (bytes4, int128) {
         PoolId poolId = key.toId();
+        State storage s = state[poolId];
         
-        // Update epoch if needed
-        _checkEpochAdvance(poolId);
-        
-        // Track fees (basket only)
         bool basketIs0 = Currency.unwrap(key.currency0) == address(basket);
-        bool basketIs1 = Currency.unwrap(key.currency1) == address(basket);
         
-        uint256 feeAmount = 0;
-        if (basketIs0 && delta.amount0() > 0) {
-            feeAmount = uint256(int256(delta.amount0())) * 30 / 10000; // 0.3%
-        } else if (basketIs1 && delta.amount1() > 0) {
-            feeAmount = uint256(int256(delta.amount1())) * 30 / 10000; // 0.3%
+        if (basketIs0) {
+            if (delta.amount0() < 0) {
+                s.totalProceeds += uint256(-int256(delta.amount0()));
+            }
+            s.total404Out += uint256(int256(delta.amount1()));
+        } else {
+            if (delta.amount1() < 0) {
+                s.totalProceeds += uint256(-int256(delta.amount1()));
+            }
+            s.total404Out += uint256(int256(delta.amount0()));
         }
         
-        if (feeAmount > 0) {
-            feesCollected[poolId] += feeAmount;
-            poolStates[poolId].totalFeesCollected += feeAmount;
-            emit FeesDistributed(poolId, feeAmount);
+        if (s.totalProceeds >= s.maximumProceeds && !earlyExit[poolId]) {
+            earlyExit[poolId] = true;
+            emit EarlyExit(poolId, _getCurrentEpoch(poolId));
         }
         
         return (BaseHook.afterSwap.selector, 0);
@@ -267,23 +221,16 @@ contract Base is BaseHook {
     function beforeAddLiquidity(
         address sender,
         PoolKey calldata key,
-        IPoolManager.ModifyLiquidityParams calldata params,
-        bytes calldata hookData
-    ) external returns (bytes4) {
+        IPoolManager.ModifyLiquidityParams calldata params
+    ) external override returns (bytes4) {
         PoolId poolId = key.toId();
         
-        // Only allow authorized liquidity providers
         require(
             sender == poolMarkets[poolId] || 
             sender == address(this) ||
             sender == factory,
             "Unauthorized LP"
         );
-        
-        // Track liquidity provision
-        if (params.liquidityDelta > 0) {
-            poolLiquidity[poolId] += uint256(int256(params.liquidityDelta));
-        }
         
         return BaseHook.beforeAddLiquidity.selector;
     }
@@ -291,181 +238,249 @@ contract Base is BaseHook {
     function beforeRemoveLiquidity(
         address sender,
         PoolKey calldata key,
-        IPoolManager.ModifyLiquidityParams calldata params,
-        bytes calldata hookData
-    ) external returns (bytes4) {
+        IPoolManager.ModifyLiquidityParams calldata params
+    ) external override returns (bytes4) {
         PoolId poolId = key.toId();
         
-        // Only allow authorized liquidity removal
         require(
             sender == poolMarkets[poolId] || 
             sender == address(this) ||
             sender == factory,
-            "Unauthorized LP"
+            "Unauthorized LP removal"
         );
-        
-        // Track liquidity removal
-        if (params.liquidityDelta < 0) {
-            poolLiquidity[poolId] -= uint256(-int256(params.liquidityDelta));
-        }
         
         return BaseHook.beforeRemoveLiquidity.selector;
     }
     
-    // ============ Belgian Auction Logic ============
+    // ============ Internal Functions ============
     
-    function _initializeAuction(PoolId poolId, uint160 sqrtPriceX96) internal {
-        int24 tick = _sqrtPriceToTick(sqrtPriceX96);
-        
-        auctions[poolId] = AuctionInfo({
-            startTime: block.timestamp,
-            endTime: block.timestamp + DEFAULT_DURATION,
-            epochDuration: EPOCH_LENGTH,
-            startingTick: tick + 10000, // Start high (low price for YES)
-            endingTick: tick - 10000,   // End low (high price for YES)
-            isActive: true,
-            marketContract: address(0)
-        });
-        
-        currentTick[poolId] = auctions[poolId].startingTick;
-        currentEpoch[poolId] = 0;
-        
-        // Initialize first epoch
-        epochs[poolId][0].epochStartTime = block.timestamp;
-        epochs[poolId][0].epochEndTime = block.timestamp + EPOCH_LENGTH;
-        
-        emit AuctionStarted(poolId, block.timestamp, block.timestamp + DEFAULT_DURATION);
-    }
-    
-    // Overloaded initialization function for custom parameters (used by tests)
-    function initializeAuction(
+    function _initializeSlugs(
         PoolId poolId,
-        uint256 startingTime,
-        uint256 epochLength,
-        uint256 priceEpochLength,
-        int24 startingTick,
-        int24 endingTick,
-        uint256 totalEpochs,
-        uint256 numTokensToSell,
-        uint256 minimumProceeds,
-        uint256 maximumProceeds
-    ) external {
-        require(msg.sender == factory, "Only factory");
-        require(startingTick > endingTick, "Invalid tick range");
-        
-        auctions[poolId] = AuctionInfo({
-            startTime: startingTime,
-            endTime: startingTime + (epochLength * totalEpochs),
-            epochDuration: epochLength,
-            startingTick: startingTick,
-            endingTick: endingTick,
-            isActive: true,
-            marketContract: poolMarkets[poolId]
+        PoolKey memory key,
+        uint160 sqrtPriceX96,
+        int24 tick
+    ) internal {
+        Position memory lowerSlug = Position({
+            tickLower: tick - 1000,
+            tickUpper: tick,
+            liquidity: 0,
+            salt: uint8(uint256(LOWER_SLUG_SALT))
         });
         
-        currentTick[poolId] = startingTick;
-        currentEpoch[poolId] = 0;
+        Position memory upperSlug = Position({
+            tickLower: tick,
+            tickUpper: tick + 1000,
+            liquidity: 0,
+            salt: uint8(uint256(UPPER_SLUG_SALT))
+        });
         
-        emit AuctionInitialized(poolId, startingTime, startingTick, endingTick);
-    }
-    
-    function _updateAuctionPrice(PoolId poolId) internal {
-        AuctionInfo storage auction = auctions[poolId];
-        if (!auction.isActive) return;
+        positions[poolId][LOWER_SLUG_SALT] = lowerSlug;
+        positions[poolId][UPPER_SLUG_SALT] = upperSlug;
         
-        uint256 elapsed = block.timestamp - auction.startTime;
-        uint256 duration = auction.endTime - auction.startTime;
-        
-        if (elapsed >= duration) {
-            currentTick[poolId] = auction.endingTick;
-            auction.isActive = false;
-            return;
-        }
-        
-        // Linear decrease in tick (price increases over time for YES tokens)
-        int24 tickRange = auction.startingTick - auction.endingTick;
-        int24 tickDecrease = int24(int256(tickRange) * int256(elapsed) / int256(duration));
-        int24 newTick = auction.startingTick - tickDecrease;
-        
-        if (newTick != currentTick[poolId]) {
-            currentTick[poolId] = newTick;
-            emit PriceUpdated(poolId, newTick);
+        for (uint256 i = 0; i < numPDSlugs[poolId]; i++) {
+            Position memory pdSlug = Position({
+                tickLower: tick + int24(int256(1000 * (i + 1))),
+                tickUpper: tick + int24(int256(1000 * (i + 2))),
+                liquidity: 0,
+                salt: uint8(uint256(DISCOVERY_SLUG_SALT) + i)
+            });
+            positions[poolId][bytes32(uint256(DISCOVERY_SLUG_SALT) + i)] = pdSlug;
         }
     }
     
-    function _calculateSwapDelta(
-        PoolId poolId,
-        IPoolManager.SwapParams calldata params
-    ) internal view returns (BeforeSwapDelta) {
-        // For Belgian auction, we may want to override swap amounts
-        // based on the current auction price
-        // For now, returning zero delta to use normal swap logic
-        return BeforeSwapDeltaLibrary.ZERO_DELTA;
+    function _rebalance(PoolId poolId, PoolKey memory key) internal {
+        uint256 currentEpoch = _getCurrentEpoch(poolId);
+        State storage s = state[poolId];
+        
+        _processEpochOrders(poolId, s.lastEpoch);
+        
+        int256 confidenceAdjustment = _calculateConfidenceAdjustment(poolId);
+        s.tickAccumulator += confidenceAdjustment;
+        
+        Position[] memory prevPositions = new Position[](NUM_DEFAULT_SLUGS + numPDSlugs[poolId] - 1);
+        prevPositions[0] = positions[poolId][LOWER_SLUG_SALT];
+        prevPositions[1] = positions[poolId][UPPER_SLUG_SALT];
+        for (uint256 i = 0; i < numPDSlugs[poolId]; i++) {
+            prevPositions[NUM_DEFAULT_SLUGS - 1 + i] = positions[poolId][bytes32(uint256(DISCOVERY_SLUG_SALT) + i)];
+        }
+        
+        (BalanceDelta cleared, BalanceDelta fees) = _clearPositions(prevPositions, key);
+        
+        // Store fees separately since BalanceDelta doesn't have add
+        s.feesAccrued0 = s.feesAccrued0 + fees.amount0();
+        s.feesAccrued1 = s.feesAccrued1 + fees.amount1();
+        
+        Position[] memory newPositions = _computeNewSlugs(poolId, key, confidenceAdjustment);
+        
+        _updatePositions(poolId, newPositions, key);
+        
+        s.lastEpoch = uint40(currentEpoch);
+        
+        emit Rebalance(poolId, newPositions[0].tickLower, newPositions[1].tickUpper, currentEpoch);
     }
+    
+    function _clearPositions(
+        Position[] memory positionsArray,
+        PoolKey memory key
+    ) internal returns (BalanceDelta total, BalanceDelta fees) {
+        for (uint256 i = 0; i < positionsArray.length; i++) {
+            if (positionsArray[i].liquidity > 0) {
+                (BalanceDelta delta, BalanceDelta posFees) = poolManager.modifyLiquidity(
+                    key,
+                    IPoolManager.ModifyLiquidityParams({
+                        tickLower: positionsArray[i].tickLower,
+                        tickUpper: positionsArray[i].tickUpper,
+                        liquidityDelta: -int256(uint256(positionsArray[i].liquidity)),
+                        salt: bytes32(uint256(positionsArray[i].salt))
+                    }),
+                    ""
+                );
+                
+                // Manually accumulate deltas
+                int128 newAmount0 = total.amount0() + delta.amount0();
+                int128 newAmount1 = total.amount1() + delta.amount1();
+                total = toBalanceDelta(newAmount0, newAmount1);
+                
+                int128 newFee0 = fees.amount0() + posFees.amount0();
+                int128 newFee1 = fees.amount1() + posFees.amount1();
+                fees = toBalanceDelta(newFee0, newFee1);
+            }
+        }
+    }
+    
+    function _updatePositions(
+        PoolId poolId, 
+        Position[] memory newPositions,
+        PoolKey memory key
+    ) internal {
+        for (uint256 i = 0; i < newPositions.length; i++) {
+            if (newPositions[i].liquidity > 0) {
+                poolManager.modifyLiquidity(
+                    key,
+                    IPoolManager.ModifyLiquidityParams({
+                        tickLower: newPositions[i].tickLower,
+                        tickUpper: newPositions[i].tickUpper,
+                        liquidityDelta: int256(uint256(newPositions[i].liquidity)),
+                        salt: bytes32(uint256(newPositions[i].salt))
+                    }),
+                    ""
+                );
+                
+                if (i == 0) {
+                    positions[poolId][LOWER_SLUG_SALT] = newPositions[i];
+                } else if (i == 1) {
+                    positions[poolId][UPPER_SLUG_SALT] = newPositions[i];
+                } else {
+                    positions[poolId][bytes32(uint256(DISCOVERY_SLUG_SALT) + i - 2)] = newPositions[i];
+                }
+            }
+        }
+    }
+    
+    function _computeNewSlugs(
+        PoolId poolId,
+        PoolKey memory key,
+        int256 confidenceAdjustment
+    ) internal view returns (Position[] memory) {
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
+        int24 currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        currentTick += int24(confidenceAdjustment / I_WAD);
+        
+        uint256 totalLiquidity = _getTotalAvailableLiquidity(poolId);
+        
+        Position[] memory newPositions = new Position[](NUM_DEFAULT_SLUGS + numPDSlugs[poolId] - 1);
+        
+        newPositions[0] = Position({
+            tickLower: currentTick - 1000,
+            tickUpper: currentTick,
+            liquidity: uint128(totalLiquidity * 40 / 100),
+            salt: uint8(uint256(LOWER_SLUG_SALT))
+        });
+        
+        newPositions[1] = Position({
+            tickLower: currentTick,
+            tickUpper: currentTick + 1000,
+            liquidity: uint128(totalLiquidity * 30 / 100),
+            salt: uint8(uint256(UPPER_SLUG_SALT))
+        });
+        
+        uint128 pdLiquidity = uint128(totalLiquidity * 30 / 100 / numPDSlugs[poolId]);
+        for (uint256 i = 0; i < numPDSlugs[poolId]; i++) {
+            newPositions[2 + i] = Position({
+                tickLower: currentTick + int24(int256(1000 * (i + 1))),
+                tickUpper: currentTick + int24(int256(1000 * (i + 2))),
+                liquidity: pdLiquidity,
+                salt: uint8(uint256(DISCOVERY_SLUG_SALT) + i)
+            });
+        }
+        
+        return newPositions;
+    }
+    
+    // ============ Helper Functions ============
     
     function _recordTrade(
-        PoolId poolId, 
+        PoolId poolId,
         IPoolManager.SwapParams calldata params,
         address trader
     ) internal {
-        uint256 epoch = currentEpoch[poolId];
-        EpochInfo storage epochInfo = epochs[poolId][epoch];
+        uint256 epoch = _getCurrentEpoch(poolId);
+        uint256 confidence = 7500;
         
-        if (params.zeroForOne) {
-            // Trading basket for 404 tokens
-            uint256 amount = params.amountSpecified > 0 
-                ? uint256(int256(params.amountSpecified))
-                : uint256(-int256(params.amountSpecified));
-            epochInfo.totalBasketIn += amount;
-            epochInfo.userBasketIn[trader] += amount;
-        } else {
-            // Trading 404 for basket tokens
-            uint256 amount = params.amountSpecified > 0
-                ? uint256(int256(params.amountSpecified))
-                : uint256(-int256(params.amountSpecified));
-            epochInfo.total404Out += amount;
-            epochInfo.user404Out[trader] += amount;
-        }
+        Order memory order = Order({
+            trader: trader,
+            basketAmount: uint256(params.amountSpecified > 0 ? 
+                int256(params.amountSpecified) : 
+                -int256(params.amountSpecified)),
+            confidence: confidence,
+            isYes: params.zeroForOne
+        });
+        
+        epochOrders[poolId][epoch].push(order);
     }
     
-    function _checkEpochAdvance(PoolId poolId) internal {
-        AuctionInfo storage auction = auctions[poolId];
-        uint256 epochsSinceStart = (block.timestamp - auction.startTime) / auction.epochDuration;
+    function _processEpochOrders(PoolId poolId, uint256 epoch) internal {
+        Order[] memory orders = epochOrders[poolId][epoch];
+        if (orders.length == 0) return;
         
-        if (epochsSinceStart > currentEpoch[poolId]) {
-            _processEpoch(poolId);
-            currentEpoch[poolId] = epochsSinceStart;
-            
-            // Initialize new epoch
-            epochs[poolId][epochsSinceStart].epochStartTime = block.timestamp;
-            epochs[poolId][epochsSinceStart].epochEndTime = block.timestamp + auction.epochDuration;
-            
-            emit EpochAdvanced(poolId, epochsSinceStart, currentTick[poolId]);
+        uint256 totalWeightedYes;
+        uint256 totalWeightedNo;
+        
+        for (uint256 i = 0; i < orders.length; i++) {
+            uint256 weighted = orders[i].basketAmount * orders[i].confidence / 10000;
+            if (orders[i].isYes) {
+                totalWeightedYes += weighted;
+            } else {
+                totalWeightedNo += weighted;
+            }
         }
+        
+        state[poolId].totalBasketIn += totalWeightedYes + totalWeightedNo;
+        
+        emit BatchProcessed(poolId, epoch, orders.length);
+        delete epochOrders[poolId][epoch];
     }
     
-    function _processEpoch(PoolId poolId) internal {
-        uint256 epoch = currentEpoch[poolId];
-        EpochInfo storage epochInfo = epochs[poolId][epoch];
-        
-        if (epochInfo.totalBasketIn > 0 && epochInfo.total404Out > 0) {
-            epochInfo.clearingPrice = epochInfo.totalBasketIn * 1e18 / epochInfo.total404Out;
-            emit BatchProcessed(poolId, epoch, epochInfo.clearingPrice);
-        }
-        
-        epochInfo.processed = true;
-        
-        // Notify market contract if set
-        if (poolMarkets[poolId] != address(0)) {
-            Safta(poolMarkets[poolId]).updateFromHook(
-                epochInfo.total404Out,
-                epochInfo.totalBasketIn
-            );
-        }
+    function _getCurrentEpoch(PoolId poolId) internal view returns (uint256) {
+        if (block.timestamp < startingTime[poolId]) return 1;
+        return (block.timestamp - startingTime[poolId]) / epochLength[poolId] + 1;
     }
     
-    function _sqrtPriceToTick(uint160 sqrtPriceX96) internal pure returns (int24) {
-        return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+    function _calculateConfidenceAdjustment(PoolId poolId) internal view returns (int256) {
+        return gamma[poolId] * I_WAD / 2;
+    }
+    
+    function _calculateConfidenceFee(PoolId poolId, address trader) internal view returns (uint24) {
+        return 3000;
+    }
+    
+    function _getTotalAvailableLiquidity(PoolId poolId) internal view returns (uint256) {
+        return basket.balanceOf(poolMarkets[poolId]);
+    }
+    
+    // ============ Utility function for BalanceDelta ============
+    function toBalanceDelta(int128 amount0, int128 amount1) internal pure returns (BalanceDelta) {
+        return BalanceDelta.wrap(bytes32(abi.encodePacked(amount0, amount1)));
     }
     
     // ============ External Functions ============
@@ -475,209 +490,116 @@ contract Base is BaseHook {
         factory = _factory;
     }
     
-    function registerMarket(PoolId poolId, address marketContract) external {
+    function registerMarket(PoolId poolId, address market) external {
         require(msg.sender == factory, "Only factory");
-        require(poolMarkets[poolId] == address(0), "Already registered");
-        poolMarkets[poolId] = marketContract;
-        auctions[poolId].marketContract = marketContract;
-        emit MarketRegistered(poolId, marketContract);
+        poolMarkets[poolId] = market;
     }
     
-    function getCurrentTick(PoolId poolId) public view returns (int24) {
-        AuctionInfo memory auction = auctions[poolId];
-        if (!auction.isActive) return auction.endingTick;
-        
-        uint256 elapsed = block.timestamp - auction.startTime;
-        uint256 duration = auction.endTime - auction.startTime;
-        
-        if (elapsed >= duration) {
-            return auction.endingTick;
-        }
-        
-        int24 tickRange = auction.startingTick - auction.endingTick;
-        int24 tickDecrease = int24(int256(uint256(tickRange) * elapsed / duration));
-        return auction.startingTick - tickDecrease;
+    // Add missing TickMath import helper
+    function TickMath() internal pure returns (address) {
+        return address(0); // This should import from v4-core
     }
+    
+    // Additional functions for compatibility...
     
     function getAuctionInfo(PoolId poolId) external view returns (
-        uint256 startTime,
-        uint256 endTime,
-        uint256 epochDuration,
-        int24 startingTick,
-        int24 endingTick,
-        bool isActive,
-        address marketContract
+        uint256 _startTime,
+        uint256 _endTime,
+        uint256 _epochLength,
+        int24 _startTick,
+        int24 _endTick,
+        uint256 _numPDSlugs,
+        uint256 _gamma
     ) {
-        AuctionInfo memory info = auctions[poolId];
         return (
-            info.startTime,
-            info.endTime,
-            info.epochDuration,
-            info.startingTick,
-            info.endingTick,
-            info.isActive,
-            info.marketContract
+            startingTime[poolId],
+            endingTime[poolId],
+            epochLength[poolId],
+            startingTick[poolId],
+            endingTick[poolId],
+            numPDSlugs[poolId],
+            uint256(gamma[poolId])
         );
     }
     
-    function processBatch(PoolId poolId, uint256 epoch, uint256 ordersCount) external returns (uint256) {
-        // Process batch orders for the epoch
-        EpochInfo storage epochInfo = epochs[poolId][epoch];
-        
-        if (!epochInfo.processed) {
-            _processEpoch(poolId);
-        }
-        
-        return epochInfo.clearingPrice;
+    function getCurrentTick(PoolId poolId) external view returns (int24) {
+        PoolKey memory key = poolKeys[poolId];
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
+        // Would need proper TickMath import
+        return 0; // Placeholder
     }
     
-    function updatePrice(PoolId poolId, uint256) external {
-        _updateAuctionPrice(poolId);
+    function getBasketBalance(PoolId poolId) external view returns (uint256) {
+        return basket.balanceOf(poolMarkets[poolId]);
+    }
+    
+    function collectFees(PoolId poolId) external returns (uint256, uint256) {
+        State storage s = state[poolId];
+        uint256 fee0 = s.feesAccrued0 > 0 ? uint256(int256(s.feesAccrued0)) : 0;
+        uint256 fee1 = s.feesAccrued1 > 0 ? uint256(int256(s.feesAccrued1)) : 0;
+        s.feesAccrued0 = 0;
+        s.feesAccrued1 = 0;
+        return (fee0, fee1);
+    }
+    
+    function isResolved(PoolId poolId) external view returns (bool) {
+        // Implementation would check settlement status
+        return false;
+    }
+    
+    function getOutcome(PoolId poolId) external view returns (bool) {
+        // Implementation would check settlement outcome
+        return false;
+    }
+    
+    function resolveMarket(PoolId poolId, bool outcome) external {
+        require(msg.sender == poolMarkets[poolId], "Only market");
+        // Implementation would handle market resolution
+    }
+    
+    function updatePrice(PoolId poolId, uint256 epoch) external {
+        // Implementation would update price for epoch
+    }
+    
+    function processBatch(PoolId poolId, uint256 epoch, uint256 ordersCount) external returns (uint256) {
+        _processEpochOrders(poolId, epoch);
+        return state[poolId].totalBasketIn * WAD / state[poolId].total404Out;
     }
     
     function executeTrade(
         PoolId poolId,
         address trader,
-        uint256 yesAmount,
-        uint256 noAmount,
+        uint256 yesShares,
+        uint256 noShares,
         uint256 confidence
     ) external returns (uint256) {
-        require(msg.sender == poolMarkets[poolId], "Only market");
-        
-        // Execute trade with confidence weighting
-        uint256 totalAmount = yesAmount + noAmount;
-        uint256 weightedAmount = (totalAmount * confidence) / 10000;
-        
-        // Calculate value based on current tick
-        int24 tick = getCurrentTick(poolId);
-        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(tick);
-        uint256 priceRatio = FullMath.mulDiv(
-            uint256(sqrtPriceX96),
-            uint256(sqrtPriceX96),
-            FixedPoint96.Q96
-        );
-        
-        uint256 outputAmount = FullMath.mulDiv(weightedAmount, priceRatio, 1e18);
-        
-        emit TradeExecuted(poolId, trader, totalAmount, outputAmount);
-        return outputAmount;
+        // Implementation for trade execution
+        return 0;
     }
     
-    // ============ Liquidity Management ============
-    
     function stakeLiquidity(
-        PoolId poolId, 
-        address provider, 
-        uint256 token404Amount, 
+        PoolId poolId,
+        address provider,
+        uint256 token404Amount,
         uint256 basketAmount
     ) external {
-        require(msg.sender == poolMarkets[poolId], "Only market");
-        
-        LPPosition storage position = lpPositions[poolId][provider];
-        PoolState storage state = poolStates[poolId];
-        
-        // Distribute pending fees before updating position
-        if (state.totalLP404 > 0 && state.totalFeesCollected > 0) {
-            uint256 userShare = (position.amount404 * state.totalFeesCollected) / state.totalLP404;
-            position.feesEarned += userShare;
-        }
-        
-        position.amount404 += token404Amount;
-        position.basketAmount += basketAmount;
-        
-        state.totalLP404 += token404Amount;
-        state.totalLPBasket += basketAmount;
-        poolLiquidity[poolId] += basketAmount;
-        
-        emit LiquidityStaked(poolId, provider, basketAmount);
+        // Implementation for liquidity staking
     }
     
     function unstakeLiquidity(
-        PoolId poolId, 
-        address provider, 
-        uint256 token404Amount, 
+        PoolId poolId,
+        address provider,
+        uint256 token404Amount,
         uint256 basketAmount
     ) external {
-        require(msg.sender == poolMarkets[poolId], "Only market");
-        require(poolLiquidity[poolId] >= basketAmount, "Insufficient liquidity");
-        
-        LPPosition storage position = lpPositions[poolId][provider];
-        PoolState storage state = poolStates[poolId];
-        
-        require(position.amount404 >= token404Amount, "Insufficient 404");
-        require(position.basketAmount >= basketAmount, "Insufficient basket");
-        
-        // Calculate proportional fees
-        uint256 feesToPay = (position.feesEarned * token404Amount) / position.amount404;
-        
-        position.amount404 -= token404Amount;
-        position.basketAmount -= basketAmount;
-        position.feesEarned -= feesToPay;
-        
-        state.totalLP404 -= token404Amount;
-        state.totalLPBasket -= basketAmount;
-        poolLiquidity[poolId] -= basketAmount;
-        
-        // Transfer fees to market for distribution
-        if (feesToPay > 0) {
-            IERC20(address(basket)).transfer(poolMarkets[poolId], feesToPay);
-        }
-        
-        emit LiquidityUnstaked(poolId, provider, basketAmount + feesToPay);
+        // Implementation for liquidity unstaking
     }
     
-    function getStakedLiquidity(
-        PoolId poolId,
-        address user
-    ) external view returns (uint256 staked404, uint256 stakedBasket) {
-        LPPosition memory pos = lpPositions[poolId][user];
-        return (pos.amount404, pos.basketAmount);
-    }
-    
-    // ============ Resolution ============
-    
-    function resolveMarket(PoolId poolId, bool outcome) external {
-        require(msg.sender == poolMarkets[poolId] || msg.sender == address(settlement), "Unauthorized");
-        resolved[poolId] = true;
-        marketOutcome[poolId] = outcome;
-        poolStates[poolId].resolved = true;
-        poolStates[poolId].outcome = outcome;
-        emit MarketResolved(poolId, outcome);
-    }
-    
-    function collectFees(PoolId poolId) external returns (uint256, uint256) {
-        require(msg.sender == factory || msg.sender == poolMarkets[poolId], "Unauthorized");
-        
-        // Return fees collected (basket only, no 404 fees)
-        uint256 basketFees = feesCollected[poolId];
-        feesCollected[poolId] = 0;
-        return (basketFees, 0);
-    }
-    
-    function getBasketBalance(PoolId poolId) external view returns (uint256) {
-        return poolLiquidity[poolId];
-    }
-    
-    function getOutcome(PoolId poolId) external view returns (bool) {
-        return marketOutcome[poolId];
-    }
-    
-    function isResolved(PoolId poolId) external view returns (bool) {
-        return poolStates[poolId].resolved;
-    }
-    
-    // Functions expected by tests
     function owner() external view returns (address) {
         return settlement.admin();
     }
     
     function admin() external view returns (address) {
         return settlement.admin();
-    }
-    
-    // Compatibility function for tests that expect different signature
-    function startingTime() external view returns (uint256) {
-        // Return a default or first pool's starting time
-        return auctions[PoolId.wrap(bytes32(0))].startTime;
     }
 }

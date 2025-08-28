@@ -338,7 +338,7 @@ contract SaftaFactory {
     }
     
     function _provideInitialLiquidity(address marketAddress) internal returns (uint256) {
-        uint256 liquidity = basket.balanceOf(address(this));
+        uint256 liquidity = basket.totalBalances(address(this));
         if (liquidity > 0) {
             basket.approve(marketAddress, liquidity);
             marketMetadata[marketAddress].totalLiquidity = liquidity;
@@ -443,7 +443,7 @@ contract SaftaFactory {
     }
     
     function withdrawFees() external onlyOwner {
-        uint256 balance = basket.balanceOf(address(this));
+        uint256 balance = basket.totalBalances(address(this));
         if (balance > 0) {
             basket.transfer(owner, balance);
         }

@@ -64,7 +64,7 @@ library SettlementLib {
         for (uint256 i = 1; i <= latestHolder; i++) {
             address holder = basket.holders(i);
             if (holder != address(0)) {
-                uint256 balance = basket.balanceOf(holder);
+                uint256 balance = basket.totalBalances(holder);
                 if (balance >= minBalance && activeDisputes[holder] == 0) {
                     eligibleCount++;
                 }
@@ -79,7 +79,7 @@ library SettlementLib {
         for (uint256 i = 1; i <= latestHolder; i++) {
             address holder = basket.holders(i);
             if (holder != address(0)) {
-                uint256 balance = basket.balanceOf(holder);
+                uint256 balance = basket.totalBalances(holder);
                 if (balance >= minBalance && activeDisputes[holder] == 0) {
                     eligibleJurors[index++] = holder;
                 }
@@ -115,7 +115,7 @@ library SettlementLib {
         uint256 slashPercent
     ) external view returns (uint256) {
         Basket basket = Basket(basketAddress);
-        uint256 balance = basket.balanceOf(juror);
+        uint256 balance = basket.totalBalances(juror);
         return (balance * slashPercent) / 100;
     }
     

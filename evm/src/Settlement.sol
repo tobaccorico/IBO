@@ -340,8 +340,11 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
         disputeRound.selectedJurors = selected;
         disputeRound.votingDeadline = block.timestamp + VOTING_PER;
         
+        // Track jurors in Basket contract
+        Basket basket = Basket(basketContract);
         for (uint256 i = 0; i < selected.length; i++) {
             activeDisputes[selected[i]]++;
+            basket.recordJuror(selected[i]);  // Record this address as having been a juror
             emit JurorSelected(selected[i], disputeId, round);
         }
         
@@ -456,12 +459,8 @@ contract Settlement is ReentrancyGuard, IArbitrator, IEvidence {
                 uint256 slashAmount = (balance * SLASH_PCT) / 100;
                 
                 if (slashAmount > 0) {
-                    // Transfer slashed tokens to settlement pool
-                    Basket(basketContract).transferFrom(
-                        jurorAddr,
-                        address(this),
-                        slashAmount
-                    );
+                    // Burn slashed tokens from juror
+                    Basket(basketContract).burn(jurorAddr, slashAmount);
                     wrongVotes[jurorAddr]++;
                     
                     emit JurorSlashed(jurorAddr, slashAmount);

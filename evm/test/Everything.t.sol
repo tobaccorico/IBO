@@ -22,8 +22,6 @@ import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 
-
-
 import {Fixtures} from "./utils/Fixtures.sol";
 import {Aux} from "../src/Aux.sol";
 import {Rover} from "../src/Rover.sol";
@@ -150,12 +148,12 @@ contract Everything_Test is Test, Fixtures {
         );
         
         factory = new SaftaFactory(
-            manager,
-            QUID,
-            AUX,
-            settlement,
-            V4,
-            belgianHook  // Pass singleton hook
+            address(manager),        // Fix: explicit conversion
+            address(QUID),           // Fix: explicit conversion
+            payable(address(AUX)),   // Fix: explicit conversion
+            address(settlement),     // Fix: explicit conversion
+            address(V4),            // Fix: explicit conversion
+            address(belgianHook)     // Fix: explicit conversion
         );
         
         settlement.initialize(address(QUID), address(factory));
@@ -177,6 +175,7 @@ contract Everything_Test is Test, Fixtures {
         // Hook is the singleton belgianHook
         require(hookAddr == address(belgianHook), "Hook should be singleton");
     }
+
     
     function _fundDopplerUsers() internal {
         vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
@@ -580,7 +579,7 @@ contract Everything_Test is Test, Fixtures {
         predictionMarket.placeBid(100 * WAD, false, 50);
         
         // Check fees in hook
-        PoolKey memory key = belgianHook.poolKeys(poolId);
+        PoolKey memory key = belgianHook.poolKeys(poolId);  // Fix: get full struct
         
         // Verify 404 token is never used for fees
         vm.prank(factory.owner());
@@ -592,7 +591,6 @@ contract Everything_Test is Test, Fixtures {
             assertEq(fee1, 0, "No fees in 404 token");
         }
     }
-    
     function testSettlementAndPayouts() public {
         _setupMarketPositions();
         
@@ -638,6 +636,22 @@ contract Everything_Test is Test, Fixtures {
         vm.prank(User04);
         uint256 refund4 = predictionMarket.claimRefund();
         assertGt(refund4, 0, "Should get refund");
+    }
+
+    function testEmergencyResolution() public {
+        _setupMarketPositions();
+        
+        // Admin triggers force majeur through Settlement
+        vm.prank(settlement.admin());
+        predictionMarket.triggerForceMajeur("System failure");
+        
+        // Market should be in force majeur
+        assertTrue(predictionMarket.isInForceMajeur());
+        
+        // Users can claim refunds
+        vm.prank(User03);
+        uint256 refund = predictionMarket.claimRefund();
+        assertEq(refund, 100 * WAD, "Should get full refund");
     }
     
     function testRoverLiquidityIntegration() public {
@@ -756,21 +770,6 @@ contract Everything_Test is Test, Fixtures {
         assertGt(user05BalanceAfter, user05BalanceBefore, "Should receive stake plus reward");
     }
     
-    function testEmergencyResolution() public {
-        _setupMarketPositions();
-        
-        // Admin can trigger emergency resolution
-        vm.prank(settlement.admin());
-        settlement.emergencyResolve(address(predictionMarket), "System failure");
-        
-        // Market should be in force majeur
-        assertTrue(predictionMarket.isInForceMajeur());
-        
-        // Users can claim refunds
-        vm.prank(User03);
-        uint256 refund = predictionMarket.claimRefund();
-        assertEq(refund, 100 * WAD, "Should get full refund");
-    }
     
     function testMultiMarketSettlement() public {
         // Deploy second market
