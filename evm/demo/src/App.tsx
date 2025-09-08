@@ -7,11 +7,12 @@ declare global {
     ethereum?: MetaMaskInpageProvider;
   }
 }
-// You'll need to update these with deployed addresses
-const ROUTER_ADDRESS = "0x7bAe2554ED287380941B1706DC8cFf665137ca58"; // Update after deploy
-const AUX_ADDRESS = "0x2Ce5CfbA940b8e8791864307413bA1334BBd0CD1"; // Update after deploy
 
-// Minimal ABIs
+// Contract addresses
+const ROUTER_ADDRESS = "0x7bAe2554ED287380941B1706DC8cFf665137ca58";
+const AUX_ADDRESS = "0x2Ce5CfbA940b8e8791864307413bA1334BBd0CD1";
+
+// ABIs
 const ROUTER_ABI = [
   "function depositS(uint256 amount) payable",
   "function withdraw(uint256 amount) payable",
@@ -19,6 +20,7 @@ const ROUTER_ABI = [
   "function getPrice(uint160 sqrtRatioX96) view returns (uint256)",
   "function wS() view returns (address)",
   "function USDC() view returns (address)",
+  "function setupAux(address _aux)",
   "function repackNFT() returns (uint160)"
 ];
 
@@ -33,27 +35,43 @@ const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
   "function decimals() view returns (uint8)",
   "function approve(address spender, uint256 amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)"
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function transferFrom(address from, address to, uint256 amount) returns (bool)"
 ];
 
 const WETH_ABI = [
-  ...ERC20_ABI,
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function transferFrom(address from, address to, uint256 amount) returns (bool)",
   "function deposit() payable",
   "function withdraw(uint256 amount)"
 ];
 
+// Combined contracts state interface
+interface ContractsState {
+  router: ethers.Contract | null;
+  aux: ethers.Contract | null;
+  wS: ethers.Contract | null;
+  usdc: ethers.Contract | null;
+}
+
 function App() {
-  
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
   const [account, setAccount] = useState<string>('');
   const [chainId, setChainId] = useState<number>(0);
   
-  // Contracts 
-  const [routerContract, setRouterContract] = useState<ethers.Contract | null>(null);
-  const [auxContract, setAuxContract] = useState<ethers.Contract | null>(null);
-  const [wSContract, setWSContract] = useState<ethers.Contract | null>(null);
-  const [usdcContract, setUsdcContract] = useState<ethers.Contract | null>(null);
+  // Single state for all contracts to ensure atomic updates
+  const [contracts, setContracts] = useState<ContractsState>({
+    router: null,
+    aux: null,
+    wS: null,
+    usdc: null
+  });
   
   // Balances
   const [ethBalance, setEthBalance] = useState<string>('0');
@@ -83,43 +101,107 @@ function App() {
         return;
       }
 
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      await provider.send("eth_requestAccounts", []);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-      const network = await provider.getNetwork();
+      const newProvider = new ethers.BrowserProvider(window.ethereum);
+      await newProvider.send("eth_requestAccounts", []);
+      const newSigner = await newProvider.getSigner();
+      const address = await newSigner.getAddress();
+      const network = await newProvider.getNetwork();
+      
+      console.log('Wallet connected:', address);
+      console.log('Network:', network.chainId, network.name);
+      
+      // Check if on Sonic network (chain ID 146)
+      if (Number(network.chainId) !== 146) {
+        setTxStatus('Please switch to Sonic network (Chain ID: 146)');
+        
+        // Try to switch to Sonic
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x92' }], // 146 in hex
+          });
+        } catch (switchError: any) {
+          // This error code indicates that the chain has not been added to MetaMask
+          if (switchError.code === 4902) {
+            try {
+              await window.ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: '0x92',
+                  chainName: 'Sonic',
+                  nativeCurrency: {
+                    name: 'Sonic',
+                    symbol: 'S',
+                    decimals: 18
+                  },
+                  rpcUrls: ['https://rpc.soniclabs.com'],
+                  blockExplorerUrls: ['https://sonicscan.org']
+                }],
+              });
+            } catch (addError) {
+              console.error('Error adding Sonic network:', addError);
+              setTxStatus('Failed to add Sonic network. Please add it manually.');
+              return;
+            }
+          } else {
+            console.error('Error switching network:', switchError);
+            return;
+          }
+        }
+        
+        // Re-fetch network after switch
+        const updatedNetwork = await newProvider.getNetwork();
+        setChainId(Number(updatedNetwork.chainId));
+      } else {
+        setChainId(Number(network.chainId));
+      }
 
-      setProvider(provider);
-      setSigner(signer);
+      setProvider(newProvider);
+      setSigner(newSigner);
       setAccount(address);
-      setChainId(Number(network.chainId));
 
       // Initialize contracts
-      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
-      const aux = new ethers.Contract(AUX_ADDRESS, AUX_ABI, signer);
+      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, newSigner);
+      const aux = new ethers.Contract(AUX_ADDRESS, AUX_ABI, newSigner);
       
-      setRouterContract(router);
-      setAuxContract(aux);
+      try {
+        // Get token addresses from router
+        const wSAddress = "0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38";
+        const usdcAddress = "0x29219dd400f2Bf60E5a23d13Be72B486D4038894";
+        
+        console.log('Router address:', ROUTER_ADDRESS);
+        console.log('AUX address:', AUX_ADDRESS);
+        console.log('wS address:', wSAddress);
+        console.log('USDC address:', usdcAddress);
+        
+        // Initialize token contracts with proper ABIs
+        const wS = new ethers.Contract(wSAddress, WETH_ABI, newSigner);
+        const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, newSigner);
+        
+        // Set all contracts at once
+        setContracts({
+          router,
+          aux,
+          wS,
+          usdc
+        });
+        
+        // Load balances
+        await loadBalances(address, newProvider, wS, usdc, router);
+        
+        // Listen for position events
+        setupEventListeners(aux, address);
+        
+        setTxStatus('Connected successfully!');
+        
+      } catch (error: any) {
+        console.error('Error initializing contracts:', error);
+        setTxStatus(`Contract initialization error: ${error.message}`);
+      }
       
-      // Get token addresses and initialize token contracts
-      const wSAddress = await router.wS();
-      const usdcAddress = await router.USDC();
-      
-      const wS = new ethers.Contract(wSAddress, WETH_ABI, signer);
-      const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, signer);
-      
-      setWSContract(wS);
-      setUsdcContract(usdc);
-      
-      // Load balances
-      await loadBalances(address, provider, wS, usdc, router);
-      
-      // Listen for position events
-      setupEventListeners(aux);
-      
-    } catch (error) {
+    } catch (error: any) {
       console.error('Connection error:', error);
-      setTxStatus('Failed to connect wallet');
+      setTxStatus(`Failed to connect: ${error.message}`);
     }
   };
 
@@ -131,44 +213,69 @@ function App() {
     router: ethers.Contract
   ) => {
     try {
-      // ETH balance
+      // Native S (ETH) balance
       const ethBal = await provider.getBalance(address);
       setEthBalance(ethers.formatEther(ethBal));
       
-      // wS balance
-      const wSBal = await wS.balanceOf(address);
-      setWSBalance(ethers.formatEther(wSBal));
+      // wS balance (wrapped S)
+      try {
+        const wSBal = await wS.balanceOf(address);
+        setWSBalance(ethers.formatEther(wSBal));
+      } catch (e) {
+        console.log('wS balance error, setting to 0');
+        setWSBalance('0');
+      }
       
       // USDC balance
-      const usdcBal = await usdc.balanceOf(address);
-      setUsdcBalance(ethers.formatUnits(usdcBal, 6));
+      try {
+        const usdcBal = await usdc.balanceOf(address);
+        setUsdcBalance(ethers.formatUnits(usdcBal, 6));
+      } catch (e) {
+        console.log('USDC balance error, setting to 0');
+        setUsdcBalance('0');
+      }
       
-      // Deposit info
-      const [deposit, price, sqrtPrice] = await router.fetch(address);
-      if (deposit.liq > 0) {
-        setDepositInfo({
-          liquidity: deposit.liq.toString(),
-          feesS: ethers.formatEther(deposit.fees_S),
-          feesUsd: ethers.formatUnits(deposit.fees_usd, 18),
-          price: ethers.formatUnits(price, 18)
-        });
+      // Deposit info from router
+      try {
+        const fetchResult = await router.fetch(address);
+        // The result is a tuple: [Deposit struct, price, sqrtPrice]
+        const deposit = fetchResult[0];
+        const price = fetchResult[1];
+        
+        if (deposit && deposit.liq && deposit.liq > 0n) {
+          setDepositInfo({
+            liquidity: deposit.liq.toString(),
+            feesS: ethers.formatEther(deposit.fees_S || 0n),
+            feesUsd: ethers.formatUnits(deposit.fees_usd || 0n, 18),
+            price: ethers.formatUnits(price || 0n, 18)
+          });
+        } else {
+          setDepositInfo(null);
+        }
+      } catch (e) {
+        console.log('No existing deposit found');
+        setDepositInfo(null);
       }
     } catch (error) {
       console.error('Error loading balances:', error);
     }
-};
+  };
 
-  const setupEventListeners = (aux: ethers.Contract) => {
+  const setupEventListeners = (aux: ethers.Contract, userAddress: string) => {
+    // Remove old listeners first
+    aux.removeAllListeners();
+    
     // Listen for leverage positions
     aux.on('LeveragedPositionOpened', (user, isLong, supplied, borrowed, buffer, entryPrice, breakeven, blockNumber) => {
-      if (user.toLowerCase() === account.toLowerCase()) {
+      if (user.toLowerCase() === userAddress.toLowerCase()) {
         const position = {
           isLong,
           supplied: ethers.formatEther(supplied),
           borrowed: ethers.formatEther(borrowed),
           entryPrice: ethers.formatUnits(entryPrice, 18),
           breakeven: ethers.formatUnits(breakeven, 18),
-          block: blockNumber.toString()
+          block: blockNumber.toString(),
+          timestamp: Date.now()
         };
         setPositions(prev => [...prev, position]);
         setTxStatus(`${isLong ? 'Long' : 'Short'} position opened at $${position.entryPrice}`);
@@ -176,9 +283,9 @@ function App() {
     });
     
     aux.on('PositionUnwound', (user, isLong, exitPrice, priceDelta, blockNumber) => {
-      if (user.toLowerCase() === account.toLowerCase()) {
-        setTxStatus(`Position unwound at $${ethers.formatUnits(exitPrice, 18)} (${Number(priceDelta) / 10}% change)`);
-        // Remove position from list
+      if (user.toLowerCase() === userAddress.toLowerCase()) {
+        const delta = Number(priceDelta) / 10;
+        setTxStatus(`Position unwound at $${ethers.formatUnits(exitPrice, 18)} (${delta > 0 ? '+' : ''}${delta.toFixed(1)}% change)`);
         setPositions(prev => prev.filter(p => p.isLong !== isLong));
       }
     });
@@ -186,7 +293,7 @@ function App() {
 
   // Deposit ETH to Router
   const handleDeposit = async () => {
-    if (!routerContract || !provider || !wSContract || !usdcContract) {
+    if (!contracts.router || !provider || !contracts.wS || !contracts.usdc) {
       setTxStatus('Please connect wallet first');
       return;
     }
@@ -197,30 +304,53 @@ function App() {
     }
     
     setLoading(true);
-    setTxStatus('Depositing ETH...');
+    setTxStatus('Depositing S...');
     
     try {
       const amount = ethers.parseEther(depositAmount);
-      const tx = await routerContract.depositS(0, { value: amount });
+      
+      // Check native balance
+      const balance = await provider.getBalance(account);
+      if (balance < amount) {
+        throw new Error(`Insufficient S balance. Have: ${ethers.formatEther(balance)}, Need: ${depositAmount}`);
+      }
+      
+      // The depositS function expects amount parameter and ETH in msg.value
+      const tx = await contracts.router.depositS(0, { 
+        value: amount,
+        gasLimit: 500000 // Set explicit gas limit
+      });
       
       setTxStatus('Transaction submitted...');
-      await tx.wait();
+      const receipt = await tx.wait();
       
-      setTxStatus('Deposit successful!');
-      setDepositAmount('');
-      await loadBalances(account, provider, wSContract, usdcContract, routerContract);
+      if (receipt.status === 1) {
+        setTxStatus('Deposit successful!');
+        setDepositAmount('');
+        
+        // Reload balances
+        await loadBalances(account, provider, contracts.wS, contracts.usdc, contracts.router);
+      } else {
+        throw new Error('Transaction failed');
+      }
       
     } catch (error: any) {
       console.error('Deposit error:', error);
-      setTxStatus(`Error: ${error.message}`);
+      if (error.code === 'INSUFFICIENT_FUNDS') {
+        setTxStatus('Insufficient S balance for transaction');
+      } else if (error.message?.includes('user rejected')) {
+        setTxStatus('Transaction cancelled');
+      } else {
+        setTxStatus(`Error: ${error.message || 'Unknown error'}`);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // Complete handleWithdraw function
+  // Withdraw from Router
   const handleWithdraw = async () => {
-    if (!routerContract || !provider || !wSContract || !usdcContract) {
+    if (!contracts.router || !provider || !contracts.wS || !contracts.usdc) {
       setTxStatus('Please connect wallet first');
       return;
     }
@@ -234,26 +364,36 @@ function App() {
     setTxStatus('Withdrawing...');
     
     try {
-      const percent = parseInt(withdrawPercent) * 10; // Contract expects per-mille (0-1000)
-      const tx = await routerContract.withdraw(percent);
+      // Convert percentage to basis points (multiply by 10)
+      const percent = parseInt(withdrawPercent) * 10;
+      
+      const tx = await contracts.router.withdraw(percent, {
+        gasLimit: 500000
+      });
       
       setTxStatus('Transaction submitted...');
-      await tx.wait();
+      const receipt = await tx.wait();
       
-      setTxStatus('Withdrawal successful!');
-      await loadBalances(account, provider, wSContract, usdcContract, routerContract);
+      if (receipt.status === 1) {
+        setTxStatus('Withdrawal successful!');
+        
+        // Reload balances
+        await loadBalances(account, provider, contracts.wS, contracts.usdc, contracts.router);
+      } else {
+        throw new Error('Transaction failed');
+      }
       
     } catch (error: any) {
       console.error('Withdraw error:', error);
-      setTxStatus(`Error: ${error.message}`);
+      setTxStatus(`Error: ${error.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Complete handleLeverage function
+  // Open leveraged position
   const handleLeverage = async () => {
-    if (!auxContract || !wSContract || !usdcContract || !provider || !routerContract) {
+    if (!contracts.aux || !contracts.wS || !contracts.usdc || !provider || !contracts.router) {
       setTxStatus('Please connect wallet first');
       return;
     }
@@ -267,47 +407,69 @@ function App() {
     
     try {
       if (leverageType === 'long') {
-        // Long position (leverZeroForOne) - deposit wS
         setTxStatus('Opening long position...');
         const amount = ethers.parseEther(leverageAmount);
         
-        // Check wS allowance
-        const allowance = await wSContract.allowance(account, AUX_ADDRESS);
+        // Check wS balance
+        const wSBalance = await contracts.wS.balanceOf(account);
+        if (wSBalance < amount) {
+          throw new Error(`Insufficient wS balance. Have: ${ethers.formatEther(wSBalance)}, Need: ${leverageAmount}`);
+        }
+        
+        // Check and set approval
+        const allowance = await contracts.wS.allowance(account, AUX_ADDRESS);
         if (allowance < amount) {
           setTxStatus('Approving wS...');
-          const approveTx = await wSContract.approve(AUX_ADDRESS, ethers.MaxUint256);
+          const approveTx = await contracts.wS.approve(AUX_ADDRESS, ethers.MaxUint256);
           await approveTx.wait();
         }
         
-        const tx = await auxContract.leverZeroForOne(amount);
+        const tx = await contracts.aux.leverZeroForOne(amount, {
+          gasLimit: 800000
+        });
         setTxStatus('Transaction submitted...');
         await tx.wait();
         
       } else {
-        // Short position (leverOneForZero) - deposit USDC
         setTxStatus('Opening short position...');
         const amount = ethers.parseUnits(leverageAmount, 6);
         
-        // Check USDC allowance
-        const allowance = await usdcContract.allowance(account, AUX_ADDRESS);
+        // Check USDC balance
+        const usdcBalance = await contracts.usdc.balanceOf(account);
+        if (usdcBalance < amount) {
+          throw new Error(`Insufficient USDC balance. Have: ${ethers.formatUnits(usdcBalance, 6)}, Need: ${leverageAmount}`);
+        }
+        
+        // Check and set approval
+        const allowance = await contracts.usdc.allowance(account, AUX_ADDRESS);
         if (allowance < amount) {
           setTxStatus('Approving USDC...');
-          const approveTx = await usdcContract.approve(AUX_ADDRESS, ethers.MaxUint256);
+          const approveTx = await contracts.usdc.approve(AUX_ADDRESS, ethers.MaxUint256);
           await approveTx.wait();
         }
         
-        const tx = await auxContract.leverOneForZero(amount);
+        const tx = await contracts.aux.leverOneForZero(amount, {
+          gasLimit: 800000
+        });
         setTxStatus('Transaction submitted...');
         await tx.wait();
       }
       
       setTxStatus(`${leverageType === 'long' ? 'Long' : 'Short'} position opened!`);
       setLeverageAmount('');
-      await loadBalances(account, provider, wSContract, usdcContract, routerContract);
+      
+      // Reload balances
+      await loadBalances(account, provider, contracts.wS, contracts.usdc, contracts.router);
       
     } catch (error: any) {
       console.error('Leverage error:', error);
-      setTxStatus(`Error: ${error.message}`);
+      if (error.message?.includes('Insufficient')) {
+        setTxStatus(error.message);
+      } else if (error.message?.includes('user rejected')) {
+        setTxStatus('Transaction cancelled');
+      } else {
+        setTxStatus(`Error: ${error.message || 'Unknown error'}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -315,14 +477,68 @@ function App() {
 
   // Refresh balances periodically
   useEffect(() => {
-  if (account && provider && wSContract && usdcContract && routerContract) {
+    if (!account || !provider || !contracts.wS || !contracts.usdc || !contracts.router) {
+      return;
+    }
+    
+    const wS = contracts.wS;
+    const usdc = contracts.usdc;
+    const router = contracts.router;
+    
     const interval = setInterval(() => {
-      loadBalances(account, provider, wSContract, usdcContract, routerContract);
-    }, 10000); // Every 10 seconds
+      loadBalances(account, provider, wS, usdc, router);
+    }, 15000); // Update every 15 seconds
     
     return () => clearInterval(interval);
-  }
-}, [account, provider, wSContract, usdcContract, routerContract]);
+  }, [account, provider, contracts]);
+
+  // Auto-connect if previously connected
+  useEffect(() => {
+    if (window.ethereum) {
+      window.ethereum.request({ method: 'eth_accounts' }).then((accounts: any) => {
+        if (accounts.length > 0) {
+          connectWallet();
+        }
+      });
+      
+      // Listen for network changes
+      const handleChainChanged = (...args: unknown[]) => {
+        const chainId = args[0] as string;
+        console.log('Network changed to:', chainId);
+        // Reload the page to reset the app state with new network
+        window.location.reload();
+      };
+      
+      const handleAccountsChanged = (...args: unknown[]) => {
+        const accounts = args[0] as string[];
+        console.log('Accounts changed:', accounts);
+        if (accounts.length === 0) {
+          // User disconnected wallet
+          setAccount('');
+          setContracts({
+            router: null,
+            aux: null,
+            wS: null,
+            usdc: null
+          });
+        } else if (accounts[0] !== account) {
+          // User switched accounts
+          window.location.reload();
+        }
+      };
+      
+      window.ethereum.on('chainChanged', handleChainChanged);
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+      
+      // Cleanup
+      return () => {
+        if (window.ethereum && window.ethereum.removeListener) {
+          window.ethereum.removeListener('chainChanged', handleChainChanged);
+          window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+        }
+      };
+    }
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 text-white">
@@ -336,7 +552,7 @@ function App() {
           {account ? (
             <div className="flex items-center gap-4">
               <div className="text-sm">
-                <div>ETH: {parseFloat(ethBalance).toFixed(4)}</div>
+                <div>S: {parseFloat(ethBalance).toFixed(4)}</div>
                 <div>wS: {parseFloat(wSBalance).toFixed(4)}</div>
                 <div>USDC: {parseFloat(usdcBalance).toFixed(2)}</div>
               </div>
@@ -378,7 +594,13 @@ function App() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Status Message */}
         {txStatus && (
-          <div className="mb-4 p-3 bg-black/50 backdrop-blur-md rounded-lg border border-gray-800">
+          <div className={`mb-4 p-3 rounded-lg border ${
+            txStatus.includes('Error') || txStatus.includes('Insufficient') 
+              ? 'bg-red-900/20 border-red-800 text-red-200'
+              : txStatus.includes('successful') 
+                ? 'bg-green-900/20 border-green-800 text-green-200'
+                : 'bg-black/50 border-gray-800 text-gray-200'
+          }`}>
             {txStatus}
           </div>
         )}
@@ -386,26 +608,31 @@ function App() {
         {/* Deposit Tab */}
         {activeTab === 'deposit' && (
           <div className="bg-black/30 backdrop-blur-md rounded-xl p-6 border border-gray-800">
-            <h2 className="text-xl font-bold mb-4">Deposit ETH to Liquidity Pool</h2>
+            <h2 className="text-xl font-bold mb-4">Deposit S to Liquidity Pool</h2>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-2">Amount (ETH)</label>
+                <label className="block text-sm text-gray-400 mb-2">Amount (S)</label>
                 <input
                   type="number"
                   value={depositAmount}
                   onChange={(e) => setDepositAmount(e.target.value)}
                   placeholder="0.0"
+                  step="0.01"
+                  min="0"
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
                 />
+                <div className="text-xs text-gray-500 mt-1">
+                  Available: {parseFloat(ethBalance).toFixed(4)} S
+                </div>
               </div>
               
               <button
                 onClick={handleDeposit}
-                disabled={loading || !account || !routerContract}
-                className="w-full bg-gradient-to-r from-blue-500 to-purple-600 py-3 rounded-lg font-semibold disabled:opacity-50 hover:from-blue-600 hover:to-purple-700 transition-all"
+                disabled={loading || !account || !contracts.router || parseFloat(depositAmount) <= 0}
+                className="w-full bg-gradient-to-r from-blue-500 to-purple-600 py-3 rounded-lg font-semibold disabled:opacity-50 hover:from-blue-600 hover:to-purple-700 transition-all disabled:cursor-not-allowed"
               >
-                {loading ? 'Processing...' : 'Deposit ETH'}
+                {loading ? 'Processing...' : 'Deposit S'}
               </button>
             </div>
             
@@ -428,30 +655,36 @@ function App() {
           <div className="bg-black/30 backdrop-blur-md rounded-xl p-6 border border-gray-800">
             <h2 className="text-xl font-bold mb-4">Withdraw from Pool</h2>
             
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Withdraw Percentage</label>
-                <select
-                  value={withdrawPercent}
-                  onChange={(e) => setWithdrawPercent(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
+            {depositInfo ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">Withdraw Percentage</label>
+                  <select
+                    value={withdrawPercent}
+                    onChange={(e) => setWithdrawPercent(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
+                  >
+                    <option value="10">10%</option>
+                    <option value="25">25%</option>
+                    <option value="50">50%</option>
+                    <option value="75">75%</option>
+                    <option value="100">100%</option>
+                  </select>
+                </div>
+                
+                <button
+                  onClick={handleWithdraw}
+                  disabled={loading || !account || !contracts.router}
+                  className="w-full bg-gradient-to-r from-red-500 to-orange-600 py-3 rounded-lg font-semibold disabled:opacity-50 hover:from-red-600 hover:to-orange-700 transition-all disabled:cursor-not-allowed"
                 >
-                  <option value="10">10%</option>
-                  <option value="25">25%</option>
-                  <option value="50">50%</option>
-                  <option value="75">75%</option>
-                  <option value="100">100%</option>
-                </select>
+                  {loading ? 'Processing...' : 'Withdraw'}
+                </button>
               </div>
-              
-              <button
-                onClick={handleWithdraw}
-                disabled={loading || !account || !routerContract || !depositInfo}
-                className="w-full bg-gradient-to-r from-red-500 to-orange-600 py-3 rounded-lg font-semibold disabled:opacity-50 hover:from-red-600 hover:to-orange-700 transition-all"
-              >
-                {loading ? 'Processing...' : 'Withdraw'}
-              </button>
-            </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                No deposit to withdraw. Please deposit first.
+              </div>
+            )}
           </div>
         )}
 
@@ -469,7 +702,7 @@ function App() {
                     className={`flex-1 py-2 rounded-lg transition-all ${
                       leverageType === 'long' 
                         ? 'bg-green-600 text-white' 
-                        : 'bg-gray-800 text-gray-400'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                     }`}
                   >
                     Long (Deposit wS)
@@ -479,7 +712,7 @@ function App() {
                     className={`flex-1 py-2 rounded-lg transition-all ${
                       leverageType === 'short' 
                         ? 'bg-red-600 text-white' 
-                        : 'bg-gray-800 text-gray-400'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                     }`}
                   >
                     Short (Deposit USDC)
@@ -496,10 +729,12 @@ function App() {
                   value={leverageAmount}
                   onChange={(e) => setLeverageAmount(e.target.value)}
                   placeholder="0.0"
+                  step={leverageType === 'long' ? '0.01' : '1'}
+                  min="0"
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
                 />
                 <div className="text-xs text-gray-500 mt-1">
-                  Available: {leverageType === 'long' ? wSBalance : usdcBalance}
+                  Available: {leverageType === 'long' ? `${parseFloat(wSBalance).toFixed(4)} wS` : `${parseFloat(usdcBalance).toFixed(2)} USDC`}
                 </div>
               </div>
               
@@ -511,8 +746,8 @@ function App() {
               
               <button
                 onClick={handleLeverage}
-                disabled={loading || !account || !auxContract}
-                className={`w-full py-3 rounded-lg font-semibold disabled:opacity-50 transition-all ${
+                disabled={loading || !account || !contracts.aux || parseFloat(leverageAmount) <= 0}
+                className={`w-full py-3 rounded-lg font-semibold disabled:opacity-50 transition-all disabled:cursor-not-allowed ${
                   leverageType === 'long'
                     ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
                     : 'bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700'
@@ -532,7 +767,7 @@ function App() {
             {positions.length > 0 ? (
               <div className="space-y-3">
                 {positions.map((pos, idx) => (
-                  <div key={idx} className="bg-gray-900 rounded-lg p-4 border border-gray-700">
+                  <div key={`${idx}-${pos.timestamp}`} className="bg-gray-900 rounded-lg p-4 border border-gray-700">
                     <div className="flex justify-between items-start">
                       <div>
                         <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
