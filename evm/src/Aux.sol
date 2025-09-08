@@ -60,6 +60,7 @@ contract Aux is Ownable {
     
     uint internal SWAP_COST; 
     uint internal UNWIND_COST;
+    uint constant RAY = 1e27;
     uint constant WAD = 1e18;
     uint public untouchable; 
     // ^ USDC saved for AAVE
@@ -190,7 +191,7 @@ contract Aux is Ownable {
     /// @return blockNumber Block when trade will clear
     function swap(address token, bool zeroForOne, uint amount, 
         uint waitable) public payable returns (uint blockNumber) { 
-        (uint160 sqrtPriceX96,,,) = V4.repack(); // TODO $ to $
+        (uint160 sqrtPriceX96,,,) = V4.repack(); 
         uint price = getPrice(sqrtPriceX96, false);
         bool isStable = QUID.isStable(token);
         // ^ if this is true user cares
@@ -256,6 +257,9 @@ contract Aux is Ownable {
         uint swapping; uint value; uint remains; 
         uint splitForZero; uint splitForOne;
         uint gotForOne; uint gotForZero;
+        // we can buypass slippage  
+        // from V3 through `ID` in  
+        // Router.sol TODO deploy
         if (forZero.total > 0) { 
             swapping = SWAP_COST * forZero.swaps.length;
             // dollar value of total ETH to sell
@@ -515,13 +519,23 @@ contract Aux is Ownable {
     /// @notice Calculate accrued interest on AAVE positions
     /// @return repayWETH Interest owed on WETH borrows
     /// @return repayUSDC Interest owed on USDC borrows
-    function _howMuchInterest() internal returns 
-        (uint repayWETH, uint repayUSDC) {
-        (IUiPoolDataProviderV3.UserReserveData[] memory data, ) = DATA.getUserReservesData(
-                                                                        ADDR, address(this));
-        
-        repayWETH = data[0].scaledVariableDebt - totalBorrowed[address(WETH)];
-        repayUSDC = data[3].scaledVariableDebt - totalBorrowed[address(USDC)];
+    function _howMuchInterest() internal view returns (uint repayWETH, uint repayUSDC) {
+        ( IUiPoolDataProviderV3.UserReserveData[] memory userData,
+        ) = DATA.getUserReservesData(ADDR, address(this));
+
+        ( IUiPoolDataProviderV3.AggregatedReserveData[] memory reserveData,
+        ) = DATA.getReservesData(ADDR);
+
+        { uint scaledDebt = userData[0].scaledVariableDebt;
+          uint borrowIndex = reserveData[0].variableBorrowIndex;
+          uint actualDebt = (scaledDebt * borrowIndex) / RAY;
+          repayWETH = actualDebt - totalBorrowed[address(WETH)]; }
+
+        // index 3 on L1, 4 on Base
+        { uint scaledDebt = userData[3].scaledVariableDebt;
+          uint borrowIndex = reserveData[3].variableBorrowIndex;
+          uint actualDebt = (scaledDebt * borrowIndex) / RAY;
+          repayUSDC = actualDebt - totalBorrowed[address(USDC)]; }
     }
 
     /// @notice Unwind leveraged positions based on price movement

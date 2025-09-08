@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Rover} from  "./Rover.sol";
 import {Aux} from  "./Aux.sol";
+import {BasketLib} from "./BasketLib.sol";
 
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
@@ -19,7 +20,7 @@ import {AggregatorV3Interface} from "./imports/AggregatorV3Interface.sol";
 interface ISCRVOracle { 
     function pricePerShare(uint ts) 
     external view returns (uint);
-} // these two Oracle contracts are only used on L2
+}
 import {IDSROracle} from "./imports/IDSROracle.sol";
 
 contract BasketL2 is ERC6909 { // Base
@@ -36,13 +37,16 @@ contract BasketL2 is ERC6909 { // Base
     IDSROracle internal DSR;
     ISCRVOracle internal CRV;
     
-    string private _name = "QU!D";
-    string private _symbol = "QD";
+    string public constant name = "QU!D";
+    string public constant symbol = "QD";
+    uint8 public constant decimals = 18;
     address payable public V4;
     uint constant WAD = 1e18;
 
     struct Metrics {
-        uint last; uint total; uint yield;
+        uint total;
+        uint last;
+        uint yield;
     }
     
     address immutable USDC;
@@ -64,10 +68,10 @@ contract BasketL2 is ERC6909 { // Base
     mapping(address => uint) public totalBalances;
     
     mapping(address => SortedSetLib.Set) private perMonth;
-    mapping(address => mapping( // legacy IERC20 version
+    mapping(address => mapping(
             address => uint)) private _allowances;
 
-    // NEW: Voting and rebalancing features (simplified)
+    // Voting and rebalancing features
     uint public latest_holder = 0;
     mapping(uint => address) public holders;
     mapping(address => uint) public holder_to_id;
@@ -77,14 +81,9 @@ contract BasketL2 is ERC6909 { // Base
     
     mapping(address => uint) public lastVoteEpoch;
     
-    // Simplified voting storage using packed values
-    struct Vote {
-        uint128 value;  // The vote value (target percentage)
-        uint128 weight; // The voter's weight
-    }
-    
-    // epoch => stableIndex => array of votes
-    mapping(uint => mapping(uint => Vote[])) public epochVotes;
+    // OPTIMIZED: Use SortedSetLib for vote values, store weights separately
+    mapping(uint => mapping(uint => SortedSetLib.Set)) private voteSets;
+    mapping(uint => mapping(uint => mapping(uint => uint))) private voteWeights;
     mapping(uint => uint) public epochTotalWeight;
 
     modifier onlyUs {
@@ -93,44 +92,17 @@ contract BasketL2 is ERC6909 { // Base
                 sender == address(AUX), "403"); _;
     }
 
-    /**
-     * @dev Returns the current reading of our internal clock.
-     */
     function currentMonth() public view returns
         (uint month) { month = (block.timestamp -
                       _deployed) / 2420000; // ~28 days
     }
-    /**
-     * @dev Returns the name of our token.
-     */
-    function name() public view virtual returns (string memory) {
-        return _name;
-    }
 
-    /**
-     * @dev Returns the symbol of our token.
-     */
-    function symbol() public view virtual returns (string memory) {
-        return _symbol;
-    }
-
-    /**
-     * @dev Tokens usually opt for a value of 18, 
-     * imitating the relationship between Ether and Wei. 
-     */
-    function decimals() public view virtual returns (uint8) {
-        return 18;
-    }
-
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
     function totalSupply() public 
         view returns (uint) {
         return _totalSupply;
     }
 
-    function transfer(address to, // receiver
+    function transfer(address to,
         uint amount) public returns (bool) {
         return _transfer(msg.sender, to, amount);
     }
@@ -144,12 +116,7 @@ contract BasketL2 is ERC6909 { // Base
 
     function matureBatches(uint[] memory batches)
         public view returns (int i) {
-        int start = int(batches.length - 1);
-        for (i = start; i >= 0; i--) {
-            if (batches[uint(i)] <= currentMonth()) {
-                return i;
-            }
-        }
+        return BasketLib.matureBatches(batches, block.timestamp, _deployed);
     }
 
     constructor(address _router, address _aux, 
@@ -194,7 +161,6 @@ contract BasketL2 is ERC6909 { // Base
         targets[CRVUSD] = equalWeight;
         targets[SCRVUSD] = equalWeight;
         
-        // the following oracles are needed on L2 in absence of 4626
         DSR = IDSROracle(0x65d946e533748A998B1f0E430803e39A6388f7a1); 
         // 0xEE2816c1E1eed14d444552654Ed3027abC033A36 // <----- Arbitrum
         CRV = ISCRVOracle(0x3d8EADb739D1Ef95dd53D718e4810721837c69c1);
@@ -217,9 +183,8 @@ contract BasketL2 is ERC6909 { // Base
             price = DSR.getConversionRateBinomialApprox() / 1e9;
         }
         require(price >= WAD, "price");
-    } // function used only on Base...
+    }
 
-    // Keep L2 version of get_metrics
     function get_metrics(bool force)
         public returns (uint, uint) {
         Metrics memory stats = coreMetrics;
@@ -244,7 +209,6 @@ contract BasketL2 is ERC6909 { // Base
         return (stats.total, stats.yield);
     }
 
-    // Keep L2 version of get_deposits
     function get_deposits() public view
         returns (uint[9] memory amounts) {
         
@@ -270,8 +234,7 @@ contract BasketL2 is ERC6909 { // Base
         }
     } 
 
-    // Keep L2 version of take
-    function take(address who, // on whose behalf
+    function take(address who,
         uint amount, address token, bool strict) 
         public onlyUs returns (uint sent) { 
         if (token != address(this)) { 
@@ -289,16 +252,16 @@ contract BasketL2 is ERC6909 { // Base
                 max = IERC20(token).balanceOf(address(this));
             }
             
-            // NEW: Apply rebalancing fee
             uint fee = getFee(token, false, amount);
             uint amountNeeded = amount;
-            if (fee > 0 && fee < WAD / 10) { // Cap at 10%
+            if (fee > 0 && fee < WAD / 10) {
                 amountNeeded = FullMath.mulDiv(amount, WAD + fee, WAD);
             }
             
             if (max >= amountNeeded) {
                 if (vault != address(0)) {
                     uint withdrawn = withdraw(who, vault, amountNeeded);
+                    _recomputeConcentrations(block.timestamp / 1 weeks);
                     if (fee > 0) {
                         return FullMath.mulDiv(withdrawn, WAD - fee, WAD);
                     }
@@ -306,6 +269,7 @@ contract BasketL2 is ERC6909 { // Base
                 }
                 else {
                     IERC20(token).transfer(who, amountNeeded);
+                    _recomputeConcentrations(block.timestamp / 1 weeks);
                     if (fee > 0) {
                         return FullMath.mulDiv(amountNeeded, WAD - fee, WAD);
                     }
@@ -322,7 +286,10 @@ contract BasketL2 is ERC6909 { // Base
                         amount *= 10 ** scale;
                         max *= 10 ** scale;
                     }   sent = max;
-                } else return max;
+                } else {
+                    _recomputeConcentrations(block.timestamp / 1 weeks);
+                    return max;
+                }
             }
         } uint[9] memory amounts = get_deposits();
         
@@ -338,6 +305,7 @@ contract BasketL2 is ERC6909 { // Base
             IERC20(STABLES[i - 3]).transfer(who, amounts[i]);
             sent += amounts[i];
         }
+        _recomputeConcentrations(block.timestamp / 1 weeks);
     }
 
     function withdraw(address to, address vault, uint amount) internal returns (uint sent) {
@@ -357,7 +325,6 @@ contract BasketL2 is ERC6909 { // Base
                token == CRVUSD || token == SCRVUSD;
     }
 
-    // Keep L2 version of deposit with fee logic added
     function deposit(address from,
         address token, uint amount)
         public returns (uint usd) {
@@ -366,10 +333,9 @@ contract BasketL2 is ERC6909 { // Base
             IERC20(token).allowance(
                 from, address(this)));
             
-            // NEW: Apply rebalancing fee
             uint fee = getFee(token, true, usd);
             uint totalNeeded = usd;
-            if (fee > 0 && fee < WAD / 10) { // Cap at 10%
+            if (fee > 0 && fee < WAD / 10) {
                 totalNeeded = FullMath.mulDiv(usd, WAD + fee, WAD);
                 require(totalNeeded <= IERC20(token).allowance(from, address(this)), 
                     "insufficient allowance for fee");
@@ -393,9 +359,9 @@ contract BasketL2 is ERC6909 { // Base
             IERC4626(sUSDSvault).deposit(usd, 
                            address(this));
         }
+        _recomputeConcentrations(block.timestamp / 1 weeks);
     }
 
-    // overriding standard 6909 code
     function _mint(address receiver,
         uint id, uint amount
     ) internal override {
@@ -411,7 +377,6 @@ contract BasketL2 is ERC6909 { // Base
             id, amount);
     }
 
-    // Keep L2 version of mint with holder tracking added
     function mint(address pledge, uint amount, 
         address token, uint when) public {
         uint month = Math.max(when,
@@ -421,7 +386,6 @@ contract BasketL2 is ERC6909 { // Base
             require(msg.sender == address(AUX), "403");
             _mint(pledge, month, amount);
         } else {
-            // NEW: Track holders for voting
             uint id = holder_to_id[msg.sender]; 
             if (id == 0) {
                 holders[latest_holder] = msg.sender;
@@ -457,26 +421,21 @@ contract BasketL2 is ERC6909 { // Base
         } return _transfer(from, to, amount);
     }
 
-    function turn(address from, // whose balance
+    function turn(address from,
         uint value) onlyUs public returns (uint sent) {
         uint oldBalanceFrom = totalBalances[from];
         sent = _transferHelper(from,
                 address(0), value);
     }
 
-    // Keep L2 version of _transferHelper unchanged
     function _transferHelper(address from, 
         address to, uint amount) 
         internal returns (uint sent) {
-        // must be int or tx reverts when we go below 0 in loop
         uint[] memory batches = perMonth[from].getSortedSet();
-        // if i = 0 then this will either give us one iteration,
-        // or exit with index out of bounds, both make sense...
         bool toZero = to == address(0);
         bool burning = toZero || to == V4;
         int i = toZero ?
-            // this may return -1
-            matureBatches(batches) :
+            BasketLib.matureBatches(batches, block.timestamp, _deployed) :
             int(batches.length - 1);
         
         while (amount > 0 && i >= 0) {
@@ -487,9 +446,6 @@ contract BasketL2 is ERC6909 { // Base
                 balanceOf[from][k] -= amt;
                 if (!burning) {
                     perMonth[to].insert(k);
-                    // ^ this does nothing if
-                    // k is already in sorted
-                    // set for this address
                     balanceOf[to][k] += amt;
                 } else {
                     totalSupplies[k] -= amt;
@@ -511,147 +467,91 @@ contract BasketL2 is ERC6909 { // Base
         }
     }
 
-    // Modified to include rebalancing update
     function _transfer(address from, address to,
         uint amount) internal returns (bool) {
         uint oldBalanceFrom = totalBalances[from];
         uint oldBalanceTo = totalBalances[to];
         uint value = _transferHelper(from, 
                           to, amount);
-        // NEW: Update concentrations after transfer
-        _recomputeConcentrations(block.timestamp / 1 weeks);
         return true;
     }
 
-    // NEW: Simplified voting functionality
     function vote(uint[] calldata _targets) external {
-        uint epoch = block.timestamp / 1 weeks;
-        require(_targets.length == STABLES.length 
-        && lastVoteEpoch[msg.sender] < epoch, "mismatch");
-        uint sum; // Verify targets sum to 100%
+        uint epoch = currentMonth();
+        require(_targets.length == STABLES.length, "Wrong length");
+        require(lastVoteEpoch[msg.sender] < epoch, "Already voted");
+        
+        uint sum;
         for (uint i = 0; i < _targets.length; i++) {
             sum += _targets[i];
-        } require(sum == WAD, 
-        "Targets must sum to 100%");
+        } 
+        require(sum == WAD, "Must sum to 100%");
+        
+        uint voterWeight = totalBalances[msg.sender];
+        require(voterWeight > 0, "No voting power");
+        
         lastVoteEpoch[msg.sender] = epoch;
-        uint weight = totalBalances[msg.sender];
-        require(weight > 0, "No voting power");
-        // Record vote and update weighted median 
+        
         for (uint i = 0; i < STABLES.length; i++) {
-            _addVote(epoch, i, _targets[i], weight);
-        }   epochTotalWeight[epoch] += weight;
-            _recomputeConcentrations(epoch);
-    }
-
-    // NEW: Simplified vote addition without maintaining sort order
-    function _addVote(uint epoch, uint stableIndex, uint voteValue, uint weight) internal {
-        require(voteValue <= type(uint128).max && weight <= type(uint128).max, "overflow");
-        epochVotes[epoch][stableIndex].push(Vote({
-            value: uint128(voteValue),
-            weight: uint128(weight)
-        }));
-    }
-
-    // NEW: Recompute target concentrations from votes
-    function _recomputeConcentrations(uint epoch) internal {
-        // Only recompute if there are votes for this epoch
-        if (epochTotalWeight[epoch] == 0) {
-            return; // Skip if no votes
+            voteSets[epoch][i].insert(_targets[i]);
+            voteWeights[epoch][i][_targets[i]] += voterWeight;
         }
+        
+        epochTotalWeight[epoch] += voterWeight;
+        _recomputeConcentrations(epoch);
+    }
+
+    function _recomputeConcentrations(uint epoch) internal {
+        if (epochTotalWeight[epoch] == 0) return;
+        
         for (uint i = 0; i < STABLES.length; i++) {
             uint newTarget = _computeWeightedMedian(epoch, i);
             targets[STABLES[i]] = newTarget;
             
-            uint alpha = 2e17; // Exponential moving average smoothing factor
-            currentConcentrations[STABLES[i]] = (newTarget * alpha + 
-            currentConcentrations[STABLES[i]] * (WAD - alpha)) / WAD;
+            uint alpha = 2e17;
+            currentConcentrations[STABLES[i]] = BasketLib.updateConcentrationEMA(
+                currentConcentrations[STABLES[i]],
+                newTarget,
+                alpha
+            );
         }
     }
 
-    // NEW: Compute weighted median with in-memory sorting
     function _computeWeightedMedian(uint epoch, uint stableIndex) internal view returns (uint) {
-        Vote[] storage votes = epochVotes[epoch][stableIndex];
+        uint[] memory sortedVotes = voteSets[epoch][stableIndex].getSortedSet();
         
-        if (votes.length == 0) {
+        if (sortedVotes.length == 0) {
             return WAD / STABLES.length; 
-        } // Default to equal distribution
-        
-        // Sort votes by value for median calculation
-        uint[] memory values = new uint[](votes.length);
-        uint[] memory weights = new uint[](votes.length);
-        
-        for (uint i = 0; i < votes.length; i++) {
-            values[i] = votes[i].value;
-            weights[i] = votes[i].weight;
-        }
-        
-        // Simple bubble sort for small arrays (acceptable for voting)
-        for (uint i = 0; i < values.length - 1; i++) {
-            for (uint j = 0; j < values.length - i - 1; j++) {
-                if (values[j] > values[j + 1]) {
-                    // Swap values
-                    uint tempVal = values[j];
-                    values[j] = values[j + 1];
-                    values[j + 1] = tempVal;
-                    // Swap weights
-                    uint tempWeight = weights[j];
-                    weights[j] = weights[j + 1];
-                    weights[j + 1] = tempWeight;
-                }
-            }
         }
         
         uint totalWeight = epochTotalWeight[epoch];
         uint halfWeight = totalWeight / 2;
         uint cumulativeWeight = 0;
         
-        for (uint i = 0; i < values.length; i++) {
-            cumulativeWeight += weights[i];
+        for (uint i = 0; i < sortedVotes.length; i++) {
+            uint voteValue = sortedVotes[i];
+            uint weight = voteWeights[epoch][stableIndex][voteValue];
+            cumulativeWeight += weight;
+            
             if (cumulativeWeight >= halfWeight) {
-                // Check if we're exactly at the midpoint
-                if (cumulativeWeight == halfWeight && i + 1 < values.length) {
-                    // Average of current and next value
-                    return (values[i] + values[i + 1]) / 2;
+                if (cumulativeWeight == halfWeight && i + 1 < sortedVotes.length) {
+                    return (voteValue + sortedVotes[i + 1]) / 2;
                 }
-                return values[i];
+                return voteValue;
             }
-        } 
-        return values[values.length - 1]; 
+        }
+        
+        return sortedVotes[sortedVotes.length - 1]; 
     }
 
-    // NEW: Sigmoid fee calculation
     function sigmoidFee(uint actual, 
         uint target, uint multiplier) public pure returns (uint fee18) {
-        // Manhattan distance approach for multi-dimensional optimization
-        // Calculate relative deviation
-        uint deviation;
-        if (actual > target) {
-            deviation = ((actual - target) * WAD) / target;
-        } else {
-            deviation = ((target - actual) * WAD) / target;
-        }
-        
-        // Sigmoid approximation: f(x) = x / (1 + |x|)
-        // Scale deviation for sensitivity
-        deviation = deviation / 2; // Divide by 2 instead of multiply by 0.5
-        
-        // Sigmoid: deviation / (WAD + deviation)
-        uint sigmoidOutput = (deviation * WAD) / (WAD + deviation);
-        
-        // Apply multiplier to get final fee
-        fee18 = (sigmoidOutput * multiplier) / WAD;
-        
-        // Cap maximum fee at 0.2% (20 basis points)
-        if (fee18 > 2e15) {
-            fee18 = 2e15;
-        }
+        return BasketLib.sigmoidFee(actual, target, multiplier);
     }
 
-    // NEW: Get rebalancing fee - adapted for L2
     function getFee(address token, 
         bool isMinting, uint amount) 
         public view returns (uint fee18) {
-        // L2 doesn't have perVault mapping, so calculate from balances
         uint tokenBalance;
         if (token == USDC) {
             tokenBalance = IERC4626(USDCvault).maxWithdraw(address(this)) * 1e12;
@@ -668,55 +568,20 @@ contract BasketL2 is ERC6909 { // Base
             tokenBalance = IERC20(token).balanceOf(address(this));
         }
         
-        if (tokenBalance == 0) {
-            return 0;
-        }
-        
         uint[9] memory deposits = get_deposits();
         uint totalValue = deposits[0];
         
-        // No fees when basket is empty
-        if (totalValue == 0) {
-            return 0;
-        }
-        
-        uint actual = (tokenBalance * WAD) / totalValue;
         uint target = currentConcentrations[token];
-        
-        // Ensure target is not zero - use equal weight as default
         if (target == 0) {
             target = WAD / STABLES.length;
         }
         
-        // For single asset basket (100% concentration), no fees
-        if (actual >= WAD * 99 / 100) { // If > 99% in one asset
-            return 0;
-        }
-        
-        // No fee if close to target (within 5%)
-        uint deviation = actual > target ? actual - target : target - actual;
-        
-        if (deviation < WAD / 20) {
-            return 0;
-        }
-        
-        // Very small base fee: 0.04% (4 basis points)
-        uint multiplier = 4e14;
-        
-        if (isMinting) {
-            // Only charge fee if depositing to overweight vault
-            if (actual > target) {
-                fee18 = sigmoidFee(actual, target, multiplier);
-                return fee18;
-            }
-            return 0;
-        } else {
-            // Only charge fee if withdrawing from underweight vault  
-            if (actual < target) {
-                fee18 = sigmoidFee(target, actual, multiplier);
-                return fee18;
-            }
-            return 0;
-        }
+        return BasketLib.calculateFee(
+            tokenBalance,
+            totalValue,
+            target,
+            isMinting,
+            4e14 // multiplier: 0.04% (4 basis points)
+        );
     }
 }

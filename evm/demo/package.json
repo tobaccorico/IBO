@@ -1,7 +1,7 @@
 {
-  "name": "truth-or-dare-markets",
+  "name": "all-weather",
   "version": "1.0.0",
-  "description": "Truth or Dare prediction markets on Ethereum",
+  "description": "",
   "main": "index.js",
   "scripts": {
     "start": "react-scripts start",
@@ -9,7 +9,9 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "deploy:contracts": "forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast",
-    "verify:contracts": "forge verify-contract --chain-id $CHAIN_ID"
+    "verify:contracts": "forge verify-contract --chain-id $CHAIN_ID",
+    "indexer": "node src/indexer/index.js",
+    "indexer:dev": "nodemon src/indexer/index.js"
   },
   "dependencies": {
     "@metamask/sdk": "^0.20.5",
@@ -18,14 +20,19 @@
     "process": "^0.11.10",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1"
+    "react-scripts": "5.0.1",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "socket.io": "^4.6.1",
+    "socket.io-client": "^4.6.1"
   },
   "devDependencies": {
     "@metamask/providers": "^22.1.0",
     "@types/node": "^20.0.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "nodemon": "^3.0.1"
   },
   "eslintConfig": {
     "extends": [

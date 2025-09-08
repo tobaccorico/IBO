@@ -141,6 +141,28 @@ impl Depositor {
         padded_ticker
     }
 
+    pub fn adjust_deposit_seconds(&mut self, amount_reduced: u64, current_time: i64) {
+        if self.deposited_usd_star > 0 && amount_reduced > 0 {
+            // Update time-weighted balance before adjustment
+            let time_delta = (current_time - self.last_updated) as u64;
+            self.deposit_seconds = self.deposit_seconds
+                .saturating_add((time_delta * self.deposited_usd_star) as u128);
+            
+            // Reduce deposit_seconds proportionally
+            // let reduction_ratio = amount_reduced.min(self.deposited_usd_star) as u128;
+            let remaining_ratio = self.deposited_usd_star.saturating_sub(amount_reduced) as u128;
+            
+            if self.deposited_usd_star > 0 {
+                self.deposit_seconds = self.deposit_seconds
+                    .checked_mul(remaining_ratio)
+                    .and_then(|v| v.checked_div(self.deposited_usd_star as u128))
+                    .unwrap_or(0);
+            }
+            
+            self.last_updated = current_time;
+        }
+    }
+
     // payments depend not only on time elapsed, but also on the value of debt at time of payment 
     // using a floating rate that is reflexive/adaptive with respect to inflow/outflow behavior...
     fn calculate_accrued_interest(principal: u64, time_elapsed: f32, interest_rate: f32) -> f64 {
@@ -222,7 +244,7 @@ impl Depositor {
                         pod.pledged -= delta; // сlip
                         pod.updated = current_time;
                         
-                        // Update utilization (position size decreased)
+                        // Update utilization (size decreased)
                         depository.utilisation(-(delta as i64));
                         // Don't record take profit, happens when 
                         // calling instruction (avoids double-count)
@@ -289,12 +311,12 @@ impl Depositor {
                             // it twice only because we don't append it
                             // in out.rs (accrued is interpreted as TP)
                             pod.pledged = 0; accrued_interest = exposure;
-                            // Note: record_take_profit happens in instruction handler
+                            // record_take_profit happens in lieb handler
                         } // otherwise, it's only a partial TP, just in 
                         // case the price will increase even more later
                         else { accrued_interest = delta - accrued_interest;
                             pod.pledged -= delta; delta = 0; // < no need to 
-                            // Note: record_take_profit happens in instruction handler
+                            // record_take_profit happens in lieb handler...
                         } 
                         pod.updated = current_time; // reduces total_deposits
                         depository.utilisation(-(-amount as i64 * price as i64));
@@ -465,39 +487,16 @@ impl Depositor {
                 } // maybe they know a big drop is ahead, and they want to minimise the
             } // chance they might be liquidated; either way we want to maximise control
         } else { return Err(PithyQuip::DepositFirst.into()); } 
-        Ok((0,0)) 
-    } 
-
-     pub fn adjust_deposit_seconds(&mut self, amount_reduced: u64, current_time: i64) {
-        if self.deposited_usd_star > 0 && amount_reduced > 0 {
-            // Update time-weighted balance before adjustment
-            let time_delta = (current_time - self.last_updated) as u64;
-            self.deposit_seconds = self.deposit_seconds
-                .saturating_add((time_delta * self.deposited_usd_star) as u128);
-            
-            // Reduce deposit_seconds proportionally
-            // let reduction_ratio = amount_reduced.min(self.deposited_usd_star) as u128;
-            let remaining_ratio = self.deposited_usd_star.saturating_sub(amount_reduced) as u128;
-            
-            if self.deposited_usd_star > 0 {
-                self.deposit_seconds = self.deposit_seconds
-                    .checked_mul(remaining_ratio)
-                    .and_then(|v| v.checked_div(self.deposited_usd_star as u128))
-                    .unwrap_or(0);
-            }
-            
-            self.last_updated = current_time;
-        }
-    }
-
-    /* This function handles collateral adjustments (adding or removing pledged dollars
-     * or deposited); safety-first: ensures collateralisation constraints are respected. */
+        Ok((0,0)) // the pill and the preacher who's gonna bless 
+    } // with it: sprezzatura, il dolce far niente...in separation 
+    // of subject from object, logic's final wisdom? constellation 
+    // got a twist in it...a few stars about make it feel like peace
     pub fn renege(&mut self, ticker: Option<&str>, mut amount: i64, 
         prices: Option<&Vec<u64>>, current_time: i64) -> Result<i64> { // pod: подушка
         if ticker.is_none() && amount < 0 { // removing collateral from every position
-            // First, we must sort positions by descending amount (without reallocating)
+            // first, we must sort positions by descending amount (without reallocating)
             self.balances.sort_by(|a, b| b.pledged.cmp(&a.pledged));
-            // Bigger they come, harder they fall
+            // bigger they come, harder they fall and all
             let mut deducting: u64 = amount.abs() as u64;
             for i in 0..self.balances.len() {
                 if deducting == 0 { break; } 

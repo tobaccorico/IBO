@@ -10,6 +10,7 @@ declare_id!("QgV3iN5rSkBU8jaZy8AszQt5eoYwKLmBgXEK5cehAKX"); // < devnet
 pub mod quid {
     use super::*;
     
+     // "маєш гострі ікла? дієш за інстинктом: не смій чинити спротив, це вхиідний стан"
     pub fn deposit(ctx: Context<Deposit>, amount: u64, ticker: String) -> Result<()> {
         handle_in(ctx, amount, ticker)
     } 
@@ -22,7 +23,10 @@ pub mod quid {
     } // this sort of cross-margining is also re-used in the liquidation process (means of protection)...
     // as such, need to pass in all Pyth keys into liquidate (first one should be the one to liquidate)
 
+    // "гальмуя процес...втратиш не усе...прийшов до тебе мій темний десант"
     pub fn liquidate(ctx: Context<Liquidate>, ticker: String) -> Result<()> { 
-        amortise(ctx, ticker) 
-    }
+        amortise(ctx, ticker) // сможешь страшный лик узреть?
+        // "Offer me that deathless death...stay with me,
+        // まだ忘れず 大事にしていた...同じメロディ 繰り返していた
+    } // teardrop on the fire, shakes me, makes me lighter"
 }

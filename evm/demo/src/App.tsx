@@ -1,19 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import {
-  FACTORY_ABI,
-  DOPPLER404_ABI,
-  SETTLEMENT_ABI,
-  BASKET_ABI,
-  AUX_ABI,
-} from './contracts/abis';
-import { 
-  FACTORY_ADDRESS, 
-  SETTLEMENT_ADDRESS,
-  BASKET_ADDRESS,
-  AUX_ADDRESS,
-} from './contracts/addresses';
-
 import { MetaMaskInpageProvider } from "@metamask/providers";
 
 declare global {
@@ -21,58 +7,78 @@ declare global {
     ethereum?: MetaMaskInpageProvider;
   }
 }
+// You'll need to update these with deployed addresses
+const ROUTER_ADDRESS = "0x7bAe2554ED287380941B1706DC8cFf665137ca58"; // Update after deploy
+const AUX_ADDRESS = "0x2Ce5CfbA940b8e8791864307413bA1334BBd0CD1"; // Update after deploy
 
-interface Market {
-  address: string;
-  question: string;
-  resolutionTime: number;
-  totalYesShares: number;
-  totalNoShares: number;
-  weightedYesShares: number;
-  weightedNoShares: number;
-  currentEpoch: number;
-  currentPrice: number;
-  timeUntilNextEpoch: number;
-  isResolved: boolean;
-  outcome: boolean;
-}
+// Minimal ABIs
+const ROUTER_ABI = [
+  "function depositS(uint256 amount) payable",
+  "function withdraw(uint256 amount) payable",
+  "function fetch(address beneficiary) view returns (tuple(uint256 fees_S, uint256 fees_usd, uint128 liq), uint256, uint160)",
+  "function getPrice(uint160 sqrtRatioX96) view returns (uint256)",
+  "function wS() view returns (address)",
+  "function USDC() view returns (address)",
+  "function repackNFT() returns (uint160)"
+];
 
-interface UserPosition {
-  yesShares: number;
-  noShares: number;
-  deposited: number;
-  avgConfidence: number;
-  hasClaimed: boolean;
-}
+const AUX_ABI = [
+  "function leverZeroForOne(uint256 amount) payable",
+  "function leverOneForZero(uint256 amount) payable",
+  "event LeveragedPositionOpened(address indexed user, bool indexed isLong, uint256 supplied, uint256 borrowed, uint256 buffer, int256 entryPrice, uint256 breakeven, uint256 blockNumber)",
+  "event PositionUnwound(address indexed user, bool indexed isLong, int256 exitPrice, int256 priceDelta, uint256 blockNumber)"
+];
+
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)"
+];
+
+const WETH_ABI = [
+  ...ERC20_ABI,
+  "function deposit() payable",
+  "function withdraw(uint256 amount)"
+];
 
 function App() {
+  
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
-  const [signer, setSigner] = useState<ethers.Signer | null>(null);
+  const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
   const [account, setAccount] = useState<string>('');
-  const [markets, setMarkets] = useState<Market[]>([]);
-  const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
-  const [betAmount, setBetAmount] = useState<string>('');
-  const [confidence, setConfidence] = useState<string>('50');
-  const [activeTab, setActiveTab] = useState<'markets' | 'create' | 'settle'>('markets');
-  const [newMarketQuestion, setNewMarketQuestion] = useState<string>('');
-  const [newMarketDuration, setNewMarketDuration] = useState<string>('7');
-  const [newMarketEpochLength, setNewMarketEpochLength] = useState<string>('1');
-  const [userPosition, setUserPosition] = useState<UserPosition | null>(null);
-  const [quidBalance, setQuidBalance] = useState<string>('0');
+  const [chainId, setChainId] = useState<number>(0);
+  
+  // Contracts 
+  const [routerContract, setRouterContract] = useState<ethers.Contract | null>(null);
+  const [auxContract, setAuxContract] = useState<ethers.Contract | null>(null);
+  const [wSContract, setWSContract] = useState<ethers.Contract | null>(null);
+  const [usdcContract, setUsdcContract] = useState<ethers.Contract | null>(null);
+  
+  // Balances
+  const [ethBalance, setEthBalance] = useState<string>('0');
+  const [wSBalance, setWSBalance] = useState<string>('0');
+  const [usdcBalance, setUsdcBalance] = useState<string>('0');
+  const [depositInfo, setDepositInfo] = useState<any>(null);
+  
+  // UI State
   const [loading, setLoading] = useState<boolean>(false);
   const [txStatus, setTxStatus] = useState<string>('');
-  const [currentEpochBatch, setCurrentEpochBatch] = useState<number>(0);
-
-  // Contract instances
-  const [factoryContract, setFactoryContract] = useState<ethers.Contract | null>(null);
-  const [settlementContract, setSettlementContract] = useState<ethers.Contract | null>(null);
-  const [basketContract, setBasketContract] = useState<ethers.Contract | null>(null);
-  const [auxContract, setAuxContract] = useState<ethers.Contract | null>(null);
+  const [activeTab, setActiveTab] = useState<string>('deposit');
+  
+  // Form values
+  const [depositAmount, setDepositAmount] = useState<string>('');
+  const [withdrawPercent, setWithdrawPercent] = useState<string>('100');
+  const [leverageAmount, setLeverageAmount] = useState<string>('');
+  const [leverageType, setLeverageType] = useState<string>('long');
+  
+  // Leverage positions
+  const [positions, setPositions] = useState<any[]>([]);
 
   // Connect wallet
   const connectWallet = async () => {
     try {
-      if (typeof window.ethereum === 'undefined') {
+      if (!window.ethereum) {
         alert('Please install MetaMask!');
         return;
       }
@@ -81,704 +87,478 @@ function App() {
       await provider.send("eth_requestAccounts", []);
       const signer = await provider.getSigner();
       const address = await signer.getAddress();
+      const network = await provider.getNetwork();
 
       setProvider(provider);
       setSigner(signer);
       setAccount(address);
+      setChainId(Number(network.chainId));
 
       // Initialize contracts
-      const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
-      const settlement = new ethers.Contract(SETTLEMENT_ADDRESS, SETTLEMENT_ABI, signer);
-      const basket = new ethers.Contract(BASKET_ADDRESS, BASKET_ABI, signer);
+      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
       const aux = new ethers.Contract(AUX_ADDRESS, AUX_ABI, signer);
-
-      setFactoryContract(factory);
-      setSettlementContract(settlement);
-      setBasketContract(basket);
+      
+      setRouterContract(router);
       setAuxContract(aux);
-
-      // Get 6909 balance
-      const balance = await basket.balanceOf(address, ethers.toBigInt(BASKET_ADDRESS));
-      setQuidBalance(ethers.formatEther(balance));
-
+      
+      // Get token addresses and initialize token contracts
+      const wSAddress = await router.wS();
+      const usdcAddress = await router.USDC();
+      
+      const wS = new ethers.Contract(wSAddress, WETH_ABI, signer);
+      const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, signer);
+      
+      setWSContract(wS);
+      setUsdcContract(usdc);
+      
+      // Load balances
+      await loadBalances(address, provider, wS, usdc, router);
+      
+      // Listen for position events
+      setupEventListeners(aux);
+      
     } catch (error) {
       console.error('Connection error:', error);
-      alert('Failed to connect wallet');
+      setTxStatus('Failed to connect wallet');
     }
   };
 
-  // Load markets
-  const loadMarkets = async () => {
-    if (!factoryContract) return;
+  const loadBalances = async (
+    address: string,
+    provider: ethers.BrowserProvider,
+    wS: ethers.Contract,
+    usdc: ethers.Contract,
+    router: ethers.Contract
+  ) => {
+    try {
+      // ETH balance
+      const ethBal = await provider.getBalance(address);
+      setEthBalance(ethers.formatEther(ethBal));
+      
+      // wS balance
+      const wSBal = await wS.balanceOf(address);
+      setWSBalance(ethers.formatEther(wSBal));
+      
+      // USDC balance
+      const usdcBal = await usdc.balanceOf(address);
+      setUsdcBalance(ethers.formatUnits(usdcBal, 6));
+      
+      // Deposit info
+      const [deposit, price, sqrtPrice] = await router.fetch(address);
+      if (deposit.liq > 0) {
+        setDepositInfo({
+          liquidity: deposit.liq.toString(),
+          feesS: ethers.formatEther(deposit.fees_S),
+          feesUsd: ethers.formatUnits(deposit.fees_usd, 18),
+          price: ethers.formatUnits(price, 18)
+        });
+      }
+    } catch (error) {
+      console.error('Error loading balances:', error);
+    }
+};
+
+  const setupEventListeners = (aux: ethers.Contract) => {
+    // Listen for leverage positions
+    aux.on('LeveragedPositionOpened', (user, isLong, supplied, borrowed, buffer, entryPrice, breakeven, blockNumber) => {
+      if (user.toLowerCase() === account.toLowerCase()) {
+        const position = {
+          isLong,
+          supplied: ethers.formatEther(supplied),
+          borrowed: ethers.formatEther(borrowed),
+          entryPrice: ethers.formatUnits(entryPrice, 18),
+          breakeven: ethers.formatUnits(breakeven, 18),
+          block: blockNumber.toString()
+        };
+        setPositions(prev => [...prev, position]);
+        setTxStatus(`${isLong ? 'Long' : 'Short'} position opened at $${position.entryPrice}`);
+      }
+    });
+    
+    aux.on('PositionUnwound', (user, isLong, exitPrice, priceDelta, blockNumber) => {
+      if (user.toLowerCase() === account.toLowerCase()) {
+        setTxStatus(`Position unwound at $${ethers.formatUnits(exitPrice, 18)} (${Number(priceDelta) / 10}% change)`);
+        // Remove position from list
+        setPositions(prev => prev.filter(p => p.isLong !== isLong));
+      }
+    });
+  };
+
+  // Deposit ETH to Router
+  const handleDeposit = async () => {
+    if (!routerContract || !provider || !wSContract || !usdcContract) {
+      setTxStatus('Please connect wallet first');
+      return;
+    }
+    
+    if (!depositAmount || parseFloat(depositAmount) <= 0) {
+      setTxStatus('Please enter a valid amount');
+      return;
+    }
     
     setLoading(true);
+    setTxStatus('Depositing ETH...');
+    
     try {
-      // Get all markets from factory
-      const marketCount = await factoryContract.getMarketCount();
-      const marketPromises = [];
+      const amount = ethers.parseEther(depositAmount);
+      const tx = await routerContract.depositS(0, { value: amount });
       
-      for (let i = 0; i < marketCount; i++) {
-        marketPromises.push(factoryContract.getMarket(i));
-      }
+      setTxStatus('Transaction submitted...');
+      await tx.wait();
       
-      const marketAddresses = await Promise.all(marketPromises);
+      setTxStatus('Deposit successful!');
+      setDepositAmount('');
+      await loadBalances(account, provider, wSContract, usdcContract, routerContract);
       
-      // Get detailed info for each market
-      const marketInfoPromises = marketAddresses.map(async (address: string) => {
-        try {
-          const marketContract = new ethers.Contract(address, DOPPLER404_ABI, signer);
-          const info = await marketContract.getMarketInfo();
-          const epochInfo = await marketContract.getCurrentEpochInfo();
-          const marketData = await marketContract.market();
-          
-          return {
-            address,
-            question: info.question,
-            resolutionTime: Number(info.resolutionTime),
-            totalYesShares: Number(ethers.formatEther(info.totalYes)),
-            totalNoShares: Number(ethers.formatEther(info.totalNo)),
-            weightedYesShares: Number(ethers.formatEther(info.weightedYes)),
-            weightedNoShares: Number(ethers.formatEther(info.weightedNo)),
-            currentEpoch: Number(epochInfo.epochId),
-            currentPrice: Number(ethers.formatEther(epochInfo.currentPrice)),
-            timeUntilNextEpoch: Number(epochInfo.timeUntilNext),
-            isResolved: marketData.resolved,
-            outcome: marketData.binaryOutcome
-          };
-        } catch (err) {
-          console.error(`Error loading market ${address}:`, err);
-          return null;
+    } catch (error: any) {
+      console.error('Deposit error:', error);
+      setTxStatus(`Error: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Complete handleWithdraw function
+  const handleWithdraw = async () => {
+    if (!routerContract || !provider || !wSContract || !usdcContract) {
+      setTxStatus('Please connect wallet first');
+      return;
+    }
+    
+    if (!withdrawPercent || !depositInfo) {
+      setTxStatus('No deposit to withdraw');
+      return;
+    }
+    
+    setLoading(true);
+    setTxStatus('Withdrawing...');
+    
+    try {
+      const percent = parseInt(withdrawPercent) * 10; // Contract expects per-mille (0-1000)
+      const tx = await routerContract.withdraw(percent);
+      
+      setTxStatus('Transaction submitted...');
+      await tx.wait();
+      
+      setTxStatus('Withdrawal successful!');
+      await loadBalances(account, provider, wSContract, usdcContract, routerContract);
+      
+    } catch (error: any) {
+      console.error('Withdraw error:', error);
+      setTxStatus(`Error: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Complete handleLeverage function
+  const handleLeverage = async () => {
+    if (!auxContract || !wSContract || !usdcContract || !provider || !routerContract) {
+      setTxStatus('Please connect wallet first');
+      return;
+    }
+    
+    if (!leverageAmount || parseFloat(leverageAmount) <= 0) {
+      setTxStatus('Please enter a valid amount');
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      if (leverageType === 'long') {
+        // Long position (leverZeroForOne) - deposit wS
+        setTxStatus('Opening long position...');
+        const amount = ethers.parseEther(leverageAmount);
+        
+        // Check wS allowance
+        const allowance = await wSContract.allowance(account, AUX_ADDRESS);
+        if (allowance < amount) {
+          setTxStatus('Approving wS...');
+          const approveTx = await wSContract.approve(AUX_ADDRESS, ethers.MaxUint256);
+          await approveTx.wait();
         }
-      });
-      
-      const marketInfos = await Promise.all(marketInfoPromises);
-      setMarkets(marketInfos.filter(m => m !== null) as Market[]);
-    } catch (error) {
-      console.error('Error loading markets:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Load user position for selected market
-  const loadUserPosition = async (marketAddress: string) => {
-    if (!signer || !account) return;
-    
-    try {
-      const marketContract = new ethers.Contract(marketAddress, DOPPLER404_ABI, signer);
-      const position = await marketContract.getPosition(account);
-      
-      setUserPosition({
-        yesShares: Number(ethers.formatEther(position.yesShares)),
-        noShares: Number(ethers.formatEther(position.noShares)),
-        deposited: Number(ethers.formatEther(position.deposited)),
-        avgConfidence: Number(position.avgConfidence),
-        hasClaimed: position.hasClaimed
-      });
-    } catch (error) {
-      console.error('Error loading user position:', error);
-    }
-  };
-
-  // Create new market
-  const createMarket = async () => {
-    if (!factoryContract || !newMarketQuestion) return;
-    
-    setLoading(true);
-    setTxStatus('Creating market...');
-    
-    try {
-      const durationDays = parseInt(newMarketDuration);
-      const epochHours = parseInt(newMarketEpochLength);
-      
-      const tx = await factoryContract.deployMarket(
-        newMarketQuestion,
-        Math.floor(Date.now() / 1000) + (durationDays * 86400), // Resolution time
-        false, // Binary market (not scalar)
-        `DARE${Date.now()}`, // Name
-        `D${Date.now()}`, // Symbol
-        epochHours * 3600 // Epoch length in seconds
-      );
-      
-      setTxStatus('⏳ Transaction pending...');
-      const receipt = await tx.wait();
-      
-      setTxStatus('✅ Market created successfully!');
-      setNewMarketQuestion('');
-      setNewMarketDuration('7');
-      setNewMarketEpochLength('1');
-      
-      // Reload markets
-      await loadMarkets();
-      setActiveTab('markets');
-    } catch (error) {
-      console.error('Error creating market:', error);
-      setTxStatus('❌ Failed to create market');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Place bet (queue bid)
-  const placeBet = async (isYes: boolean) => {
-    if (!selectedMarket || !betAmount || !signer || !basketContract || !auxContract) return;
-    
-    setLoading(true);
-    setTxStatus(`Placing ${isYes ? 'YES' : 'NO'} bet with ${confidence}% confidence...`);
-    
-    try {
-      const marketContract = new ethers.Contract(selectedMarket.address, DOPPLER404_ABI, signer);
-      
-      // First, convert ETH to 6909 tokens
-      if (parseFloat(betAmount) > 0) {
-        // Check if betting with ETH
-        const ethAmount = ethers.parseEther(betAmount);
         
-        // Deposit ETH to Aux, get USD, then deposit to Basket for 6909
-        setTxStatus('Converting ETH to 6909 tokens...');
+        const tx = await auxContract.leverZeroForOne(amount);
+        setTxStatus('Transaction submitted...');
+        await tx.wait();
         
-        // 1. Send ETH to Aux
-        const auxTx = await auxContract.swap(
-          ethers.ZeroAddress, // from ETH
-          false, // not for one (getting USD)
-          0, // amount (0 means use msg.value)
-          { value: ethAmount }
-        );
-        await auxTx.wait();
+      } else {
+        // Short position (leverOneForZero) - deposit USDC
+        setTxStatus('Opening short position...');
+        const amount = ethers.parseUnits(leverageAmount, 6);
         
-        // 2. The USD goes to Basket automatically, now we have 6909 tokens
-      }
-      
-      // Get current 6909 balance
-      const balance6909 = await basketContract.balanceOf(account, ethers.toBigInt(BASKET_ADDRESS));
-      
-      // Approve market to spend 6909 tokens
-      setTxStatus('Approving 6909 spending...');
-      const approveTx = await basketContract.setApprovalForAll(selectedMarket.address, true);
-      await approveTx.wait();
-      
-      // Queue bid with confidence
-      setTxStatus('Queueing bid...');
-      const bidAmount = ethers.parseEther(betAmount); // Amount in 6909
-      const tx = await marketContract.queueBid(
-        bidAmount,
-        isYes,
-        parseInt(confidence)
-      );
-      
-      setTxStatus('⏳ Transaction pending...');
-      await tx.wait();
-      
-      // Check if we should process the batch
-      const epochInfo = await marketContract.getCurrentEpochInfo();
-      if (epochInfo.epochId > currentEpochBatch && !epochInfo.processed) {
-        setTxStatus('Processing batch...');
-        try {
-          const processTx = await marketContract.processBatch(currentEpochBatch);
-          await processTx.wait();
-          setCurrentEpochBatch(Number(epochInfo.epochId));
-        } catch (err) {
-          console.log('Batch processing not ready yet');
+        // Check USDC allowance
+        const allowance = await usdcContract.allowance(account, AUX_ADDRESS);
+        if (allowance < amount) {
+          setTxStatus('Approving USDC...');
+          const approveTx = await usdcContract.approve(AUX_ADDRESS, ethers.MaxUint256);
+          await approveTx.wait();
         }
+        
+        const tx = await auxContract.leverOneForZero(amount);
+        setTxStatus('Transaction submitted...');
+        await tx.wait();
       }
       
-      setTxStatus(`✅ ${isYes ? 'YES' : 'NO'} bet placed with ${confidence}% confidence!`);
-      setBetAmount('');
-      setConfidence('50');
+      setTxStatus(`${leverageType === 'long' ? 'Long' : 'Short'} position opened!`);
+      setLeverageAmount('');
+      await loadBalances(account, provider, wSContract, usdcContract, routerContract);
       
-      // Reload market data and user position
-      await loadMarkets();
-      await loadUserPosition(selectedMarket.address);
-    } catch (error) {
-      console.error('Error placing bet:', error);
-      setTxStatus('❌ Failed to place bet');
+    } catch (error: any) {
+      console.error('Leverage error:', error);
+      setTxStatus(`Error: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Propose settlement
-  const proposeSettlement = async (outcome: boolean) => {
-    if (!selectedMarket || !settlementContract || !basketContract) return;
-    
-    setLoading(true);
-    setTxStatus(`Proposing ${outcome ? 'YES' : 'NO'} outcome...`);
-    
-    try {
-      // First approve 6909 spending
-      const stakeAmount = ethers.parseEther('100'); // 100 QUID stake
-      const basketId = ethers.toBigInt(BASKET_ADDRESS);
-      
-      setTxStatus('Approving 6909 spending...');
-      const approveTx = await basketContract.setApprovalForAll(SETTLEMENT_ADDRESS, true);
-      await approveTx.wait();
-      
-      // Propose settlement
-      const tx = await settlementContract.proposeSettlement(
-        selectedMarket.address,
-        outcome,
-        stakeAmount
-      );
-      
-      setTxStatus('⏳ Transaction pending...');
-      await tx.wait();
-      
-      setTxStatus('✅ Settlement proposed successfully!');
-      
-      // Reload market data
-      await loadMarkets();
-    } catch (error) {
-      console.error('Error proposing settlement:', error);
-      setTxStatus('❌ Failed to propose settlement');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Claim winnings
-  const claimWinnings = async () => {
-    if (!selectedMarket || !signer) return;
-    
-    setLoading(true);
-    setTxStatus('Claiming winnings...');
-    
-    try {
-      const marketContract = new ethers.Contract(selectedMarket.address, DOPPLER404_ABI, signer);
-      const tx = await marketContract.claimWinnings();
-      
-      setTxStatus('⏳ Transaction pending...');
-      await tx.wait();
-      
-      setTxStatus('✅ Winnings claimed successfully!');
-      
-      // Reload user position
-      await loadUserPosition(selectedMarket.address);
-    } catch (error) {
-      console.error('Error claiming winnings:', error);
-      setTxStatus('❌ Failed to claim winnings');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Auto-refresh markets
+  // Refresh balances periodically
   useEffect(() => {
-    if (factoryContract) {
-      loadMarkets();
-      const interval = setInterval(loadMarkets, 30000); // Refresh every 30 seconds
-      return () => clearInterval(interval);
-    }
-  }, [factoryContract]);
-
-  // Load user position when market is selected
-  useEffect(() => {
-    if (selectedMarket && account) {
-      loadUserPosition(selectedMarket.address);
-    }
-  }, [selectedMarket, account]);
-
-  // Format time
-  const formatTime = (seconds: number) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
-  };
-
-  // Calculate implied probability
-  const getImpliedProbability = (market: Market) => {
-    const total = market.weightedYesShares + market.weightedNoShares;
-    if (total === 0) return 50;
-    return (market.weightedYesShares / total) * 100;
-  };
+  if (account && provider && wSContract && usdcContract && routerContract) {
+    const interval = setInterval(() => {
+      loadBalances(account, provider, wSContract, usdcContract, routerContract);
+    }, 10000); // Every 10 seconds
+    
+    return () => clearInterval(interval);
+  }
+}, [account, provider, wSContract, usdcContract, routerContract]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 text-white">
       {/* Header */}
-      <header className="bg-black/30 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center">
-            <h1 className="text-3xl font-bold text-white">
-              🎭 Truth or Dare Markets (Belgian Auction)
-            </h1>
+      <header className="border-b border-gray-800 bg-black/50 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+            Sonic Leverage Trading
+          </h1>
+          
+          {account ? (
             <div className="flex items-center gap-4">
-              {account && (
-                <div className="text-white/80 text-sm">
-                  💰 {parseFloat(quidBalance).toFixed(2)} QUID (6909)
-                </div>
-              )}
-              <button
-                onClick={connectWallet}
-                className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-2 rounded-lg font-semibold hover:opacity-90 transition"
-              >
-                {account ? `${account.slice(0, 6)}...${account.slice(-4)}` : 'Connect Wallet'}
-              </button>
+              <div className="text-sm">
+                <div>ETH: {parseFloat(ethBalance).toFixed(4)}</div>
+                <div>wS: {parseFloat(wSBalance).toFixed(4)}</div>
+                <div>USDC: {parseFloat(usdcBalance).toFixed(2)}</div>
+              </div>
+              <div className="bg-gray-800 px-4 py-2 rounded-lg font-mono text-sm">
+                {account.slice(0, 6)}...{account.slice(-4)}
+              </div>
             </div>
-          </div>
+          ) : (
+            <button 
+              onClick={connectWallet}
+              className="bg-gradient-to-r from-blue-500 to-purple-600 px-6 py-2 rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 transition-all"
+            >
+              Connect Wallet
+            </button>
+          )}
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <div className="max-w-7xl mx-auto px-4 mt-6">
-        <div className="flex space-x-1 bg-black/20 backdrop-blur-md p-1 rounded-lg">
-          <button
-            onClick={() => setActiveTab('markets')}
-            className={`flex-1 py-2 px-4 rounded-md font-semibold transition ${
-              activeTab === 'markets'
-                ? 'bg-white text-purple-900'
-                : 'text-white/70 hover:text-white'
-            }`}
-          >
-            📊 Active Markets
-          </button>
-          <button
-            onClick={() => setActiveTab('create')}
-            className={`flex-1 py-2 px-4 rounded-md font-semibold transition ${
-              activeTab === 'create'
-                ? 'bg-white text-purple-900'
-                : 'text-white/70 hover:text-white'
-            }`}
-          >
-            ✨ Create Market
-          </button>
-          <button
-            onClick={() => setActiveTab('settle')}
-            className={`flex-1 py-2 px-4 rounded-md font-semibold transition ${
-              activeTab === 'settle'
-                ? 'bg-white text-purple-900'
-                : 'text-white/70 hover:text-white'
-            }`}
-          >
-            ⚖️ Settlement
-          </button>
+      {/* Navigation */}
+      <nav className="border-b border-gray-800 bg-black/30">
+        <div className="max-w-7xl mx-auto px-4 flex gap-1">
+          {['deposit', 'withdraw', 'leverage', 'positions'].map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-6 py-3 capitalize transition-all ${
+                activeTab === tab 
+                  ? 'text-white border-b-2 border-purple-500' 
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
         </div>
-      </div>
-
-      {/* Status Message */}
-      {txStatus && (
-        <div className="max-w-7xl mx-auto px-4 mt-4">
-          <div className="bg-black/30 backdrop-blur-md rounded-lg p-3 text-white">
-            {txStatus}
-          </div>
-        </div>
-      )}
+      </nav>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 mt-6 pb-12">
-        {/* Markets Tab */}
-        {activeTab === 'markets' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Markets List */}
-            <div className="lg:col-span-2 space-y-4">
-              <h2 className="text-2xl font-bold text-white mb-4">Active Markets</h2>
-              {loading ? (
-                <div className="text-white/60 text-center py-8">Loading markets...</div>
-              ) : markets.length === 0 ? (
-                <div className="bg-black/30 backdrop-blur-md rounded-lg p-8 text-center">
-                  <p className="text-white/60">No active markets yet.</p>
-                  <button
-                    onClick={() => setActiveTab('create')}
-                    className="mt-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-2 rounded-lg font-semibold"
-                  >
-                    Create First Market
-                  </button>
-                </div>
-              ) : (
-                markets.map((market) => (
-                  <div
-                    key={market.address}
-                    onClick={() => setSelectedMarket(market)}
-                    className={`bg-black/30 backdrop-blur-md rounded-lg p-6 cursor-pointer transition hover:bg-black/40 ${
-                      selectedMarket?.address === market.address ? 'ring-2 ring-purple-500' : ''
-                    }`}
-                  >
-                    <div className="flex justify-between items-start mb-4">
-                      <h3 className="text-lg font-semibold text-white flex-1">
-                        {market.question}
-                      </h3>
-                      {market.isResolved ? (
-                        <span className="bg-green-500/20 text-green-400 px-3 py-1 rounded-full text-sm">
-                          Resolved: {market.outcome ? 'YES' : 'NO'}
-                        </span>
-                      ) : (
-                        <span className="text-white/60 text-sm">
-                          Epoch {market.currentEpoch} • {formatTime(market.timeUntilNextEpoch)}
-                        </span>
-                      )}
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      <div className="bg-green-500/10 rounded-lg p-3">
-                        <div className="text-green-400 text-sm">YES</div>
-                        <div className="text-white font-semibold">
-                          {getImpliedProbability(market).toFixed(1)}%
-                        </div>
-                        <div className="text-white/60 text-xs">
-                          {market.totalYesShares.toFixed(2)} shares
-                        </div>
-                      </div>
-                      <div className="bg-red-500/10 rounded-lg p-3">
-                        <div className="text-red-400 text-sm">NO</div>
-                        <div className="text-white font-semibold">
-                          {(100 - getImpliedProbability(market)).toFixed(1)}%
-                        </div>
-                        <div className="text-white/60 text-xs">
-                          {market.totalNoShares.toFixed(2)} shares
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex justify-between text-white/60 text-sm">
-                      <span>💵 Current Price: ${market.currentPrice.toFixed(4)}</span>
-                      <span>⏰ Resolution: {new Date(market.resolutionTime * 1000).toLocaleDateString()}</span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Selected Market Details */}
-            <div className="space-y-4">
-              {selectedMarket ? (
-                <>
-                  <div className="bg-black/30 backdrop-blur-md rounded-lg p-6">
-                    <h3 className="text-xl font-bold text-white mb-4">Place Prediction</h3>
-                    
-                    {userPosition && (
-                      <div className="mb-4 p-3 bg-white/5 rounded-lg">
-                        <div className="text-white/60 text-sm mb-1">Your Position</div>
-                        <div className="grid grid-cols-2 gap-2 text-white text-sm">
-                          <div>YES: {userPosition.yesShares.toFixed(2)}</div>
-                          <div>NO: {userPosition.noShares.toFixed(2)}</div>
-                          <div>Deposited: ${userPosition.deposited.toFixed(2)}</div>
-                          <div>Avg Conf: {userPosition.avgConfidence}%</div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="space-y-3">
-                      <input
-                        type="number"
-                        placeholder="ETH amount"
-                        value={betAmount}
-                        onChange={(e) => setBetAmount(e.target.value)}
-                        className="w-full px-4 py-2 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
-                        step="0.01"
-                      />
-                      
-                      <div>
-                        <label className="text-white/60 text-sm">Confidence Level: {confidence}%</label>
-                        <input
-                          type="range"
-                          min="1"
-                          max="100"
-                          value={confidence}
-                          onChange={(e) => setConfidence(e.target.value)}
-                          className="w-full mt-1"
-                        />
-                        <div className="text-white/40 text-xs mt-1">
-                          Higher confidence = more shares but higher risk
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3 mt-4">
-                      <button
-                        onClick={() => placeBet(true)}
-                        disabled={loading || !betAmount || selectedMarket.isResolved}
-                        className="bg-green-500 text-white py-2 rounded-lg font-semibold hover:bg-green-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Bet YES
-                      </button>
-                      <button
-                        onClick={() => placeBet(false)}
-                        disabled={loading || !betAmount || selectedMarket.isResolved}
-                        className="bg-red-500 text-white py-2 rounded-lg font-semibold hover:bg-red-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Bet NO
-                      </button>
-                    </div>
-                    
-                    {selectedMarket.isResolved && userPosition && !userPosition.hasClaimed && 
-                     (userPosition.yesShares > 0 || userPosition.noShares > 0) && (
-                      <button
-                        onClick={claimWinnings}
-                        disabled={loading}
-                        className="w-full mt-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white py-2 rounded-lg font-semibold hover:opacity-90 transition disabled:opacity-50"
-                      >
-                        🎉 Claim Winnings
-                      </button>
-                    )}
-                  </div>
-                  
-                  <div className="bg-black/30 backdrop-blur-md rounded-lg p-6">
-                    <h3 className="text-lg font-bold text-white mb-3">Belgian Auction Info</h3>
-                    <div className="space-y-2 text-white/80 text-sm">
-                      <div className="flex justify-between">
-                        <span>Current Epoch:</span>
-                        <span>#{selectedMarket.currentEpoch}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Epoch Price:</span>
-                        <span>${selectedMarket.currentPrice.toFixed(4)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Next Epoch:</span>
-                        <span>{formatTime(selectedMarket.timeUntilNextEpoch)}</span>
-                      </div>
-                      <div className="text-white/60 text-xs mt-2">
-                        ⬆️ Prices increase over time (Belgian auction)
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="bg-black/30 backdrop-blur-md rounded-lg p-6 text-center text-white/60">
-                  Select a market to place bets
-                </div>
-              )}
-            </div>
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        {/* Status Message */}
+        {txStatus && (
+          <div className="mb-4 p-3 bg-black/50 backdrop-blur-md rounded-lg border border-gray-800">
+            {txStatus}
           </div>
         )}
 
-        {/* Create Market Tab */}
-        {activeTab === 'create' && (
-          <div className="max-w-2xl mx-auto">
-            <div className="bg-black/30 backdrop-blur-md rounded-lg p-8">
-              <h2 className="text-2xl font-bold text-white mb-6">Create New Market</h2>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-white/80 text-sm mb-2">
-                    Question / Dare Challenge
-                  </label>
-                  <textarea
-                    value={newMarketQuestion}
-                    onChange={(e) => setNewMarketQuestion(e.target.value)}
-                    placeholder="Will someone complete the ice bucket challenge by Friday?"
-                    className="w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none resize-none"
-                    rows={3}
-                  />
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-white/80 text-sm mb-2">
-                      Duration (days)
-                    </label>
-                    <input
-                      type="number"
-                      value={newMarketDuration}
-                      onChange={(e) => setNewMarketDuration(e.target.value)}
-                      min="1"
-                      max="30"
-                      className="w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-white/80 text-sm mb-2">
-                      Epoch Length (hours)
-                    </label>
-                    <input
-                      type="number"
-                      value={newMarketEpochLength}
-                      onChange={(e) => setNewMarketEpochLength(e.target.value)}
-                      min="1"
-                      max="24"
-                      className="w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 focus:outline-none"
-                    />
-                  </div>
-                </div>
-                
-                <div className="text-white/60 text-sm">
-                  • Market will be open for {newMarketDuration} days<br/>
-                  • Prices will increase every {newMarketEpochLength} hour(s) (Belgian auction)<br/>
-                  • Early participants get better prices
-                </div>
-                
-                <button
-                  onClick={createMarket}
-                  disabled={loading || !newMarketQuestion || !account}
-                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 rounded-lg font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? 'Creating...' : '🚀 Create Market'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Settlement Tab */}
-        {activeTab === 'settle' && (
-          <div className="max-w-4xl mx-auto">
-            <h2 className="text-2xl font-bold text-white mb-6">Market Settlement</h2>
+        {/* Deposit Tab */}
+        {activeTab === 'deposit' && (
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6 border border-gray-800">
+            <h2 className="text-xl font-bold mb-4">Deposit ETH to Liquidity Pool</h2>
             
             <div className="space-y-4">
-              {markets.filter(m => !m.isResolved && new Date(m.resolutionTime * 1000) < new Date()).length === 0 ? (
-                <div className="bg-black/30 backdrop-blur-md rounded-lg p-8 text-center text-white/60">
-                  No markets ready for settlement yet.
-                </div>
-              ) : (
-                markets
-                  .filter(m => !m.isResolved && new Date(m.resolutionTime * 1000) < new Date())
-                  .map((market) => (
-                    <div key={market.address} className="bg-black/30 backdrop-blur-md rounded-lg p-6">
-                      <h3 className="text-lg font-semibold text-white mb-4">
-                        {market.question}
-                      </h3>
-                      
-                      <div className="grid grid-cols-2 gap-4 mb-4">
-                        <div className="bg-white/5 rounded-lg p-4 text-center">
-                          <div className="text-white/60 text-sm mb-2">Weighted YES</div>
-                          <div className="text-2xl font-bold text-green-400">
-                            {getImpliedProbability(market).toFixed(1)}%
-                          </div>
-                          <div className="text-white/60 text-xs">
-                            {market.totalYesShares.toFixed(0)} shares
-                          </div>
-                        </div>
-                        <div className="bg-white/5 rounded-lg p-4 text-center">
-                          <div className="text-white/60 text-sm mb-2">Weighted NO</div>
-                          <div className="text-2xl font-bold text-red-400">
-                            {(100 - getImpliedProbability(market)).toFixed(1)}%
-                          </div>
-                          <div className="text-white/60 text-xs">
-                            {market.totalNoShares.toFixed(0)} shares
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="flex gap-3">
-                        <button
-                          onClick={() => {
-                            setSelectedMarket(market);
-                            proposeSettlement(true);
-                          }}
-                          disabled={loading}
-                          className="flex-1 bg-green-500 text-white py-2 rounded-lg font-semibold hover:bg-green-600 transition disabled:opacity-50"
-                        >
-                          Propose YES
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedMarket(market);
-                            proposeSettlement(false);
-                          }}
-                          disabled={loading}
-                          className="flex-1 bg-red-500 text-white py-2 rounded-lg font-semibold hover:bg-red-600 transition disabled:opacity-50"
-                        >
-                          Propose NO
-                        </button>
-                      </div>
-                      
-                      <p className="text-white/60 text-xs mt-3 text-center">
-                        Requires 100 QUID (6909) stake • 2:1 support threshold • Confidence-weighted outcomes
-                      </p>
-                    </div>
-                  ))
-              )}
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Amount (ETH)</label>
+                <input
+                  type="number"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  placeholder="0.0"
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
+                />
+              </div>
+              
+              <button
+                onClick={handleDeposit}
+                disabled={loading || !account || !routerContract}
+                className="w-full bg-gradient-to-r from-blue-500 to-purple-600 py-3 rounded-lg font-semibold disabled:opacity-50 hover:from-blue-600 hover:to-purple-700 transition-all"
+              >
+                {loading ? 'Processing...' : 'Deposit ETH'}
+              </button>
             </div>
+            
+            {depositInfo && (
+              <div className="mt-6 p-4 bg-gray-900 rounded-lg">
+                <h3 className="font-semibold mb-2">Your Position</h3>
+                <div className="text-sm space-y-1 text-gray-300">
+                  <div>Liquidity: {depositInfo.liquidity}</div>
+                  <div>Earned S Fees: {depositInfo.feesS}</div>
+                  <div>Earned USD Fees: {depositInfo.feesUsd}</div>
+                  <div>Current Price: ${parseFloat(depositInfo.price).toFixed(2)}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Withdraw Tab */}
+        {activeTab === 'withdraw' && (
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6 border border-gray-800">
+            <h2 className="text-xl font-bold mb-4">Withdraw from Pool</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Withdraw Percentage</label>
+                <select
+                  value={withdrawPercent}
+                  onChange={(e) => setWithdrawPercent(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
+                >
+                  <option value="10">10%</option>
+                  <option value="25">25%</option>
+                  <option value="50">50%</option>
+                  <option value="75">75%</option>
+                  <option value="100">100%</option>
+                </select>
+              </div>
+              
+              <button
+                onClick={handleWithdraw}
+                disabled={loading || !account || !routerContract || !depositInfo}
+                className="w-full bg-gradient-to-r from-red-500 to-orange-600 py-3 rounded-lg font-semibold disabled:opacity-50 hover:from-red-600 hover:to-orange-700 transition-all"
+              >
+                {loading ? 'Processing...' : 'Withdraw'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Leverage Tab */}
+        {activeTab === 'leverage' && (
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6 border border-gray-800">
+            <h2 className="text-xl font-bold mb-4">Open Leveraged Position</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Position Type</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setLeverageType('long')}
+                    className={`flex-1 py-2 rounded-lg transition-all ${
+                      leverageType === 'long' 
+                        ? 'bg-green-600 text-white' 
+                        : 'bg-gray-800 text-gray-400'
+                    }`}
+                  >
+                    Long (Deposit wS)
+                  </button>
+                  <button
+                    onClick={() => setLeverageType('short')}
+                    className={`flex-1 py-2 rounded-lg transition-all ${
+                      leverageType === 'short' 
+                        ? 'bg-red-600 text-white' 
+                        : 'bg-gray-800 text-gray-400'
+                    }`}
+                  >
+                    Short (Deposit USDC)
+                  </button>
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Amount ({leverageType === 'long' ? 'wS' : 'USDC'})
+                </label>
+                <input
+                  type="number"
+                  value={leverageAmount}
+                  onChange={(e) => setLeverageAmount(e.target.value)}
+                  placeholder="0.0"
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 focus:border-purple-500 focus:outline-none"
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  Available: {leverageType === 'long' ? wSBalance : usdcBalance}
+                </div>
+              </div>
+              
+              <div className="p-3 bg-gray-900 rounded-lg text-sm text-gray-400">
+                <p>• 70% LTV on AAVE</p>
+                <p>• Auto-unwinds at ±4.9% price movement</p>
+                <p>• Profits from volatility through rebalancing</p>
+              </div>
+              
+              <button
+                onClick={handleLeverage}
+                disabled={loading || !account || !auxContract}
+                className={`w-full py-3 rounded-lg font-semibold disabled:opacity-50 transition-all ${
+                  leverageType === 'long'
+                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                    : 'bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700'
+                }`}
+              >
+                {loading ? 'Processing...' : `Open ${leverageType === 'long' ? 'Long' : 'Short'} Position`}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Positions Tab */}
+        {activeTab === 'positions' && (
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6 border border-gray-800">
+            <h2 className="text-xl font-bold mb-4">Your Leveraged Positions</h2>
+            
+            {positions.length > 0 ? (
+              <div className="space-y-3">
+                {positions.map((pos, idx) => (
+                  <div key={idx} className="bg-gray-900 rounded-lg p-4 border border-gray-700">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
+                          pos.isLong ? 'bg-green-600' : 'bg-red-600'
+                        }`}>
+                          {pos.isLong ? 'LONG' : 'SHORT'}
+                        </span>
+                        <div className="mt-2 text-sm space-y-1">
+                          <div>Entry: ${parseFloat(pos.entryPrice).toFixed(2)}</div>
+                          <div>Supplied: {pos.supplied}</div>
+                          <div>Borrowed: {pos.borrowed}</div>
+                        </div>
+                      </div>
+                      <div className="text-right text-sm">
+                        <div>Breakeven: ${parseFloat(pos.breakeven).toFixed(2)}</div>
+                        <div className="text-gray-500">Block: {pos.block}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                No active leveraged positions
+              </div>
+            )}
           </div>
         )}
       </main>

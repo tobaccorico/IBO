@@ -3,14 +3,16 @@ pragma solidity ^0.8.24;
 
 import "forge-std/console.sol";
 import {Script} from "forge-std/Script.sol";
-import {Settlement} from "../src/Settlement.sol";
-import {AuctionFactory} from "../src/AuctionFactory.sol";
-import {AuctionHelpers} from "../src/AuctionHelpers.sol";
-import {Auction} from "../src/Auction.sol";
+import {AuxV3 as Aux} from "../src/AuxV3.sol";
+import {Router} from "../src/Router.sol";
 
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {IV3SwapRouter as ISwapRouter} from "../src/imports/v3/IV3SwapRouter.sol";
+import {INonfungiblePositionManager} from "../src/imports/v3/INonfungiblePositionManager.sol";
+import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
 
 // ============ Enhanced Dummy Contracts for Testing ============
 
@@ -262,29 +264,35 @@ contract DummyWETH {
 
 contract Deploy is Script {
     address[] public STABLECOINS;
-     // IPoolAddressesProvider
-    address public aaveAddr = 0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D;
+
+    address public wS = 0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38;
+    
+    // IPoolAddressesProvider
+    address public aaveAddr = 0x5C2e738F6E27bCE0F7558051Bf90605dD6176900;
     // Ethereum : 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e
     // Polygon : 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb
     // Unichain : 
     // Arbi : 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb
     // Base : 0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D
+    // Sonic : 0x5C2e738F6E27bCE0F7558051Bf90605dD6176900
 
     // IUiPoolDataProvider
-    address public aaveData = 0x68100bD5345eA474D93577127C11F39FF8463e93;
+    address public aaveData = 0x9005A69fE088680827f292e8aE885Be4BE1beb2f;
     // Ethereum : 0x3F78BBD206e4D3c504Eb854232EdA7e47E9Fd8FC
     // Polygon : 0x68100bD5345eA474D93577127C11F39FF8463e93
     // Unichain :
     // Arbi : 0x5c5228aC8BC1528482514aF3e27E692495148717
     // Base : 0x68100bD5345eA474D93577127C11F39FF8463e93
+    // Sonic : 0x9005A69fE088680827f292e8aE885Be4BE1beb2f
 
     // IPool
-    address public aavePool = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+    address public aavePool = 0x5362dBb1e601abF3a4c14c22ffEdA64042E5eAA3;
     // Ethereum : 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2
     // Polygon : 0x794a61358D6845594F94dc1DB02A252b5b4814aD
     // Unichain : 
     // Arbi : 0x794a61358D6845594F94dc1DB02A252b5b4814aD
     // Base : 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
+    // Sonic : 0x5362dBb1e601abF3a4c14c22ffEdA64042E5eAA3
 
     // IERC20 public GHO = IERC20();
     // Ethereum : 0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f
@@ -297,12 +305,13 @@ contract Deploy is Script {
     // Arbi : 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9
     // Base : 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
 
-    IERC20 public USDC = IERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
+    IERC20 public USDC = IERC20(0x29219dd400f2Bf60E5a23d13Be72B486D4038894);
     // Ethereum : 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
     // Polygon : 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
     // Unichain : 0x078D782b760474a361dDA0AF3839290b0EF57AD6
     // Arbi : 0xaf88d065e77c8cC2239327C5EDb3A432268e5831
     // Base : 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+    // Sonic ; 0x29219dd400f2Bf60E5a23d13Be72B486D4038894
 
     IERC20 public DAI = IERC20(0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb);
     // Ethereum : 0x6B175474E89094C44Da98b954EedeAC495271d0F
@@ -382,26 +391,30 @@ contract Deploy is Script {
     IERC4626 public SCRVUSD = IERC4626(0x646A737B9B6024e49f5908762B3fF73e65B5160c);
     // Arbi : 0xEfB6601Df148677A338720156E2eFd3c5Ba8809d
 
-    IPoolManager public poolManager = IPoolManager(0x498581ff718922c3f8e6a244956af099b2652b2b);
+    // https://gov.uniswap.org/t/rfc-deploy-uniswap-v3-on-sonic-formerly-fantom/25024
+    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0x743E03cceB4af2efA3CC76838f6E8B50B63F184c);
+    IPoolManager public poolManager = IPoolManager(0x498581fF718922c3f8e6A244956aF099B2652b2b);
     // Ethereum : 0x000000000004444c5dc75cB358380D2e3dE08A90
     // Polygon : 0x67366782805870060151383f4bbff9dab53e5cd6
     // Unichain : 0x1f98400000000000000000000000000000000004
     // Arbi : 0x360e68faccca8ca495c1b759fd9eee466db9fb32
     // Base : 0x498581ff718922c3f8e6a244956af099b2652b2b
   
-    ISwapRouter public V3router = ISwapRouter(0x2626664c2603336E57B271c5C0b26F421741e481);
+    ISwapRouter public V3router = ISwapRouter(0xaa52bB8110fE38D0d2d2AF0B85C3A3eE622CA455);
     // Ethereum : 0xE592427A0AEce92De3Edee1F18E0157C05861564
     // Polygon : 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
     // Unichain : 0xd1AAE39293221B77B0C71fBD6dCb7Ea29Bb5B166
     // Arbi : 0xE592427A0AEce92De3Edee1F18E0157C05861564
     // Base : 0x2626664c2603336E57B271c5C0b26F421741e481
+    // Sonic : 0xaa52bB8110fE38D0d2d2AF0B85C3A3eE622CA455
 
-    IUniswapV3Pool public V3pool = IUniswapV3Pool(0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59);
+    IUniswapV3Pool public V3pool = IUniswapV3Pool(0xEcb04e075503Bd678241f00155AbCB532c0a15Eb);
     // Ethereum : 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640
     // Polygon : 0x45dDa9cb7c25131DF268515131f647d726f50608
     // Unichain : 0xBeAD5792bB6C299AB11Eaa425aC3fE11ebA47b3B
     // Arbi : 0xc6962004f452be9203591991d15f6b388e09e8d0
     // Base : 0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59
+    // Sonic : 0xecb04e075503bd678241f00155abcb532c0a15eb
     
     function run() public {
         // Handle private key
@@ -420,6 +433,10 @@ contract Deploy is Script {
 
        /* COMMENTED OUT - Real production deployments - DO NOT DELETE
         Rover V4router = new Rover(poolManager);
+        Router V3 = new Router(address(weth), 
+            address(USDC), address(nfpm), address(V3pool), 
+            address(V3router) // newer interface on L1 and Arbitrum
+        );
         
         Aux AUX = new Aux(address(V4router),
             address(V3pool), address(V3router),
@@ -435,7 +452,11 @@ contract Deploy is Script {
             address(CRVUSD), address(SCRVUSD)
         );  
 
-        // TODO send WETH and USDC to AUX for linking AAVE
+        // TODO send WETH and USDC to AUXv3 for linking AAVE
+
+        // token1 is USDC 0x29219dd400f2Bf60E5a23d13Be72B486D4038894
+        // token0 is wS (wrapped msg.value) 0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38
+        // ^ uses the WETH contract with deposit and withdrawTo / withdraw
 
         V4router.setup(address(QUID),
             address(AUX), address(V3pool));
@@ -444,128 +465,14 @@ contract Deploy is Script {
         AUX.setQuid{value: 1 wei}(address(QUID));
         */
 
-        console.log("========================================");
-        console.log("Deploying TESTING Infrastructure");
-        console.log("(Production code commented above)");
-        console.log("========================================");
-        
-        // Deploy dummy contracts
-        DummyWETH dummyWETH = new DummyWETH();
-        console.log("Dummy WETH deployed:", address(dummyWETH));
-        
-        DummyRover V4router = new DummyRover();
-        console.log("Dummy Rover deployed:", address(V4router));
-        
-        DummyBasket QUID = new DummyBasket(address(V4router));
-        console.log("Dummy Basket deployed:", address(QUID));
-        
-        DummyAux AUX = new DummyAux(address(dummyWETH), address(QUID));
-        console.log("Dummy Aux deployed:", address(AUX));
-        
-        // Setup connections
-        V4router.setup(address(QUID), address(AUX), address(0));
-        
-        // Fund Aux with ETH for operations
-        payable(address(AUX)).transfer(1 ether);
-        console.log("Funded Aux with 1 ETH");
+        Aux AUX = new Aux(aavePool, aaveData, aaveAddr);
+        Router V3 = new Router(address(AUX), address(wS), 
+            address(USDC), address(nfpm), address(V3pool), 
+            address(V3router) // newer interface on L1 and Arbitrum
+        );  AUX.setup(payable(address(V3)));
 
-        // Deploy core contracts
-        Settlement settlement = new Settlement();
-        console.log("Settlement deployed:", address(settlement));
-        
-        // TODO auction factory should deploy Uni pools
-        // between Basket token and the 404 ?
-        AuctionFactory factory = new AuctionFactory(
-            address(settlement),
-            address(V4router),
-            address(AUX),
-            address(QUID)
-        );
-        console.log("Factory deployed:", address(factory));
-        
-        // Initialize Settlement with proper connections
-        settlement.initialize(address(QUID), address(factory));
-        console.log("Settlement initialized");
-        
-        AuctionHelpers helpers = new AuctionHelpers(
-            address(factory),
-            address(settlement),
-            address(QUID)
-        );
-        console.log("Helpers deployed:", address(helpers));
-        
-        // Connect Settlement to Basket
-        QUID.setSettlement(address(settlement));
-        console.log("Connected Settlement to Basket");
-        
-        // Setup initial liquidity for testing
-        // Mint tokens to deployer
-        QUID.mint(msg.sender, 10000e18, address(QUID), 0);
-        console.log("Minted 10,000 QUID to deployer");
-        
-        // Mint tokens to Settlement for dispute rewards
-        QUID.mint(address(settlement), 5000e18, address(QUID), 0);
-        console.log("Minted 5,000 QUID to Settlement for operations");
-        
-        // Approve Settlement to spend deployer's tokens
-        QUID.approve(address(settlement), 10000e18);
-        console.log("Approved Settlement to spend deployer tokens");
-
-        console.log("\n========================================");
-        console.log("Deployment Complete!");
-        console.log("========================================");
-        console.log("QUID (Basket):", address(QUID));
-        console.log("AUX:", address(AUX));
-        console.log("Rover (V4):", address(V4router));
-        console.log("Settlement:", address(settlement));
-        console.log("Factory:", address(factory));
-        console.log("Helpers:", address(helpers));
-        
-        console.log("\n=== Quick Start Guide ===");
-        console.log("1. Users get 1000 QUID automatically when betting");
-        console.log("2. Create markets with factory.deploySimplePrediction()");
-        console.log("3. Place bets with helpers.betYes() or helpers.betNo()");
-        console.log("4. Propose settlements after resolution time");
-        console.log("5. Claim payouts with helpers.claimAll()");
-        
-        console.log("\n=== Testing Features ===");
-        console.log("- Auto-faucet: Users get QUID on first interaction");
-        console.log("- ETH->QUID: Automatic conversion at $3000/ETH");
-        console.log("- Settlement: Fully functional with dispute system");
-        console.log("- MEV Protection: Batch processing active");
-        
-        // Deploy a test market for demonstration
-        console.log("\n=== Creating Test Market ===");
-        address testMarket = factory.deploySimplePrediction(
-            "Will this deployment script work perfectly?",
-            1 // 1 day until resolution
-        );
-        console.log("Test market deployed:", testMarket);
-        
-        // Place a test bet to verify everything works
-        Auction testAuction = Auction(payable(testMarket));
-        testAuction.placePredictionBid{value: 0.01 ether}(0.5e18, true);
-        console.log("Test bet placed successfully!");
-        
-        // Write addresses to file for frontend
-        string memory addresses = string(abi.encodePacked(
-            '// Auto-generated by deployment script\n',
-            'export const FACTORY_ADDRESS = "', addressToString(address(factory)), '";\n',
-            'export const HELPERS_ADDRESS = "', addressToString(address(helpers)), '";\n',
-            'export const SETTLEMENT_ADDRESS = "', addressToString(address(settlement)), '";\n',
-            'export const BASKET_ADDRESS = "', addressToString(address(QUID)), '";\n',
-            'export const TEST_MARKET_ADDRESS = "', addressToString(testMarket), '";\n',
-            'export const CHAIN_ID = ', uint2str(block.chainid), ';\n'
-        ));
-        
-        // Try to write to file
-        try vm.writeFile("deployed_addresses.txt", addresses) {
-            console.log("\nAddresses written to deployed_addresses.txt");
-        } catch {
-            console.log("\nCouldn't write to file. Copy addresses manually:");
-            console.log(addresses);
-        }
-    
+        console.log("AUX...", address(AUX));
+        console.log("V3...", address(V3));
         vm.stopBroadcast();
     }
     

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Settlement} from "./Settlement.sol";
-import {Rover} from  "./Rover.sol";
 import {Aux} from  "./Aux.sol";
-
+import {Rover} from  "./Rover.sol";
+import {BasketLib} from "./BasketLib.sol";
+// import {Settlement} from "./Settlement.sol";
 import "lib/forge-std/src/console.sol";
 // TODO delete logging before mainnet...
 
@@ -32,7 +32,7 @@ interface IStakeToken is IERC20 { // StkGHO (safety module)
 interface ICollection is IERC721 {
     function latestTokenId()
     external view returns (uint);
-} // in the windmills of my mind
+}
 interface IERC721Receiver {
     function onERC721Received(
         address operator,
@@ -40,28 +40,32 @@ interface IERC721Receiver {
         uint256 tokenId,
         bytes calldata data
     ) external returns (bytes4);
-} 
+}
 
 contract Basket is ERC6909, 
     IERC721Receiver, ReentrancyGuard  {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IERC4626;
     using SortedSetLib for SortedSetLib.Set;
+    
     uint constant LAMBO = 16508; 
     uint private _deployed;
     uint private _totalSupply;
     uint constant WAD = 1e18;
     address[] public stables;
-    Settlement public SET;
+    // Settlement public SET;
     Aux public AUX; 
     
     Metrics public coreMetrics;
-    string private _name = "QU!D";
-    string private _symbol = "QD";
+    string public constant name = "QU!D";
+    string public constant symbol = "QD";
+    uint8 public constant decimals = 18;
     address payable public V4;
 
     struct Metrics {
-        uint last; uint total; uint yield;
+        uint total;
+        uint last;
+        uint yield;
     }
     struct Pod { uint shares; uint cash; }
     mapping(address => Pod) public perVault;
@@ -84,44 +88,30 @@ contract Basket is ERC6909,
     
     mapping(address => uint) public lastVoteEpoch;
     mapping (address => bool) public winners;
-    // ^ the mapping prevents duplicates...
     
     // Track everyone who has been a juror
     address[] public everVotedInJury;
     mapping(address => bool) public hasBeenJuror;
     
-    // Use SortedSetLib for vote values to eliminate sorting
-    // epoch => stableIndex => sorted set of vote values  
+    // OPTIMIZED: Use SortedSetLib for vote values, store weights separately
+    // epoch => stableIndex => SortedSet of vote values
     mapping(uint => mapping(uint => SortedSetLib.Set)) private voteSets;
     
-    // Map vote values to their total weights
-    // epoch => stableIndex => voteValue => totalWeight
-    mapping(uint => mapping(uint => mapping(uint => uint))) public voteWeights;
+    // epoch => stableIndex => voteValue => cumulative weight
+    mapping(uint => mapping(uint => mapping(uint => uint))) private voteWeights;
     
-    // Total weight per epoch
+    // Store total weight per epoch for validation
     mapping(uint => uint) public epochTotalWeight;
 
     modifier onlyUs { 
         address sender = msg.sender;
-        require(sender == V4 
-             || sender == address(AUX) 
-             || sender == address(SET), "404"); _;
+        require(sender == V4 // TODO uncomment
+             || sender == address(AUX) /*
+             || sender == address(SET) */, "404"); _;
     }
 
     function currentMonth() public view returns (uint month) { 
         month = (block.timestamp - _deployed) / 2420000; // ~28 days
-    }
- 
-    function name() public view virtual returns (string memory) {
-        return _name;
-    }
-
-    function symbol() public view virtual returns (string memory) {
-        return _symbol;
-    }
-
-    function decimals() public view virtual returns (uint8) {
-        return 18;
     }
 
     function totalSupply() public view returns (uint) {
@@ -139,12 +129,7 @@ contract Basket is ERC6909,
     }
 
     function matureBatches(uint[] memory batches) public view returns (int i) {
-        int start = int(batches.length - 1);
-        for (i = start; i >= 0; i--) {
-            if (batches[uint(i)] <= currentMonth()) {
-                return i;
-            }
-        }
+        return BasketLib.matureBatches(batches, block.timestamp, _deployed);
     }
 
     constructor(address _router, address _aux,
@@ -164,10 +149,11 @@ contract Basket is ERC6909,
         }   V4 = payable(_router);
     }
 
+    /*
     function setSettlement(address _settlement) external onlyUs {
         require(address(SET) == address(0), "set"); 
         SET = Settlement(_settlement);
-    }
+    } */
 
     function get_metrics(bool force) public returns (uint, uint) {
         Metrics memory stats = coreMetrics;
@@ -246,6 +232,8 @@ contract Basket is ERC6909,
             }
             if (max >= amountNeeded) {
                 uint withdrawn = withdraw(who, vault, amountNeeded);
+                // Update concentrations after withdrawal
+                _recomputeConcentrations(currentMonth());
                 if (fee > 0) {
                     return FullMath.mulDiv(withdrawn, WAD - fee, WAD);
                 } else {
@@ -266,7 +254,11 @@ contract Basket is ERC6909,
                         amount *= 10 ** scale;
                         sent *= 10 ** scale;
                     }  
-                } else { return sent; }
+                } else { 
+                    // Update concentrations after partial withdrawal
+                    _recomputeConcentrations(block.timestamp / 1 weeks);
+                    return sent; 
+                }
             }
         } 
         uint[10] memory amounts = get_deposits(); 
@@ -280,7 +272,8 @@ contract Basket is ERC6909,
                 amounts[i] = withdraw(who, vault, amounts[i]);
                 sent += amounts[i] * divisor;
             }
-        } vault = vaults[stables[stables.length - 1]];
+        } 
+        vault = vaults[stables[stables.length - 1]];
 
         amounts[ghoIndex] = FullMath.mulDiv(amount, FullMath.mulDiv(
                             WAD, amounts[ghoIndex], amounts[0]), WAD);
@@ -290,6 +283,8 @@ contract Basket is ERC6909,
             require(IStakeToken(vault).previewRedeem(amount) == amounts[ghoIndex], "sgho");
             IStakeToken(vault).redeem(who, amount); sent += amounts[ghoIndex];
         }
+        // Update concentrations after multi-vault withdrawal
+        _recomputeConcentrations(block.timestamp / 1 weeks);
     }  
    
     function withdraw(address to, address vault, uint amount) internal returns (uint sent) {
@@ -353,7 +348,9 @@ contract Basket is ERC6909,
             perVault[vault].cash += usd;
         } else {
             require(false, "unsupported token");
-        }  
+        }
+        // Update concentrations after deposit
+        _recomputeConcentrations(block.timestamp / 1 weeks);
     }
 
     function _mint(address receiver, uint id, uint amount) internal override {
@@ -367,6 +364,9 @@ contract Basket is ERC6909,
         emit Transfer(msg.sender, address(0), receiver, id, amount);
     } 
 
+    // Basket.take() is not guaranteed to always have more than
+    // the quantity of totalSupply() in dollars, because the ETH
+    // that is in the Uniswap pool may at any point crash in price
     function mint(address pledge, uint amount, address token, uint when) public {
         uint month = Math.max(when, currentMonth() + 1);
             
@@ -387,7 +387,6 @@ contract Basket is ERC6909,
             (uint total, uint yield) = get_metrics(false);
             
             // Apply 0.01% withholding (1 basis point) for NFT solvency
-            // This ensures the 666,666 token NFT mechanism remains solvent
             uint withholding = amount / 10000; // 0.01% = 1/10000
             amount = amount - withholding;
             
@@ -404,29 +403,18 @@ contract Basket is ERC6909,
             if (to == V4) {
                 require(msg.sender == V4, "403");
             }
-            uint allowed = _allowances[from][msg.sender];
-            if (allowed != type(uint).max) {
-                _allowances[from][msg.sender] = allowed - amount;
-            }
-        } return _transfer(from, to, amount, true);
+        } 
+        uint allowed = _allowances[from][msg.sender];
+        _allowances[from][msg.sender] = allowed - amount;
+        return _transfer(from, to, amount, true);
     }
 
+    // TODO redeem at any time but % distance to maturity is the 
+    // discount against present value if you do that, full value
+    // only if post maturity. 
     function turn(address from, uint value) onlyUs public returns (uint sent) {
         uint oldBalanceFrom = totalBalances[from];
         sent = _transferHelper(from, address(0), value);
-    }
-
-    function burn(address from, uint256 amount) external onlyUs {
-        _burn(from, uint256(uint160(address(this))), amount);
-    }
-
-    // Track jurors when selected by Settlement
-    function recordJuror(address juror) external {
-        require(msg.sender == address(SET), "Only Settlement");
-        if (!hasBeenJuror[juror]) {
-            hasBeenJuror[juror] = true;
-            everVotedInJury.push(juror);
-        }
     }
 
     function _transferHelper(address from, address to, uint amount) 
@@ -434,7 +422,8 @@ contract Basket is ERC6909,
         uint[] memory batches = perMonth[from].getSortedSet();
         bool toZero = to == address(0);
         bool burning = toZero || to == V4;
-        int i = toZero ? matureBatches(batches) : int(batches.length - 1);
+        int i = toZero ? BasketLib.matureBatches(batches,
+        block.timestamp, _deployed) : int(batches.length - 1);
 
         while (amount > 0 && i >= 0) {
             uint k = batches[uint(i)];
@@ -470,49 +459,49 @@ contract Basket is ERC6909,
         uint oldBalanceFrom = totalBalances[from];
         uint oldBalanceTo = totalBalances[to];
         uint value = _transferHelper(from, to, amount); 
-        if (update) {
-            _recomputeConcentrations(block.timestamp / 1 weeks);
-        }
         return true;
     }
 
     function vote(uint[] calldata _targets) external {
-        uint epoch = block.timestamp / 1 weeks;
-        require(_targets.length == stables.length 
-            && lastVoteEpoch[msg.sender] < epoch, "mismatch");
+        uint epoch = currentMonth();
+        require(_targets.length == stables.length, "Wrong length");
+        require(lastVoteEpoch[msg.sender] < epoch, "Already voted");
         
         uint sum;
         for (uint i = 0; i < _targets.length; i++) {
             sum += _targets[i];
         } 
-        require(sum == WAD, "Targets must sum to 100%");
+        require(sum == WAD, "Must sum to 100%");
+        
+        uint voterWeight = totalBalances[msg.sender];
+        require(voterWeight > 0, "No voting power");
         
         lastVoteEpoch[msg.sender] = epoch;
-        uint weight = totalBalances[msg.sender];
-        require(weight > 0, "No voting power");
         
-        // Record votes using SortedSetLib
         for (uint i = 0; i < stables.length; i++) {
-            // Insert vote value (automatically sorted)
             voteSets[epoch][i].insert(_targets[i]);
-            // Track weight for this vote value
-            voteWeights[epoch][i][_targets[i]] += weight;
-        }   
-        epochTotalWeight[epoch] += weight;
+            voteWeights[epoch][i][_targets[i]] += voterWeight;
+        }
+        
+        epochTotalWeight[epoch] += voterWeight;
         _recomputeConcentrations(epoch);
     }
 
     function _recomputeConcentrations(uint epoch) internal {
+        // Check if there are any votes for this epoch
         if (epochTotalWeight[epoch] == 0) return;
         
         for (uint i = 0; i < stables.length; i++) {
             uint newTarget = _computeWeightedMedian(epoch, i);
             targets[stables[i]] = newTarget;
             
-            // Exponential moving average
+            // Exponential moving average using library
             uint alpha = 2e17;
-            currentConcentrations[stables[i]] = (newTarget * alpha + 
-                currentConcentrations[stables[i]] * (WAD - alpha)) / WAD;
+            currentConcentrations[stables[i]] = BasketLib.updateConcentrationEMA(
+                currentConcentrations[stables[i]],
+                newTarget,
+                alpha
+            );
         }
     }
 
@@ -528,38 +517,24 @@ contract Basket is ERC6909,
         uint halfWeight = totalWeight / 2;
         uint cumulativeWeight = 0;
         
-        // Iterate through already-sorted votes from SortedSetLib
         for (uint i = 0; i < sortedVotes.length; i++) {
             uint voteValue = sortedVotes[i];
             uint weight = voteWeights[epoch][stableIndex][voteValue];
             cumulativeWeight += weight;
             
             if (cumulativeWeight >= halfWeight) {
-                // Check if exactly at midpoint
                 if (cumulativeWeight == halfWeight && i + 1 < sortedVotes.length) {
                     return (voteValue + sortedVotes[i + 1]) / 2;
                 }
                 return voteValue;
             }
-        } 
-        return sortedVotes[sortedVotes.length - 1]; 
+        }
+        
+        return sortedVotes[sortedVotes.length - 1];
     }
 
     function sigmoidFee(uint actual, uint target, uint multiplier) public pure returns (uint fee18) {
-        uint deviation;
-        if (actual > target) {
-            deviation = ((actual - target) * WAD) / target;
-        } else {
-            deviation = ((target - actual) * WAD) / target;
-        }
-        
-        deviation = deviation / 2;
-        uint sigmoidOutput = (deviation * WAD) / (WAD + deviation);
-        fee18 = (sigmoidOutput * multiplier) / WAD;
-        
-        if (fee18 > 2e15) {
-            fee18 = 2e15;
-        }
+        return BasketLib.sigmoidFee(actual, target, multiplier);
     }
 
     function getFee(address stable, bool isMinting, uint amount) 
@@ -579,48 +554,22 @@ contract Basket is ERC6909,
             normalizedCash = vaultCash * 1e12;
         }
         
-        uint actual = (normalizedCash * WAD) / totalValue;
         uint target = currentConcentrations[stable];
-        
         if (target == 0) {
             target = WAD / stables.length;
         }
         
-        if (actual >= WAD * 99 / 100) return 0;
-        
-        uint deviation = actual > target ? actual - target : target - actual;
-        if (deviation < WAD / 20) return 0;
-        
-        uint multiplier = 4e14;
-        
-        if (isMinting) {
-            if (actual > target) {
-                fee18 = sigmoidFee(actual, target, multiplier);
-                return fee18;
-            }
-            return 0;
-        } else {
-            if (actual < target) {
-                fee18 = sigmoidFee(target, actual, multiplier);
-                return fee18;
-            }
-            return 0;
-        }
-    } address public constant F8N = 0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405; // foundation
-    /** Whenever an {IERC721} `tokenId` token is transferred to this ERC20: ratcheting batch
-     * @dev Safe transfer `tokenId` token from `from` to `address(this)`, checking that the
-     recipient prevent tokens from being forever locked. An NFT is used as the _delegate is 
-     an attribution of character, 
-     * - `tokenId` token must exist and be owned by `from`
-     * - If the caller is not `from`, it must have been allowed
-     *   to move this token by either {approve} or {setApprovalForAll}.
-     * - {onERC721Received} is called after a safeTransferFrom...
-     * - It must return its Solidity selector to confirm the token transfer.
-     *   If any other value is returned or the interface is not implemented
-     *   but when a prince briskly declares himself in favour of one side, 
-     *   if the side you choose is the winner then you have a good friend
-     */
-    // QuidMint...foundation.app/@quid
+        return BasketLib.calculateFee(
+            normalizedCash,
+            totalValue,
+            target,
+            isMinting,
+            4e14 // multiplier
+        );
+    }
+    
+    address public constant F8N = 0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405; // foundation
+    
     function onERC721Received(address,
         address from, // previous owner...
         uint tokenId, bytes calldata data)
@@ -629,16 +578,12 @@ contract Basket is ERC6909,
             LAMBO) == address(this)) { address winner;
             uint cut = KICKBACK / 6; // $111110 clif: 
             _mint(Rover(V4).owner(), 24, cut); // 2yr
-            // my mind spits with an enormous kickback,
-            // open fire...open mind...this time is a 
-            // promise sounding like an oath...I wanna 
-            // know true feeling, but you can't decide
-            // if you're hooked on...only the kick...
+            
             uint kickback = KICKBACK - cut; cut /= 2;
             ICollection(F8N).transferFrom( 
             address(this), from, LAMBO); // Return NFT to sender
             
-            // Only proceed with lottery and jurors to select from
+            // Only proceed with lottery if we have jurors to select from
             if (everVotedInJury.length >= 10 && data.length >= 32) {
                 bytes32 _seed = abi.decode(data[:32], (bytes32));
                 uint distributed = 0;
@@ -657,21 +602,13 @@ contract Basket is ERC6909,
                         kickback -= cut;
                         distributed++;
                     } 
-                } // new level, same rebel, hold the Base never trebble,
-                // I hop out the price drop, and the system be trembling
+                }
             }
             // Any remaining kickback goes to the NFT sender
             if (kickback > 0) {
                 _mint(from, 24, kickback);
             }
-            // "I put my key, you put your key in"
         } return this.onERC721Received.selector; 
     } 
     uint constant KICKBACK = 666666666666666666666666;
-     // https://www.law.cornell.edu/wex/consideration
-    // of legally sufficient value, bargained-for in 
-    // an exchange agreement, for the breach of which
-    // Mindwill gives an equitable remedy, and whose 
-    // performance is recognised as reasonable duty
-    // or tender (an unconditional offer to perform)
 }

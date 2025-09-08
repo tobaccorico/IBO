@@ -43,12 +43,19 @@ contract Rover is SafeCallback, Ownable {
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
 
-    PoolKey VANILLA; WETH9 WETH;
     IUniswapV3Pool v3Pool; 
+    PoolKey VANILLA; WETH9 WETH;
     mockToken private mockETH; 
     mockToken private mockUSD;
-    Basket QUID; Aux AUX;
-
+    Basket QUID; Aux AUX; // TODO:
+    // check that when ETH gets sold for not any 
+    // stable that gets taken out through take()
+    // but minted as new QD (6909) directly with
+    // the mockUSD in Rover and there instantly 
+    // redeemable QD supply for even mix of $...
+    // takes no fee as contrary to swaps via AUX  
+    // which require a specific dollar for ETH...
+    // gets triggered by take() through the Rover
     mapping(uint => Types.Batch) swapsZeroForOne;
     mapping(uint => Types.Batch) swapsOneForZero;
     mapping(address => Types.Deposit) autoManaged;
@@ -115,7 +122,7 @@ contract Rover is SafeCallback, Ownable {
             currency1: Currency.wrap(address(mockETH)),
             fee: 420, tickSpacing: 10,
             hooks: IHooks(address(0))}); 
-        AUX = Aux(payable(_aux)); 
+            AUX = Aux(payable(_aux)); 
         
         WETH = WETH9(payable(address(AUX.WETH())));
         require(QUID.V4() == address(this), "?");
@@ -202,7 +209,9 @@ contract Rover is SafeCallback, Ownable {
             amount += msg.value;
         }
         return amount;  
-    }
+    } // TODO make sure that a batch can be cleared at any time
+    // if there are no swaps in a while, and that every swap clears
+    // part of the batch
 
     // this is for single-sided liquidity (ETH deposit)
     // if you want to deposit dollars, mint with Basket
@@ -242,6 +251,8 @@ contract Rover is SafeCallback, Ownable {
         uint price) internal returns (uint, uint) {
         uint pending = PENDING_ETH + delta1;
         (uint total, ) = QUID.get_metrics(false);
+        // TODO does this include mockedUSDC pool
+        // balance? we must subtract from it...
         uint surplus = (total / 1e12) - delta0;
        
         delta1 = Math.min(pending,

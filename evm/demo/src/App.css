@@ -158,89 +158,6 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Market Cards */
-.market-card, .settlement-card {
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-  transition: all 0.3s;
-}
-
-.market-card:hover, .settlement-card:hover {
-  border-color: #3a3a3a;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-.market-card h3, .settlement-card h3 {
-  color: #ff6b6b;
-  margin-bottom: 1rem;
-  font-size: 1.2rem;
-}
-
-.market-stats {
-  background: #2a2a2a;
-  padding: 1rem;
-  border-radius: 8px;
-  margin-bottom: 1rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-}
-
-.market-stats p {
-  margin: 0;
-  color: #ccc;
-}
-
-.market-actions, .evidence-submission {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-  margin-top: 1rem;
-  flex-wrap: wrap;
-}
-
-.market-actions input {
-  width: 150px;
-}
-
-.evidence-submission input {
-  flex: 1;
-  min-width: 300px;
-}
-
-/* Settlement specific */
-.settlement-actions, .execution-actions, .emergency-actions {
-  background: #2a2a2a;
-  padding: 1rem;
-  border-radius: 8px;
-  margin-top: 1rem;
-}
-
-.settlement-actions h4, .execution-actions h4, .emergency-actions h4 {
-  color: #ff8e53;
-  margin-bottom: 0.5rem;
-  font-size: 0.9rem;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.settlement-actions input, .execution-actions input {
-  width: 200px;
-  margin-right: 1rem;
-}
-
-.emergency-actions {
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-}
-
-.emergency-actions button {
-  background: linear-gradient(135deg, #ff4444, #cc0000);
-}
 
 /* Responsive */
 @media (max-width: 768px) {
@@ -259,16 +176,4 @@ button:disabled {
     padding: 1rem;
   }
   
-  .market-actions, .evidence-submission {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  
-  .market-actions input {
-    width: 100%;
-  }
-  
-  .evidence-submission input {
-    min-width: auto;
-  }
 }
