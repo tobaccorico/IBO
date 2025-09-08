@@ -94,7 +94,7 @@ contract Router is ReentrancyGuard {
             // "to improve is to change, to perfect is to change often"
                 block.timestamp - LAST_REPACK >= 10 minutes) {
                 // we want to make sure that all of the WETH deposited to this
-                // contract is always in range (collecting), and range is ~7%
+                // contract is always in range (collecting), total range is ~7%
                 // below and above tick, as voltage regulators watch currents
                 // and control a relay (which turns on & off the alternator,
                 // if below or above 12 volts, re-charging battery as such)

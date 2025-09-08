@@ -174,25 +174,64 @@ function App() {
         console.log('wS address:', wSAddress);
         console.log('USDC address:', usdcAddress);
         
-        // Initialize token contracts with proper ABIs
-        const wS = new ethers.Contract(wSAddress, WETH_ABI, newSigner);
-        const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, newSigner);
+        // Check if we can call router functions
+        try {
+          const price = await router.getPrice("0x" + "0".repeat(38) + "1");
+          console.log('Router getPrice test successful, price:', price.toString());
+        } catch (e) {
+          console.error('Router getPrice test failed:', e);
+        }
         
-        // Set all contracts at once
-        setContracts({
-          router,
-          aux,
-          wS,
-          usdc
-        });
-        
-        // Load balances
-        await loadBalances(address, newProvider, wS, usdc, router);
-        
-        // Listen for position events
-        setupEventListeners(aux, address);
-        
-        setTxStatus('Connected successfully!');
+        // Try to get router's state variables
+        try {
+          const routerWSAddress = await router.wS();
+          const routerUSDCAddress = await router.USDC();
+          console.log('Router wS address from contract:', routerWSAddress);
+          console.log('Router USDC address from contract:', routerUSDCAddress);
+          
+          // Use addresses from router if they exist
+          const finalWSAddress = routerWSAddress || wSAddress;
+          const finalUSDCAddress = routerUSDCAddress || usdcAddress;
+          
+          // Initialize token contracts with proper ABIs
+          const wS = new ethers.Contract(finalWSAddress, WETH_ABI, newSigner);
+          const usdc = new ethers.Contract(finalUSDCAddress, ERC20_ABI, newSigner);
+          
+          // Set all contracts at once
+          setContracts({
+            router,
+            aux,
+            wS,
+            usdc
+          });
+          
+          // Load balances
+          await loadBalances(address, newProvider, wS, usdc, router);
+          
+          // Listen for position events
+          setupEventListeners(aux, address);
+          
+          setTxStatus('Connected successfully!');
+          
+        } catch (routerError: any) {
+          console.error('Router state check failed:', routerError);
+          
+          // Router might not be initialized, use default addresses
+          const wS = new ethers.Contract(wSAddress, WETH_ABI, newSigner);
+          const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, newSigner);
+          
+          setContracts({
+            router,
+            aux,
+            wS,
+            usdc
+          });
+          
+          await loadBalances(address, newProvider, wS, usdc, router);
+          setupEventListeners(aux, address);
+          
+          setTxStatus('Connected (Router may need initialization)');
+        }
         
       } catch (error: any) {
         console.error('Error initializing contracts:', error);
