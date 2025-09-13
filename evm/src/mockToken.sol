@@ -5,17 +5,17 @@ import {ERC20} from "solmate/src/tokens/ERC20.sol";
 
 contract mockToken is ERC20 {
     address public rover;
-    modifier onlyRover {
+    modifier onlyVogue {
         require(msg.sender == address(rover), "403"); _;
     }
     constructor(address _rover, uint8 _decimals) 
         ERC20("mock", "mock", _decimals) {
         rover = _rover;
     }
-    function mint(uint amount) onlyRover external {
+    function mint(uint amount) onlyVogue external {
         _mint(msg.sender, amount);
     }
-    function burn(uint amount) onlyRover external {
+    function burn(uint amount) onlyVogue external {
         _burn(msg.sender, amount);   
     }
 }

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Types} from "./imports/Types.sol";
-import {Router} from "./Router.sol";
+import {Rover} from "./Rover.sol";
 import {FullMath} from "./imports/v3/FullMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {stdMath} from "forge-std/StdMath.sol";
@@ -30,7 +30,7 @@ contract AuxV3 is Ownable {
     
     ISwapRouter v3Router; 
     IUniswapV3Pool v3Pool;
-    Router V3; IPool AAVE;
+    Rover V3; IPool AAVE;
     IERC20 USDC; WETH9 wS;
 
     // uint internal UNWIND_COST;
@@ -74,11 +74,11 @@ contract AuxV3 is Ownable {
 
     /// @dev One-time setup requiring $1 USDC and 1 wei (of S)
     // must send $1 USDC to address(this) & attach msg.value 1 wei
-    function setup(address payable _router) 
+    function setup(address payable _rover) 
         external onlyOwner { renounceOwnership();
-        require(address(Router(_router).AUX()) == address(this), "!");
+        require(address(Rover(_rover).AUX()) == address(this), "!");
         
-        V3 = Router(_router);    
+        V3 = Rover(_rover);    
         USDC = IERC20(V3.USDC());
         wS = WETH9(payable(
           address(V3.wS())));

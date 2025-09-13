@@ -1,15 +1,20 @@
+
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 
 /**
  * @title BasketLib
- * @notice Shared library for pure calculations used by both Basket contracts
- * @dev Only contains external pure functions to reduce contract bytecode size
+ * @dev Shared library for pure calculations used by both Basket contracts
  */
 library BasketLib {
-    uint constant WAD = 1e18;
+    uint public constant WAD = 1e18;
+    uint public constant WEEK = 604800;
+    uint public constant MONTH = 2420000;
     
     /**
      * @notice Determine which batches have matured
@@ -23,7 +28,7 @@ library BasketLib {
         uint currentTimestamp, 
         uint deployedTime
     ) external pure returns (int i) {
-        uint currentMonth = (currentTimestamp - deployedTime) / 2420000; // ~28 days
+        uint currentMonth = (currentTimestamp - deployedTime) / MONTH;
         int start = int(batches.length - 1);
         for (i = start; i >= 0; i--) {
             if (batches[uint(i)] <= currentMonth) {
@@ -34,105 +39,68 @@ library BasketLib {
     }
     
     /**
-     * @notice Calculate sigmoid-based fee for rebalancing
-     * @param actual Current concentration
-     * @param target Target concentration  
-     * @param multiplier Fee multiplier
-     * @return fee18 Fee in 18 decimal format
+     * @notice Process withdrawal with fee calculation
+     * @param amount Amount requested
+     * @param max Maximum available
+     * @param fee Fee percentage in WAD
+     * @return amountNeeded Amount needed including fee
+     * @return amountReceived Amount user receives after fee
      */
-    function sigmoidFee(
-        uint actual, 
-        uint target, 
-        uint multiplier
-    ) public pure returns (uint fee18) {
-        uint deviation;
-        if (actual > target) {
-            deviation = ((actual - target) * WAD) / target;
-        } else {
-            deviation = ((target - actual) * WAD) / target;
+    function processWithdrawalWithFee(
+        uint amount, uint max, uint fee
+    ) external pure returns (uint amountNeeded, 
+        uint amountReceived) { amountNeeded = amount;
+        
+        if (fee > 0 && fee < WAD / 10) {
+            amountNeeded = FullMath.mulDiv(
+                    amount, WAD + fee, WAD);
         }
-        
-        // Scale deviation for sensitivity
-        deviation = deviation / 2;
-        
-        // Sigmoid: deviation / (WAD + deviation)
-        uint sigmoidOutput = (deviation * WAD) / (WAD + deviation);
-        
-        // Apply multiplier to get final fee
-        fee18 = (sigmoidOutput * multiplier) / WAD;
-        
-        // Cap maximum fee at 0.2% (20 basis points)
-        if (fee18 > 2e15) {
-            fee18 = 2e15;
+        if (max >= amountNeeded) {
+            amountReceived = fee > 0 ? 
+                FullMath.mulDiv(amountNeeded, WAD - fee, WAD) : amountNeeded;
+
+            return (amountNeeded, amountReceived);
+        } else {
+            amountReceived = fee > 0 ? 
+                FullMath.mulDiv(max, WAD - fee, WAD) : 
+                max;
+            return (max, amountReceived);
         }
     }
     
     /**
-     * @notice Calculate rebalancing fee based on vault concentrations
-     * @param tokenBalance Current balance of the token/vault
-     * @param totalValue Total value across all vaults
-     * @param targetConcentration Target concentration for this token
-     * @param isMinting Whether this is a deposit (true) or withdrawal (false)
-     * @param multiplier Base fee multiplier
-     * @return fee18 Fee in 18 decimal format
+     * @notice Calculate vault withdrawal amount
+     * @param vault Vault address
+     * @param amount Amount to withdraw in assets
+     * @return sharesNeeded Shares to burn
+     * @return assetsReceived Assets received
      */
-    function calculateFee(uint tokenBalance,
-        uint totalValue, uint targetConcentration,
-        bool isMinting, uint multiplier) external
-        pure returns (uint fee18) {
-        // No fees when basket is empty
-        if (totalValue == 0 || tokenBalance == 0) {
-            return 0;
-        }
-        
-        uint actual = (tokenBalance * WAD) / totalValue;
-        
-        // Ensure target is not zero
-        if (targetConcentration == 0) {
-            return 0;
-        }
-        
-        // For single asset basket (>99% concentration), no fees
-        if (actual >= WAD * 99 / 100) {
-            return 0;
-        }
-        
-        // No fee if close to target (within 5%)
-        uint deviation = actual > targetConcentration ? 
-            actual - targetConcentration : 
-            targetConcentration - actual;
-        
-        if (deviation < WAD / 20) {
-            return 0;
-        }
-        
-        if (isMinting) {
-            // Only charge fee if depositing to overweight vault
-            if (actual > targetConcentration) {
-                return sigmoidFee(actual, targetConcentration, multiplier);
-            }
-        } else {
-            // Only charge fee if withdrawing from underweight vault
-            if (actual < targetConcentration) {
-                return sigmoidFee(targetConcentration, actual, multiplier);
-            }
-        }
-        
-        return 0;
+    function calculateVaultWithdrawal(address vault, uint amount)
+        external view returns (uint sharesNeeded, uint assetsReceived) {
+        uint vaultBalance = IERC4626(vault).balanceOf(address(this));
+        sharesNeeded = IERC4626(vault).convertToShares(amount);
+        sharesNeeded = Math.min(vaultBalance, sharesNeeded);
+        assetsReceived = IERC4626(vault).convertToAssets(sharesNeeded);
+        return (sharesNeeded, assetsReceived);
     }
     
     /**
-     * @notice Apply exponential moving average to update concentration
-     * @param currentConcentration Current concentration value
-     * @param newTarget New target from voting
-     * @param alpha Smoothing factor (in WAD units)
-     * @return Updated concentration
+     * @notice Scale amount based on token decimals
+     * @param amount Amount to scale
+     * @param token Token address
+     * @param scaleUp True to scale up, false to scale down
+     * @return scaled Scaled amount
      */
-    function updateConcentrationEMA(
-        uint currentConcentration,
-        uint newTarget,
-        uint alpha
-    ) external pure returns (uint) {
-        return (newTarget * alpha + currentConcentration * (WAD - alpha)) / WAD;
+    function scaleTokenAmount(uint amount, address token,
+        bool scaleUp) external view returns (uint scaled) {
+        uint decimals = IERC20(token).decimals();
+        uint scale = decimals < 18 ? 18 - decimals : 0;
+        if (scale > 0) { scaled = scaleUp ? 
+                            amount * (10 ** scale) : 
+                            amount / (10 ** scale);
+        } else {
+            scaled = amount;
+        }   return scaled;
     }
+
 }

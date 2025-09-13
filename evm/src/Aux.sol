@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Types} from "./imports/Types.sol";
 import {Basket} from "./Basket.sol";
-import {Rover} from "./Rover.sol";
+import {Vogue} from "./Vogue.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {stdMath} from "forge-std/StdMath.sol";
@@ -32,7 +32,7 @@ contract Aux is Ownable {
     bool public token1isWETH;
     IERC20 USDC; WETH9 public WETH;
     IUniswapV3Pool v3Pool;
-    Rover V4; IPool AAVE;
+    Vogue V4; IPool AAVE;
     IUiPoolDataProviderV3 DATA;
     IPoolAddressesProvider ADDR;
     ISwapRouter v3Router; 
@@ -52,7 +52,7 @@ contract Aux is Ownable {
     // of change of LEVER_YIELD
 
     bytes4 immutable SWAP_SELECTOR;
-    // ^ just for calling the Rover
+    // ^ just for calling the Vogue
 
     mapping(address => Types.viaAAVE) pledgesOneForZero;
     mapping(address => Types.viaAAVE) pledgesZeroForOne;
@@ -67,14 +67,14 @@ contract Aux is Ownable {
     uint lastBlock; 
     // ^ for ASS...
 
-    /// @notice Restricts functions to Rover contract only
-    modifier onlyRover {
+    /// @notice Restricts functions to Vogue contract only
+    modifier onlyVogue {
         require(msg.sender == address(V4), "404"); _;
     }
 
     /// @notice Initialize Aux with required contracts and addresses
     /// @dev Sets up V3 pool, AAVE integration, and determines token ordering
-    /// @param _router Rover contract address
+    /// @param _router Vogue contract address
     /// @param _v3pool Uniswap V3 pool for ETH/USDC
     /// @param _v3router Uniswap V3 router for swaps
     /// @param _wethVault Vault for WETH deposits (earns yield)
@@ -99,7 +99,7 @@ contract Aux is Ownable {
         } else { token1isWETH = false;
             WETH = WETH9(payable(token0));
             USDC = IERC20(token1);
-        }   V4 = Rover(_router);    
+        }   V4 = Vogue(_router);    
             AAVE = IPool(_aave);
             
         DATA = IUiPoolDataProviderV3(_data);
@@ -460,16 +460,16 @@ contract Aux is Ownable {
         withdrawn = wethVault.redeem(amount, address(this), address(this));
     }   fallback() external payable {} // weth.withdraw() triggers this...
 
-    /// @notice Send ETH to address (Rover only)
+    /// @notice Send ETH to address (Vogue only)
     /// @param howMuch Amount to send
     /// @param toWhom Recipient address
     function sendETH(uint howMuch, address toWhom) 
-        public onlyRover{ _sendETH(howMuch, toWhom); }
+        public onlyVogue{ _sendETH(howMuch, toWhom); }
 
-    /// @notice Deposit WETH to vault (Rover only)
+    /// @notice Deposit WETH to vault (Vogue only)
     /// @param howMuch Amount to deposit
     /// @return Vault shares received
-    function putETH(uint howMuch) public onlyRover returns (uint) {
+    function putETH(uint howMuch) public onlyVogue returns (uint) {
         WETH.transferFrom(address(V4), address(this), howMuch);
         return wethVault.deposit(howMuch, address(this));
     }

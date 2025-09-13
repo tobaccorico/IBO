@@ -12,25 +12,6 @@ declare global {
 const ROUTER_ADDRESS = "0x7bAe2554ED287380941B1706DC8cFf665137ca58";
 const AUX_ADDRESS = "0x2Ce5CfbA940b8e8791864307413bA1334BBd0CD1";
 
-// ABIs
-const ROUTER_ABI = [
-  "function depositS(uint256 amount) payable",
-  "function withdraw(uint256 amount) payable",
-  "function fetch(address beneficiary) view returns (tuple(uint256 fees_S, uint256 fees_usd, uint128 liq), uint256, uint160)",
-  "function getPrice(uint160 sqrtRatioX96) view returns (uint256)",
-  "function wS() view returns (address)",
-  "function USDC() view returns (address)",
-  "function setupAux(address _aux)",
-  "function repackNFT() returns (uint160)"
-];
-
-const AUX_ABI = [
-  "function leverZeroForOne(uint256 amount) payable",
-  "function leverOneForZero(uint256 amount) payable",
-  "event LeveragedPositionOpened(address indexed user, bool indexed isLong, uint256 supplied, uint256 borrowed, uint256 buffer, int256 entryPrice, uint256 breakeven, uint256 blockNumber)",
-  "event PositionUnwound(address indexed user, bool indexed isLong, int256 exitPrice, int256 priceDelta, uint256 blockNumber)"
-];
-
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
   "function decimals() view returns (uint8)",
@@ -59,11 +40,15 @@ interface ContractsState {
   usdc: ethers.Contract | null;
 }
 
+
 function App() {
   const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
   const [signer, setSigner] = useState<ethers.JsonRpcSigner | null>(null);
   const [account, setAccount] = useState<string>('');
   const [chainId, setChainId] = useState<number>(0);
+  
+  console.log("Current L2 block timestamp:", block.timestamp);
+  console.log("As human-readable:", new Date(block.timestamp * 1000).toUTCString());
   
   // Single state for all contracts to ensure atomic updates
   const [contracts, setContracts] = useState<ContractsState>({
@@ -101,18 +86,15 @@ function App() {
         return;
       }
 
-      const newProvider = new ethers.BrowserProvider(window.ethereum);
+      let newProvider = new ethers.BrowserProvider(window.ethereum);
       await newProvider.send("eth_requestAccounts", []);
-      const newSigner = await newProvider.getSigner();
-      const address = await newSigner.getAddress();
-      const network = await newProvider.getNetwork();
       
-      console.log('Wallet connected:', address);
-      console.log('Network:', network.chainId, network.name);
+      let network = await newProvider.getNetwork();
+      console.log('Initial network:', network.chainId, network.name);
       
       // Check if on Sonic network (chain ID 146)
       if (Number(network.chainId) !== 146) {
-        setTxStatus('Please switch to Sonic network (Chain ID: 146)');
+        setTxStatus('Switching to Sonic network...');
         
         // Try to switch to Sonic
         try {
@@ -120,6 +102,13 @@ function App() {
             method: 'wallet_switchEthereumChain',
             params: [{ chainId: '0x92' }], // 146 in hex
           });
+          
+          // IMPORTANT: Create new provider after network switch
+          newProvider = new ethers.BrowserProvider(window.ethereum);
+          network = await newProvider.getNetwork();
+          console.log('Switched to network:', network.chainId);
+          const block = await newProvider.getBlock("latest");
+          console.log('Current block number:', block);
         } catch (switchError: any) {
           // This error code indicates that the chain has not been added to MetaMask
           if (switchError.code === 4902) {
@@ -138,6 +127,11 @@ function App() {
                   blockExplorerUrls: ['https://sonicscan.org']
                 }],
               });
+              
+              // Create new provider after adding network
+              newProvider = new ethers.BrowserProvider(window.ethereum);
+              network = await newProvider.getNetwork();
+              
             } catch (addError) {
               console.error('Error adding Sonic network:', addError);
               setTxStatus('Failed to add Sonic network. Please add it manually.');
@@ -145,26 +139,42 @@ function App() {
             }
           } else {
             console.error('Error switching network:', switchError);
+            setTxStatus('Failed to switch network. Please switch manually to Sonic.');
             return;
           }
         }
-        
-        // Re-fetch network after switch
-        const updatedNetwork = await newProvider.getNetwork();
-        setChainId(Number(updatedNetwork.chainId));
-      } else {
-        setChainId(Number(network.chainId));
       }
-
+      
+      // Now get signer and address with the correct network
+      const newSigner = await newProvider.getSigner();
+      const address = await newSigner.getAddress();
+      
+      console.log('Wallet connected:', address);
+      console.log('Final network:', network.chainId);
+      
       setProvider(newProvider);
       setSigner(newSigner);
       setAccount(address);
+      setChainId(Number(network.chainId));
 
-      // Initialize contracts
-      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, newSigner);
-      const aux = new ethers.Contract(AUX_ADDRESS, AUX_ABI, newSigner);
-      
       try {
+        // Load ABIs from build artifacts
+        // Place Router.json and AuxV3.json from your Foundry out/ directory in public/
+        const routerResponse = await fetch('/Router.json');
+        const routerArtifact = await routerResponse.json();
+        const routerABI = routerArtifact.abi;
+        
+        const auxResponse = await fetch('/AuxV3.json');
+        const auxArtifact = await auxResponse.json();
+        const auxABI = auxArtifact.abi;
+        
+        console.log('Loaded Router ABI from build artifacts');
+        console.log('Loaded Aux ABI from build artifacts');
+        
+        // Initialize contracts with actual ABIs
+        const router = new ethers.Contract(ROUTER_ADDRESS, routerABI, newSigner);
+        const aux = new ethers.Contract(AUX_ADDRESS, auxABI, newSigner);
+        
         // Get token addresses from router
         const wSAddress = "0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38";
         const usdcAddress = "0x29219dd400f2Bf60E5a23d13Be72B486D4038894";
@@ -174,67 +184,28 @@ function App() {
         console.log('wS address:', wSAddress);
         console.log('USDC address:', usdcAddress);
         
-        // Check if we can call router functions
-        try {
-          const price = await router.getPrice("0x" + "0".repeat(38) + "1");
-          console.log('Router getPrice test successful, price:', price.toString());
-        } catch (e) {
-          console.error('Router getPrice test failed:', e);
-        }
+        // Initialize token contracts
+        const wS = new ethers.Contract(wSAddress, WETH_ABI, newSigner);
+        const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, newSigner);
         
-        // Try to get router's state variables
-        try {
-          const routerWSAddress = await router.wS();
-          const routerUSDCAddress = await router.USDC();
-          console.log('Router wS address from contract:', routerWSAddress);
-          console.log('Router USDC address from contract:', routerUSDCAddress);
-          
-          // Use addresses from router if they exist
-          const finalWSAddress = routerWSAddress || wSAddress;
-          const finalUSDCAddress = routerUSDCAddress || usdcAddress;
-          
-          // Initialize token contracts with proper ABIs
-          const wS = new ethers.Contract(finalWSAddress, WETH_ABI, newSigner);
-          const usdc = new ethers.Contract(finalUSDCAddress, ERC20_ABI, newSigner);
-          
-          // Set all contracts at once
-          setContracts({
-            router,
-            aux,
-            wS,
-            usdc
-          });
-          
-          // Load balances
-          await loadBalances(address, newProvider, wS, usdc, router);
-          
-          // Listen for position events
-          setupEventListeners(aux, address);
-          
-          setTxStatus('Connected successfully!');
-          
-        } catch (routerError: any) {
-          console.error('Router state check failed:', routerError);
-          
-          // Router might not be initialized, use default addresses
-          const wS = new ethers.Contract(wSAddress, WETH_ABI, newSigner);
-          const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, newSigner);
-          
-          setContracts({
-            router,
-            aux,
-            wS,
-            usdc
-          });
-          
-          await loadBalances(address, newProvider, wS, usdc, router);
-          setupEventListeners(aux, address);
-          
-          setTxStatus('Connected (Router may need initialization)');
-        }
+        // Set all contracts at once
+        setContracts({
+          router,
+          aux,
+          wS,
+          usdc
+        });
+        
+        // Load balances
+        await loadBalances(address, newProvider, wS, usdc, router);
+        
+        // Listen for position events
+        setupEventListeners(aux, address);
+        
+        setTxStatus('Connected successfully!');
         
       } catch (error: any) {
-        console.error('Error initializing contracts:', error);
+        console.error('Error loading ABIs or initializing contracts:', error);
         setTxStatus(`Contract initialization error: ${error.message}`);
       }
       
@@ -261,7 +232,7 @@ function App() {
         const wSBal = await wS.balanceOf(address);
         setWSBalance(ethers.formatEther(wSBal));
       } catch (e) {
-        console.log('wS balance error, setting to 0');
+        console.log('wS balance error:', e);
         setWSBalance('0');
       }
       
@@ -270,7 +241,7 @@ function App() {
         const usdcBal = await usdc.balanceOf(address);
         setUsdcBalance(ethers.formatUnits(usdcBal, 6));
       } catch (e) {
-        console.log('USDC balance error, setting to 0');
+        console.log('USDC balance error:', e);
         setUsdcBalance('0');
       }
       
@@ -332,7 +303,13 @@ function App() {
 
   // Deposit ETH to Router
   const handleDeposit = async () => {
-    if (!contracts.router || !provider || !contracts.wS || !contracts.usdc) {
+    // Prevent multiple clicks
+    if (loading) {
+      console.log('Already processing a transaction');
+      return;
+    }
+    
+    if (!provider || !signer) {
       setTxStatus('Please connect wallet first');
       return;
     }
@@ -343,46 +320,77 @@ function App() {
     }
     
     setLoading(true);
-    setTxStatus('Depositing S...');
+    setTxStatus('Preparing deposit...');
     
     try {
       const amount = ethers.parseEther(depositAmount);
       
       // Check native balance
       const balance = await provider.getBalance(account);
+      console.log('User balance:', ethers.formatEther(balance), 'S');
+      
       if (balance < amount) {
         throw new Error(`Insufficient S balance. Have: ${ethers.formatEther(balance)}, Need: ${depositAmount}`);
       }
       
-      // The depositS function expects amount parameter and ETH in msg.value
-      const tx = await contracts.router.depositS(0, { 
+      // Load ABI from artifacts
+      const response = await fetch('/Router.json');
+      const routerArtifact = await response.json();
+      const routerABI = routerArtifact.abi;
+      
+      // Create new contract instance
+      const routerContract = new ethers.Contract(ROUTER_ADDRESS, routerABI, signer);
+      
+      // Encode the function data
+      const encodedData = routerContract.interface.encodeFunctionData('depositS', [0]);
+      console.log('Encoded function data:', encodedData);
+      
+      // Build transaction explicitly
+      const txData = {
+        to: ROUTER_ADDRESS,
+        from: await signer.getAddress(),
+        data: encodedData,
         value: amount,
-        gasLimit: 500000 // Set explicit gas limit
-      });
+        gasLimit: 2000000n
+      };
       
-      setTxStatus('Transaction submitted...');
+      console.log('Sending transaction with data:', txData);
+      
+      // Send ONLY ONCE - no retries
+      const tx = await signer.sendTransaction(txData);
+      
+      console.log('Transaction sent! Hash:', tx.hash);
+      setTxStatus('Transaction submitted, waiting for confirmation...');
+      
+      // Wait for confirmation
       const receipt = await tx.wait();
+      console.log('Transaction receipt:', receipt);
       
-      if (receipt.status === 1) {
+      if (receipt && receipt.status === 1) {
         setTxStatus('Deposit successful!');
         setDepositAmount('');
         
+        // Update contracts with the working instance
+        setContracts(prev => ({ ...prev, router: routerContract }));
+        
         // Reload balances
-        await loadBalances(account, provider, contracts.wS, contracts.usdc, contracts.router);
+        if (contracts.wS && contracts.usdc) {
+          await loadBalances(account, provider, contracts.wS, contracts.usdc, routerContract);
+        }
       } else {
-        throw new Error('Transaction failed');
+        throw new Error('Transaction failed on-chain');
       }
       
     } catch (error: any) {
       console.error('Deposit error:', error);
-      if (error.code === 'INSUFFICIENT_FUNDS') {
-        setTxStatus('Insufficient S balance for transaction');
-      } else if (error.message?.includes('user rejected')) {
-        setTxStatus('Transaction cancelled');
+      
+      if (error.message?.includes('user rejected')) {
+        setTxStatus('Transaction cancelled by user');
       } else {
-        setTxStatus(`Error: ${error.message || 'Unknown error'}`);
+        setTxStatus(`Error: ${error.reason || error.message || 'Transaction failed'}`);
       }
     } finally {
+      // Always reset loading state
       setLoading(false);
     }
   };
@@ -404,14 +412,19 @@ function App() {
     
     try {
       // Convert percentage to basis points (multiply by 10)
-      const percent = parseInt(withdrawPercent) * 10;
+      const percent = BigInt(parseInt(withdrawPercent) * 10);
+      console.log('Withdrawing percent:', withdrawPercent, '% =', percent.toString(), 'basis points');
       
+      // Call withdraw with BigInt parameter to ensure proper encoding
       const tx = await contracts.router.withdraw(percent, {
-        gasLimit: 500000
+        gasLimit: 800000
       });
       
-      setTxStatus('Transaction submitted...');
+      console.log('Transaction hash:', tx.hash);
+      setTxStatus('Transaction submitted, waiting for confirmation...');
+      
       const receipt = await tx.wait();
+      console.log('Transaction receipt:', receipt);
       
       if (receipt.status === 1) {
         setTxStatus('Withdrawal successful!');
@@ -419,7 +432,7 @@ function App() {
         // Reload balances
         await loadBalances(account, provider, contracts.wS, contracts.usdc, contracts.router);
       } else {
-        throw new Error('Transaction failed');
+        throw new Error('Transaction failed on-chain');
       }
       
     } catch (error: any) {
@@ -448,6 +461,7 @@ function App() {
       if (leverageType === 'long') {
         setTxStatus('Opening long position...');
         const amount = ethers.parseEther(leverageAmount);
+        console.log('Long position amount (wS):', amount.toString());
         
         // Check wS balance
         const wSBalance = await contracts.wS.balanceOf(account);
@@ -463,15 +477,18 @@ function App() {
           await approveTx.wait();
         }
         
+        // Call with proper BigInt parameter
         const tx = await contracts.aux.leverZeroForOne(amount, {
           gasLimit: 800000
         });
+        console.log('Transaction hash:', tx.hash);
         setTxStatus('Transaction submitted...');
         await tx.wait();
         
       } else {
         setTxStatus('Opening short position...');
         const amount = ethers.parseUnits(leverageAmount, 6);
+        console.log('Short position amount (USDC):', amount.toString());
         
         // Check USDC balance
         const usdcBalance = await contracts.usdc.balanceOf(account);
@@ -487,9 +504,11 @@ function App() {
           await approveTx.wait();
         }
         
+        // Call with proper BigInt parameter
         const tx = await contracts.aux.leverOneForZero(amount, {
           gasLimit: 800000
         });
+        console.log('Transaction hash:', tx.hash);
         setTxStatus('Transaction submitted...');
         await tx.wait();
       }
@@ -520,16 +539,24 @@ function App() {
       return;
     }
     
+    // Don't refresh if a transaction is in progress
+    if (loading) {
+      return;
+    }
+    
     const wS = contracts.wS;
     const usdc = contracts.usdc;
     const router = contracts.router;
     
     const interval = setInterval(() => {
-      loadBalances(account, provider, wS, usdc, router);
+      // Only refresh if not currently processing a transaction
+      if (!loading) {
+        loadBalances(account, provider, wS, usdc, router);
+      }
     }, 15000); // Update every 15 seconds
     
     return () => clearInterval(interval);
-  }, [account, provider, contracts]);
+  }, [account, provider, contracts, loading]); // Added loading to dependencies
 
   // Auto-connect if previously connected
   useEffect(() => {
