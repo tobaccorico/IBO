@@ -127,8 +127,6 @@ contract Rover is ReentrancyGuard {
         (sqrtPriceX96,
         ,,,,,) = IUniswapV3Pool(POOL).slot0();
         _repackNFT(0, 0, getPrice(sqrtPriceX96));
-        // TODO test ID before and after, after
-        // set_price_eth in mainnetFork
     }
     
     // from v3-periphery/OracleLibrary...

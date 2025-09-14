@@ -209,18 +209,20 @@ contract BasketL2 is ERC6909 {
             // uint fee = getFee(token, false, amount); // NOTE: must implement 
             (uint needed, uint received) = BasketLib.processWithdrawalWithFee(
                                                              amount, max, fee);
+            deposits[token] -= Math.min(
+                deposits[token], needed);
+
             if (max >= needed) {
                 if (index < 3) {
                     sent = _withdraw(who,
                        vault, needed);
                 } else {
                     if (index < 6) {
-                        AAVE.withdraw(token, needed,
-                                      address(this));
-                    }
-                    IERC20(token).transfer(
-                               who, needed);
-                              sent = needed;
+                        needed = AAVE.withdraw(token, needed,
+                                               address(this));
+                    } IERC20(token).transfer(
+                                 who, needed);
+                                sent = needed;
                 } // _recomputeConcentrations(currentWeek());
                 // NOTE: must implement
                 return fee > 0 ? FullMath.mulDiv(
@@ -241,8 +243,9 @@ contract BasketL2 is ERC6909 {
                 }   amount -= sent;
                 
                 sent = fee > 0 ? FullMath.mulDiv(sent, WAD - fee, WAD) : sent;
-                sent = BasketLib.scaleTokenAmount(sent, token, true);
+
             }
+            sent = BasketLib.scaleTokenAmount(sent, token, true);
         } 
         uint mid = stables.length / 2 - 1; uint i;
         uint[14] memory amounts = get_deposits();
