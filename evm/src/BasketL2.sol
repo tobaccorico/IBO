@@ -19,14 +19,13 @@ interface ISCRVOracle {
     function pricePerShare(uint ts) external view returns (uint);
 }
 interface IDSROracle {
-    /**
+     /**
      * @notice Get the binomial approximated conversion rate at a specified timestamp.
      * @dev    Timestamp must be greater than or equal to the current timestamp.
      * @param  timestamp The timestamp at which to retrieve the binomial approximated conversion rate.
      * @return The binomial approximated conversion rate.
      */
     function getConversionRateBinomialApprox(uint timestamp) external view returns (uint);
-
 }
 
 contract BasketL2 is ERC6909 {
@@ -45,11 +44,9 @@ contract BasketL2 is ERC6909 {
         uint last;
         uint yield;
     }
-    
     Metrics public metrics;
     IDSROracle internal DSR;
     ISCRVOracle internal CRV;
-    
     address[] public stables;
     address payable public V4;
     
@@ -57,16 +54,19 @@ contract BasketL2 is ERC6909 {
     string public constant symbol = "QD";
     uint8 public constant decimals = 18;
     
-    mapping(address => uint) public deposits;
+    mapping(address => uint) internal deposits;
     mapping(address => uint) internal toIndex;
-    mapping(address => address) public vaults;
+    mapping(address => address) internal vaults;
+    mapping(address => address) internal underlying;
+    
     mapping(uint => uint) public totalSupplies;
     mapping(address => uint) public totalBalances;
 
     mapping(address => SortedSetLib.Set) private perMonth;
     mapping(address => mapping(address => uint)) private _allowances;
     
-    modifier onlyUs { require(msg.sender == V4 
+    modifier onlyUs { 
+        require(msg.sender == V4 
              || msg.sender == address(AUX), "403");
         _;
     }
@@ -80,16 +80,17 @@ contract BasketL2 is ERC6909 {
             vaults[_stables[i]] = _vaults[i];
             toIndex[_stables[i]] = i + 1;
         }
-        for (i = 5; i < _stables.length; i++) { 
-            toIndex[_stables[i]] = i + 1;
-        } stables = _stables;
-        V4 = payable(_rover);
-        AAVE = IPool(_aave);
-
+        for (i = 5; i < _stables.length; i++) { toIndex[_stables[i]] = i + 1;
+        } stables = _stables; V4 = payable(_rover); AAVE = IPool(_aave);
         DSR = IDSROracle(0x73750DbD85753074e452B2C27fB9e3B0E75Ff3B8);
-        // Base: 0x65d946e533748A998B1f0E430803e39A6388f7a1
+                // Base: 0x65d946e533748A998B1f0E430803e39A6388f7a1
         CRV = ISCRVOracle(0x3195A313F409714e1f173ca095Dba7BfBb5767F7);
-        // Base: 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1    
+                // Base: 0x3d8EADb739D1Ef95dd53D718e4810721837c69c1    
+        
+        underlying[_stables[8]] = _stables[4]; // FRAX
+        underlying[_stables[10]] = _stables[5]; // USDE
+        underlying[_stables[9]] = _stables[6]; // USDS
+        underlying[_stables[11]] = _stables[7]; // CRVUSD
     }
     
     function currentMonth() public view returns (uint month) {
@@ -118,15 +119,17 @@ contract BasketL2 is ERC6909 {
     }
     
     function _getPrice(uint index) internal view returns (uint price) { 
-        if (index == 10) { (, int answer,, uint ts,) = AggregatorV3Interface(
-            // 0xdEd37FC1400B8022968441356f771639ad1B23aA // < Base (SUSDE)
-            0x605EA726F0259a30db5b7c9ef39Df9fE78665C44).latestRoundData();
-                                                     price = uint(answer);
-            require(ts > 0 && ts <= block.timestamp, "link");
-        } else if (index == 11) { // SCRVUSD
-            price = CRV.pricePerShare(
-                      block.timestamp);
-        } else if (index == 9) { // SUSDS
+        if (index == 10) { 
+            (, int answer,, uint ts,) = AggregatorV3Interface(
+            //     0xdEd37FC1400B8022968441356f771639ad1B23aA // < Base (SUSDE)
+                   0x605EA726F0259a30db5b7c9ef39Df9fE78665C44).latestRoundData();
+                                                            price = uint(answer);
+            require(ts > 0 
+                 && ts <= block.timestamp, "link");
+        } else if (index == 11) { // SCRVUSD for
+            price = CRV.pricePerShare( // USDC in
+                      block.timestamp); // any way
+        } else if (index == 9) { // SUSDS TODO Base
             price = DSR.getConversionRateBinomialApprox(block.timestamp) / 1e9;
         }
         require(price >= WAD, "price");
@@ -147,14 +150,14 @@ contract BasketL2 is ERC6909 {
                   stats.yield);
     } 
 
-    // amounts[1] represents the total in terms of final $ worth (melt value)
-    // amounts[0] represents the raw token units (so 1 sUSDS or 1 sUSDE = $1)
-    function get_deposits() public view 
+    // amounts[1] represents the total 
+    // in terms of final $ melt value
+    // amounts[0] 1 sUSDS, 1 sUSDE = $1
+    function get_deposits() public view // yield approximated...
         returns (uint[14] memory amounts) { uint balance; uint i;
         amounts[2] = IERC4626(vaults[stables[0]]).maxWithdraw(
                                                 address(this)) * 1e12;
-        // FullMath.mulDiv(_getPrice(9), // special sUSDS vault on Base
-        //    IERC4626(sUSDSvault).maxWithdraw(address(this)), WAD);
+    
         amounts[3] = IERC4626(vaults[stables[1]]).maxWithdraw(
                                                 address(this)) * 1e12;
         // first we aggregate raw amounts (pre-gains accounting)
@@ -170,103 +173,77 @@ contract BasketL2 is ERC6909 {
             amounts[i + 2] = balance; // the balance for given token
             amounts[0] += balance; // these tokens aren't deposited 
             amounts[1] += balance; // anywhere to earn extra yield
-        } 
+        } // there's no GHO on Base, remove (length stays order change)
+        // TODO on Base start from 10, but for 9
+        // do maxWithdraw to get sUSDS + yield
+        // then take that number and do this...
         for (i = 9; i < stables.length; i++) { 
             balance = IERC20(stables[i]).balanceOf(
                                      address(this)); 
             amounts[0] += balance;
             balance = FullMath.mulDiv(
             _getPrice(i), balance, WAD);
-            
             amounts[1] += balance;
             amounts[i + 2] = balance;
         }
         // amounts[1] should be higher than
     } // amounts[0] so their ratio gives us 
-    // the total APY % of the whole basket
+    // the total APY % of the whole basket;
+    // calculations differ in Basket.sol
 
-    // instead of unwrapping locally, give 
-    // preferentially to the basket tokens
-    // from the Arb, Base, Polygon baskets
+    // strict = return one token as much
+    // as we can, otherwise (if false)...
+    // if entire amount isn't fulfilled
+    // by token, remainer gets split pro
+    // rata amongst the rest of basket...
     function take(address who, uint amount,
         address token, bool strict) public
-        onlyUs returns (uint sent) { // TODO
-        if (token != address(this)) { // on L1
+        onlyUs returns (uint sent) {
+        if (token != address(this)) {
             uint index = toIndex[token];
             uint max; address vault;
             if (index < 3) { vault = vaults[token];
                 max = IERC4626(vault).maxWithdraw(
                                     address(this));
-            
-                if (token == stables[0] && !strict) 
-                    max -= AUX.untouchable();
             } 
             else if (index < 6) { vault = vaults[token];
                 max = IERC20(vault).balanceOf(address(this));
             }
-             
-            uint fee = 0;
-            // uint fee = getFee(token, false, amount); // NOTE: must implement 
-            (uint needed, uint received) = BasketLib.processWithdrawalWithFee(
-                                                             amount, max, fee);
-            deposits[token] -= Math.min(
-                deposits[token], needed);
+            uint fee = 0; // TODO fee logic
+            (uint needed, 
+            uint received) = BasketLib.processWithdrawalWithFee(amount, max, fee);
+            deposits[token] -= Math.min(deposits[token], needed);
+            if (max >= needed) { if (index < 3) { sent = _withdraw(
+                                                who, vault, needed);
+                } else { if (index < 6) needed = AAVE.withdraw(token, 
+                                        needed, address(this));
+                        IERC20(token).transfer(who, 
+                                needed); sent = needed;
+                } return fee > 0 ? FullMath.mulDiv(sent, 
+                                 WAD - fee, WAD) : sent;
+            } else { if (index < 3) { sent = _withdraw(who, 
+                                            vault, max);
+                } else { if (index < 6) AAVE.withdraw(
+                            token, max, address(this));
+                    IERC20(token).transfer(who, max); sent = max;
+                } if (strict) { return fee > 0 ? FullMath.mulDiv(
+                                          sent, WAD - fee, WAD) : sent;
+                }                                       amount -= sent;
+                sent = fee > 0 ? FullMath.mulDiv(sent, 
+                                  WAD - fee, WAD) : sent;
 
-            if (max >= needed) {
-                if (index < 3) {
-                    sent = _withdraw(who,
-                       vault, needed);
-                } else {
-                    if (index < 6) {
-                        needed = AAVE.withdraw(token, needed,
-                                               address(this));
-                    } IERC20(token).transfer(
-                                 who, needed);
-                                sent = needed;
-                } // _recomputeConcentrations(currentWeek());
-                // NOTE: must implement
-                return fee > 0 ? FullMath.mulDiv(
-                            sent, WAD - fee, WAD) : sent;
-            } else {
-                if (index < 3) { sent = _withdraw(who, 
-                                        vault, max);
-                } else {
-                    if (index < 6) {
-                        AAVE.withdraw(token, max,
-                                    address(this));
-                    }
-                    IERC20(token).transfer(who, max);
-                    sent = max;
-                }
-                if (strict) { // _recomputeConcentrations(currentWeek());
-                    return fee > 0 ? FullMath.mulDiv(sent, WAD - fee, WAD) : sent;
-                }   amount -= sent;
-                
-                sent = fee > 0 ? FullMath.mulDiv(sent, WAD - fee, WAD) : sent;
-
-            }
-            sent = BasketLib.scaleTokenAmount(sent, token, true);
-        } 
-        uint mid = stables.length / 2 - 1; uint i;
+            } sent = BasketLib.scaleTokenAmount(sent, token, true);
+        } uint mid = stables.length / 2 - 1; uint i;
         uint[14] memory amounts = get_deposits();
-        
-        // NOTE: we don't need to _recomputeConcentrations(currentWeek());
-        // because the amounts will be decreased proportionally after this,
-        // meaning that their relative concentrations will not change at all
-
-        /* sent += withdraw(who, valuts[stables[9]], FullMath.mulDiv(amount, 
-            FullMath.mulDiv(WAD, amounts[11], amounts[1]), WAD)); */ // Base
-        
         for (i = 0; i < 2; i++) {
             amounts[i + 2] = FullMath.mulDiv(amount, FullMath.mulDiv(WAD, 
             amounts[i + 2], amounts[1]), WAD) / 1e12; // 1e6 precision...
             sent += _withdraw(who, vaults[stables[i]], amounts[i + 2]) * 1e12;
             // ^ normalised to be 1e18 despite two 1e6 precisions (USDC & USDT)
-        }    
+        } // TODO sUSDS on Base...
         for (i = 2; i < mid; i++) {
             amounts[i + 2] = AAVE.withdraw(address(stables[i]), 
                                 amounts[i + 2], address(this));
-
             sent += amounts[i + 2];
             IERC20(stables[i]).transfer(
                     who, amounts[i + 2]);
@@ -274,33 +251,38 @@ contract BasketL2 is ERC6909 {
         for (i = mid; i < stables.length; i++) {
             amounts[i + 2] = FullMath.mulDiv(amount, FullMath.mulDiv(
                                WAD, amounts[i + 2], amounts[1]), WAD);
-            
             sent += amounts[i + 2];
             IERC20(stables[i]).transfer(
                     who, amounts[i + 2]);
         }
     } 
 
-    function _withdraw(address to,
-        address vault, uint amount) 
-        internal returns (uint sent) { // sent is 1e16 for USDC and USDT
+    function _withdraw(address to, // sent is 1e16 for USDC & USDT  
+        address vault, uint amount) internal returns (uint sent) { 
         (uint shares, uint assets) = BasketLib.calculateVaultWithdrawal(
                                                           vault, amount);
         require(assets == IERC4626(vault).redeem(shares, 
                 to, address(this)), "$!"); return assets;
     }
 
+    // there's never an incentive
+    // for EOAs to call this since
+    // mint() is the only way to
+    // get yield for deposits...
+    // so it's assumed only our 
+    // contracts will call this
     function deposit(address from,
         address token, uint amount)
         public returns (uint usd) {
         uint index = toIndex[token];
-        require(index > 0, "$?");        
+        require(index > 0, "?");        
         usd = Math.min(amount, 
         IERC20(token).allowance(
             from, address(this)));
         IERC20(token).transferFrom(
             from, address(this), usd);
-        
+        // deposit into external yield-bearing vaults
+        // normalise the precision for compatibility
         deposits[token] += BasketLib.scaleTokenAmount(
                                      usd, token, true);
         if (index < 3) { // for Base add || index == 10
@@ -308,11 +290,11 @@ contract BasketL2 is ERC6909 {
             IERC4626(vaults[token]).deposit(usd, 
                               address(this));
         } 
-        else if (index < 6) { // DAI, FRAX, GHO in AAVE
+        else if (index < 6) // DAI, FRAX, GHO --> AAVE
             AAVE.supply(token, usd, address(this), 0);
-        } 
     }
 
+    // ERC6909 standard extented...
     function _mint(address receiver, 
         uint id, uint amount) 
         internal override {
@@ -325,26 +307,18 @@ contract BasketL2 is ERC6909 {
                        receiver, id, amount);
     }
 
+    // get yield upfront for term deposit...
     function mint(address pledge, uint amount, 
-        address token, uint when) public {
+        address token, uint when) external {
+        deposit(pledge, token, amount);
         uint month = Math.max(when,
             currentMonth() + 1);
         
-        if (token == address(this)) {
-            require(msg.sender == address(AUX), "403");
-            _mint(pledge, month, amount);
-        } else {
-            uint depositing = BasketLib.scaleTokenAmount(
-                                    amount, token, false);
-            
-            deposit(pledge, token, depositing);
-            (uint total, uint yield) = get_metrics(false);
-            
-            amount += FullMath.mulDiv(amount * yield,
+        (, uint yield) = get_metrics(false);
+        amount += FullMath.mulDiv(amount * yield,
                 month - currentMonth(), WAD * 12);
                      _mint(pledge, month, amount);
-        }
-    }
+    } // same function in Basket.sol and here too
 
     function transferFrom(address from,
         address to, uint amount)
@@ -357,12 +331,19 @@ contract BasketL2 is ERC6909 {
             }
         } return _transfer(from, to, amount);
     }
-
-    function turn(address from, 
+    
+    // used by AUX.redeem()...
+    function turn(address from, // a la burning...
         uint value) onlyUs public returns (uint) {
         return _transferHelper(from, address(0), value);
     }
-    
+    function _transfer(address from, 
+        address to, uint amount)
+        internal returns (bool) {
+        _transferHelper(from,
+            to, amount);
+            return true;
+    }
     function _transferHelper(address from, address to,
         uint amount) internal returns (uint sent) {
         uint[] memory batches = perMonth[from].getSortedSet();
@@ -371,7 +352,7 @@ contract BasketL2 is ERC6909 {
             BasketLib.matureBatches(batches,
                 block.timestamp, _deployed) :
                     int(batches.length - 1);
-        
+        // 
         while (amount > 0 && i >= 0) {
             uint k = batches[uint(i)];
             uint amt = Math.min(amount,
@@ -389,8 +370,7 @@ contract BasketL2 is ERC6909 {
                 }   amount -= amt;
                     sent += amt;
             } i--;
-        }
-        if (sent > 0) {
+        } if (sent > 0) {
             totalBalances[from] -= sent;
             if (burning) {
                 _totalSupply -= sent;
@@ -399,12 +379,4 @@ contract BasketL2 is ERC6909 {
             }
         }
     }
-
-    function _transfer(address from, 
-        address to, uint amount)
-        internal returns (bool) {
-        _transferHelper(from,
-            to, amount);
-            return true;
-    }
-} 
+}

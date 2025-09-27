@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
@@ -9,7 +8,7 @@ import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 
 /**
  * @title BasketLib
- * @dev Shared library for pure calculations used by both Basket contracts
+ * @dev Shared library 
  */
 library BasketLib {
     uint public constant WAD = 1e18;
@@ -34,8 +33,7 @@ library BasketLib {
             if (batches[uint(i)] <= currentMonth) {
                 return i;
             }
-        }
-        return -1;
+        } return -1;
     }
     
     /**
@@ -50,20 +48,18 @@ library BasketLib {
         uint amount, uint max, uint fee
     ) external pure returns (uint amountNeeded, 
         uint amountReceived) { amountNeeded = amount;
-        
         if (fee > 0 && fee < WAD / 10) {
             amountNeeded = FullMath.mulDiv(
-                    amount, WAD + fee, WAD);
+                 amount, WAD + fee, WAD);
         }
         if (max >= amountNeeded) {
-            amountReceived = fee > 0 ? 
-                FullMath.mulDiv(amountNeeded, WAD - fee, WAD) : amountNeeded;
-
-            return (amountNeeded, amountReceived);
-        } else {
-            amountReceived = fee > 0 ? 
-                FullMath.mulDiv(max, WAD - fee, WAD) : 
-                max;
+            amountReceived = fee > 0 ? FullMath.mulDiv(
+                          amountNeeded, WAD - fee, WAD) : amountNeeded;
+                  return (amountNeeded, amountReceived);
+        } 
+        else { amountReceived = fee > 0 ? 
+            FullMath.mulDiv(max,
+            WAD - fee, WAD) : max;
             return (max, amountReceived);
         }
     }
@@ -95,12 +91,10 @@ library BasketLib {
         bool scaleUp) external view returns (uint scaled) {
         uint decimals = IERC20(token).decimals();
         uint scale = decimals < 18 ? 18 - decimals : 0;
-        if (scale > 0) { scaled = scaleUp ? 
+        if (scale > 0) scaled = scaleUp ? 
                             amount * (10 ** scale) : 
                             amount / (10 ** scale);
-        } else {
-            scaled = amount;
-        }   return scaled;
-    }
-
+        else scaled = amount;
+        return scaled;
+    }   
 }

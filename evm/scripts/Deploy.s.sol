@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/console.sol";
 
-import {AuxV3} from "../src/AuxV3.sol";
+import {Amp} from "../src/Amp.sol";
 import {Router} from "../src/Router.sol";
 import {Router} from "../src/Rover.sol";
 import {Aux} from "../src/Aux.sol";
@@ -17,10 +17,11 @@ import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol";
 import {INonfungiblePositionManager} from "../src/imports/v3/INonfungiblePositionManager.sol";
 import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
 
-contract Deploy is Script {
-    address[] public STABLECOINS;
-    address[] public VAULTS;    
-    // IPoolAddressesProvider
+contract Deploy is Script { 
+    address[] public STABLES; 
+    address[] public VAULTS; 
+    
+    // IPoolAddressesProvider    
     address public aaveAddr = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
     // Ethereum : 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e
     // Polygon : 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb
@@ -93,6 +94,14 @@ contract Deploy is Script {
     // Polygon : 0x80Eede496655FB9047dd39d9f418d5483ED600df
     // Arbi : 0x80Eede496655FB9047dd39d9f418d5483ED600df
     
+    IERC20 public WBTC = IERC20(0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599);
+    // Ethereum : 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599
+    // Ethereum : 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E
+    // Polygon : 0xc4ce1d6f5d98d65ee25cf85e9f2e9dcfee6cb5d6
+    // Base : 0x417Ac0e078398C154EdFadD9Ef675d30Be60Af93
+    // Arbi : 0x498bf2b1e120fed3ad3d42ea2165e9b73f99c1e5
+
+
     address[] public VAULTS;
     IERC4626 public gauntletWETHvault = IERC4626(0x0623a67D69bB2F59D266897A15dC1509d291D631);
     // ^ L1 Ethereum : 0x4881Ef0BF6d2365D3dd6499ccd7532bcdBCE0658
@@ -161,7 +170,16 @@ contract Deploy is Script {
     // Base : 0x2626664c2603336E57B271c5C0b26F421741e481
     // Sonic : 0xaa52bB8110fE38D0d2d2AF0B85C3A3eE622CA455
 
-    IUniswapV3Pool public V3pool = IUniswapV3Pool(0xc6962004f452be9203591991d15f6b388e09e8d0);
+    // TODO get the arbi one to initialise pool price
+    IUniswapV3Pool public WBTCv3pool = IUniswapV3Pool();
+    // Ethereum : 0x99ac8ca7087fa4a2a1fb6357269965a2014abc35
+    // Polygon : 
+    // Unichain : 
+    // Arbi : 
+    // Base : 
+    // Sonic : 
+
+    IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0xc6962004f452be9203591991d15f6b388e09e8d0);
     // Ethereum : 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640
     // Polygon : 0x45dDa9cb7c25131DF268515131f647d726f50608
     // Unichain : 0xBeAD5792bB6C299AB11Eaa425aC3fE11ebA47b3B
@@ -172,6 +190,7 @@ contract Deploy is Script {
     address aTokenDAIonARB = 0x82E64f49Ed5EC1bC6e43DAD4FC8Af9bb3A2312EE;
     address aTokenFRAXonARB = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5; 
     address aTokenGHOonARB = 0xeBe517846d0F36eCEd99C735cbF6131e1fEB775D;
+    
     
     function run() public { // handle private key...
         string memory privateKeyStr = vm.envString(
@@ -187,10 +206,10 @@ contract Deploy is Script {
                           privateKeyStr)));
         }
         
-        STABLECOINS = [ // do not change
+        STABLES = [ // do not change
             address(USDC), address(USDT), // < these two are deposited in Morpho
-            address(DAI),  address(FRAX), // < these two,
-            address(GHO), // and GHO are deposited in AAVE
+            address(DAI),  address(GHO), // < these two get deposit in AAVE
+            address(FRAX), // < plus this one as well...^^^^^^^^^^^^^^^^^^^
             address(USDE), address(USDS), // these 2 and next 2
             address(CRVUSD), address(SFRAX), // are deposited anywhere
             address(SUSDS), address(SUSDE), 
@@ -202,7 +221,7 @@ contract Deploy is Script {
             aTokenDAIonARB, aTokenFRAXonARB,
             aTokenGHOonARB
         ]; /* TODO L1
-        STABLECOINS = [
+        STABLES = [
             address(USDC), address(USDT),
             address(DAI), address(USDS), 
             address(FRAX), address(USDE), 
@@ -221,7 +240,7 @@ contract Deploy is Script {
     
         /*
         Aux AUX = new Aux(address(V4router),
-            address(V3pool), address(V3router),
+            address(WETHv3pool), address(V3router),
             address(gauntletWETHvault), aavePool,
             aaveData, aaveAddr);
       
@@ -243,14 +262,14 @@ contract Deploy is Script {
 
         /*
         V4router.setup(address(QUID),
-            address(AUX), address(V3pool));
+            address(AUX), address(WETHv3pool));
         
         USDC.transfer(address(AUX), 1000000);
         AUX.setQuid{value: 1 wei}(address(QUID));
         
-        AuxV3 AUXv3 = new AuxV3(aavePool, aaveData, aaveAddr);
+        Amp AUXv3 = new Amp(aavePool, aaveData, aaveAddr);
         Router V3 = new Router(address(AUXv3), address(wS), 
-            address(USDC), address(nfpm), address(V3pool), 
+            address(USDC), address(nfpm), address(WETHv3pool), 
             address(V3router) // newer interface on L1 and Arbitrum
         );  AUX.setup(payable(address(V3)));
 

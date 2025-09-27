@@ -5,11 +5,13 @@ out = "out"
 libs = ["lib"]
 ffi = true
 
+gas_reports = ["*"]
 fs_permissions = [
     { access = "read-write", path = ".forge-snapshots/"},
     { access = "read-write", path = "demo/src/contracts/"},
     { access = "read-write", path = "src/contracts/"},
-    { access = "read-write", path = "deployments/"}
+    { access = "read-write", path = "deployments/"},
+    { access = "read-write", path = "./"}
 ]
 
 solc_version = "0.8.26"

@@ -3,7 +3,7 @@
     {
       "hash": "0x414629a84e382776899f3f083d7d232acf992668d436549aebcd587105512f87",
       "transactionType": "CREATE",
-      "contractName": "AuxV3",
+      "contractName": "Amp",
       "contractAddress": "0x2ce5cfba940b8e8791864307413ba1334bbd0cd1",
       "function": null,
       "arguments": [
@@ -50,7 +50,7 @@
     {
       "hash": "0x6971b6814b31c924eb0f7eb11f064f0f5c5b7c7184cf8125c3b5eba2bf212859",
       "transactionType": "CALL",
-      "contractName": "AuxV3",
+      "contractName": "Amp",
       "contractAddress": "0x2ce5cfba940b8e8791864307413ba1334bbd0cd1",
       "function": "setup(address)",
       "arguments": [

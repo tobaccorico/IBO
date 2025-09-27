@@ -17,9 +17,6 @@ library Types {
     }    
     struct Deposit {
         uint pooled_eth;
-        // following 2 are 
-        // unused in UniV3
-        uint eth_shares;
         uint usd_owed;
         // Masterchef-style
         // snapshots of fees:

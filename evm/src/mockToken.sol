@@ -4,7 +4,7 @@ pragma solidity >=0.8.4 <0.9.0;
 import {ERC20} from "solmate/src/tokens/ERC20.sol";
 
 contract mockToken is ERC20 {
-    address public rover;
+    address internal rover;
     modifier onlyVogue {
         require(msg.sender == address(rover), "403"); _;
     }

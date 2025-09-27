@@ -1,37 +1,39 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Types} from "./imports/Types.sol";
 import {Rover} from "./Rover.sol";
-import {FullMath} from "./imports/v3/FullMath.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {stdMath} from "forge-std/StdMath.sol";
+import {Types} from "./imports/Types.sol";
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+import {stdMath} from "forge-std/StdMath.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
+
 import {IPool} from "aave-v3/interfaces/IPool.sol";
 import {IUiPoolDataProviderV3} from "aave-v3/helpers/interfaces/IUiPoolDataProviderV3.sol";
 import {IPoolAddressesProvider} from "aave-v3/interfaces/IPoolAddressesProvider.sol";
 
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
+// import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
 import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol";
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
-import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 
-// import "lib/forge-std/src/console.sol"; 
-/// @notice Handles S/USD conversions, AAVE APR/APY
-/// @dev Integrates V3 for swaps, and manages wS vault 
-contract AuxV3 is Ownable { 
+import "lib/forge-std/src/console.sol"; 
+
+/// @notice Handles AAVE APR/APY
+/// @dev Integrates V3 for swaps
+contract Amp is Ownable { 
     IPoolAddressesProvider ADDR;
     IUiPoolDataProviderV3 DATA;
-    
     uint USDCsharesSnapshot;
-    uint wSsharesSnapshot;
-    
-    ISwapRouter v3Router; 
+    uint wethSharesSnapshot;
+    IERC20 USDC; WETH9 weth;
+    bool token1isWETH;
     IUniswapV3Pool v3Pool;
+    ISwapRouter v3Router; 
     Rover V3; IPool AAVE;
-    IERC20 USDC; WETH9 wS;
 
     // uint internal UNWIND_COST;
     uint constant WAD = 1e18;
@@ -72,19 +74,19 @@ contract AuxV3 is Ownable {
         uint256 blockNumber
     );
 
-    /// @dev One-time setup requiring $1 USDC and 1 wei (of S)
-    // must send $1 USDC to address(this) & attach msg.value 1 wei
-    function setup(address payable _rover) 
-        external onlyOwner { renounceOwnership();
-        require(address(Rover(_rover).AUX()) == address(this), "!");
-        
-        V3 = Rover(_rover);    
+    function setup(address payable _rover, address) external onlyOwner { 
+        require(address(Rover(_rover).AMP()) == address(this));
+    
+        renounceOwnership();
+        V3 = Rover(_rover); 
         USDC = IERC20(V3.USDC());
-        wS = WETH9(payable(
-          address(V3.wS())));
+        weth = WETH9(payable(
+          address(V3.weth())));
         
         v3Pool = IUniswapV3Pool(V3.POOL());
         v3Router = ISwapRouter(V3.ROUTER());
+        
+        token1isWETH = v3Pool.token0() == address(USDC);
         
         USDC.approve(address(V3),
                     type(uint).max);
@@ -95,27 +97,32 @@ contract AuxV3 is Ownable {
         USDC.approve(address(v3Router),
                     type(uint).max);
       
-        wS.approve(address(v3Router),
+        weth.approve(address(v3Router),
                     type(uint).max);
 
         // ^ max approvals considered safe
         // to make as we fully control code
-        wS.approve(address(AAVE),
+        weth.approve(address(AAVE),
                  type(uint).max);  
     }
 
-    /// @notice Open leveraged long position (borrow wS against USDC)
+    /// @notice Open leveraged long position (borrow weth against USDC)
     /// @dev 70% LTV, excess USDC locked as collateral
-    /// @param amount wS amount to deposit
-    function leverZeroForOne(uint amount) payable external {
-        // require(msg.value >= UNWIND_COST);
-        amount = _depositS(amount);
-        // amount -= UNWIND_COST;
-        
+    /// @param amount weth amount to deposit
+    function leverETH(address who, uint amount, 
+        uint fromV4) payable external {
+        uint160 sqrtPriceX96 = V3.repackNFT(0);
+        uint price = V3.getPrice(sqrtPriceX96);
+        if (fromV4 > 0) { // msg.sender is Aux...
+            weth.transferFrom(msg.sender,
+                    address(this), amount);
+            
+            USDC.transferFrom(msg.sender,
+                    address(this), fromV4);
+        }
+        else { amount = _deposit(amount); }
         uint borrowing = amount * 7 / 10;
         uint buffer = amount - borrowing;
-        uint160 sqrtPriceX96 = V3.repackNFT();
-        uint price = V3.getPrice(sqrtPriceX96);
         uint totalValue = FullMath.mulDiv(
                         amount, price, WAD);
 
@@ -123,68 +130,96 @@ contract AuxV3 is Ownable {
         // selling the amount borrowed for USDC and 
         // depositing the USDC for a future step in
         // unwind which is a basketball crossover
-        require(totalValue > 100 * WAD, "$100");
-        uint took = totalValue / 1e12;
-        V3.withdrawUSDC(took, price); // borrow from V3
-        putUSDC(took); putS(amount/*+ UNWIND_COST*/);
-        totalBorrowed[address(wS)] += borrowing;
+        uint took = totalValue / 1e12 - fromV4;
+        if (took > 0) // borrow dollars from UniV3...
+            require(took - V3.withdrawUSDC(took) == 0);
+        
+        putUSDC(totalValue / 1e12); put(amount);
+        totalBorrowed[address(weth)] += borrowing;
         // ^ there will always be enough to pay this
-        // back because we are depositting S first
-        AAVE.borrow(address(wS), borrowing,
+        // back because we are depositting ETH first
+        AAVE.borrow(address(weth), borrowing,
               2, 0, address(this));
         
         amount = FullMath.mulDiv(borrowing, price, 1e12 * WAD);
         amount = _buyUSDC(borrowing, amount - amount / 200);
-        // ^ selling borrowed S for adding leverage power
+        // ^ selling borrowed WETH for adding leverage power
         
-        putUSDC(amount); 
-        pledgesZeroForOne[msg.sender] = Types.viaAAVE({
+        putUSDC(amount);
+        Types.viaAAVE memory order = Types.viaAAVE({
             breakeven: totalValue, // < "supplied" gets
             // reset; need to remember original value
             // in order to calculate gains eventually
             supplied: took, borrowed: borrowing,
             buffer: buffer, price: int(price) });
         
-         emit LeveragedPositionOpened(
+        if (token1isWETH) { // check for pre-existing order
+            require(pledgesOneForZero[who].breakeven == 0);
+            pledgesOneForZero[who] = order;
+        } 
+        else { 
+            require(pledgesZeroForOne[who].breakeven == 0);
+            pledgesZeroForOne[who] = order; 
+        }
+        
+        emit LeveragedPositionOpened(
             msg.sender, true, took, 
             borrowing, buffer, int(price), 
             totalValue,block.number);
     }
 
-    /// @notice Open leveraged short position (borrow USDC against wS)
+    /// @notice Open leveraged short position (USDC against weth)
     /// @dev 70% LTV on AAVE, deposited stablecoins as collateral
     /// @param amount Stablecoin amount to deposit
-    function leverOneForZero(uint amount) payable external {
-        // require(msg.value >= UNWIND_COST);
-        uint160 sqrtPriceX96 = V3.repackNFT();
+    function leverUSD(address who, uint amount, 
+        uint fromV4) payable external {
+        uint160 sqrtPriceX96 = V3.repackNFT(0);
         uint price = V3.getPrice(sqrtPriceX96);
+        if (fromV4 > 0) 
+            weth.transferFrom(msg.sender,
+                    address(this), fromV4);
+            
         USDC.transferFrom(msg.sender, 
             address(this), amount);
+
         uint deposited = amount; 
         putUSDC(amount);
         
-        uint inS = FullMath.mulDiv(WAD,
+        uint inWETH = FullMath.mulDiv(WAD,
                         amount, price);
-
-        // borrow S from Uni to use in AAVE
+        amount = inWETH;
+        inWETH -= fromV4;
+        if (inWETH > 0) 
+            require(inWETH - V3.take(inWETH) == 0); 
+        // borrow WETH from V3, use in AAVE
         // as collateral to borrow dollars
-        inS = V3.withdrawS(inS, price); putS(inS); 
-        amount = FullMath.mulDiv(inS * 7 / 10, 
+            
+        put(amount); // deposit WETH as collat...
+        amount = FullMath.mulDiv(inWETH * 7 / 10, 
                             price, WAD * 1e12);
         
+        // borrow 70% of the WETH value in USDC
         AAVE.borrow(address(USDC), amount, 2, 0, 
            address(this)); putUSDC(amount);
         
         totalBorrowed[address(USDC)] += amount; 
-        pledgesOneForZero[msg.sender] = Types.viaAAVE({
+        Types.viaAAVE memory order = Types.viaAAVE({
             breakeven: deposited, // < "supplied" gets
             // reset; need to remember original value
             // in order to calculate gains eventually
-            supplied: inS, borrowed: amount,
+            supplied: inWETH, borrowed: amount,
             buffer: 0, price: int(price) });
-        
-         emit LeveragedPositionOpened(
-            msg.sender, false, inS,
+
+        if (token1isWETH) { // check for pre-existing order
+            require(pledgesZeroForOne[who].breakeven == 0);
+            pledgesZeroForOne[who] = order;
+        }
+        else { 
+            require(pledgesOneForZero[who].breakeven == 0);
+            pledgesOneForZero[who] = order; 
+        }
+        emit LeveragedPositionOpened(
+            msg.sender, false, inWETH,
             amount, 0, int(price),
             deposited, block.number);
     }
@@ -203,56 +238,52 @@ contract AuxV3 is Ownable {
                           amount, address(this));
     }
 
-    function putS(uint amount) 
-        public onlyUs {
-        AAVE.supply(address(wS),
-        amount, address(this), 0);
-        AAVE.setUserUseReserveAsCollateral(
-                        address(wS), true);
+    function put(uint amount) public onlyUs {
+        AAVE.supply(address(weth), amount, address(this), 0);
+        AAVE.setUserUseReserveAsCollateral(address(weth), true);
     } fallback() external payable {} 
     
-    function getS(uint howMuch) onlyUs 
+    function get(uint howMuch) onlyUs 
         public returns (uint withdrawn) {
-        uint amount = Math.min(wSsharesSnapshot, howMuch);
-        withdrawn = AAVE.withdraw(address(wS),
+        uint amount = Math.min(wethSharesSnapshot, howMuch);
+        withdrawn = AAVE.withdraw(address(weth),
                         amount, address(this));
         if (msg.sender != address(this))
-            wS.transfer(msg.sender, withdrawn);
+            weth.transfer(msg.sender, withdrawn);
     }
 
     function _buyUSDC(uint howMuch,
         uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
-            abi.encodePacked(address(wS), uint24(500), address(USDC)),
+            abi.encodePacked(address(weth), uint24(500), address(USDC)),
             address(this), /* block.timestamp, */ howMuch, minExpected));
     }
 
-    function _buyS(uint howMuch, 
+    function _buy(uint howMuch, 
         uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
-            abi.encodePacked(address(USDC), uint24(500), address(wS)),
+            abi.encodePacked(address(USDC), uint24(500), address(weth)),
             address(this), /* block.timestamp, */ howMuch, minExpected));
     }
     
-    function sendS(uint howMuch, address toWhom) 
-        public onlyUs { _sendS(howMuch, toWhom); }
+    function send(uint howMuch, address toWhom) 
+        public onlyUs { _send(howMuch, toWhom); }
                    
-    function _sendS(uint howMuch, address toWhom) internal {
+    function _send(uint howMuch, address toWhom) internal {
         // any unused gas from clearSwaps() lands back in 
-        // address(this) as residual S; re-appropriate:
-        uint alreadyInS = address(this).balance;
-        howMuch -= alreadyInS;
-        howMuch = getS(howMuch);
+        // address(this) as residual ETH; re-appropriate:
+        uint already = address(this).balance;
+        howMuch -= already; howMuch = get(howMuch);
         (bool _success, ) = payable(toWhom).call{ value: howMuch + 
-                                                  alreadyInS }("");
+                                                  already }("");
                                                   assert(_success);
     }
 
-    function _depositS(uint amount) internal returns (uint) {
-        if (amount > 0) { wS.transferFrom(msg.sender,
+    function _deposit(uint amount) internal returns (uint) {
+        if (amount > 0) { weth.transferFrom(msg.sender,
                             address(this), amount);
         } if (msg.value > 0) {
-            wS.deposit{value: msg.value}();
+            weth.deposit{value: msg.value}();
             amount += msg.value;
         }   return amount;  
     } 
@@ -273,7 +304,7 @@ contract AuxV3 is Ownable {
     } 
     
     /// @notice Calculate APR on AAVE positions
-    /// @return repay Interest owed wS borrows
+    /// @return repay Interest owed weth borrows
     /// @return repayUSDC owed on USDC borrows
     function _howMuchInterest() internal 
         returns (uint repay, uint repayUSDC) {
@@ -286,84 +317,83 @@ contract AuxV3 is Ownable {
         { uint scaledDebt = userData[2].scaledVariableDebt;
           uint borrowIndex = reserveData[2].variableBorrowIndex;
           uint actualDebt = (scaledDebt * borrowIndex) / RAY;
-          wSsharesSnapshot = IERC20(
+          wethSharesSnapshot = IERC20( // index 0 on L1, and L2
             reserveData[2].aTokenAddress).balanceOf(address(this));
-          repay = actualDebt - totalBorrowed[address(wS)]; }
+          repay = actualDebt - totalBorrowed[address(weth)]; }
         // extra APY from flipping debt in unwind against...
         // initial collateral which is only repaid once but
         // remains staked, not costing more APY, earning APY
         { uint scaledDebt = userData[1].scaledVariableDebt;
           uint borrowIndex = reserveData[1].variableBorrowIndex;
           uint actualDebt = (scaledDebt * borrowIndex) / RAY;
-          USDCsharesSnapshot = IERC20(
+          USDCsharesSnapshot = IERC20( // index 3 on L1, 4 on Base
             reserveData[1].aTokenAddress).balanceOf(address(this));
           repayUSDC = actualDebt - totalBorrowed[address(USDC)]; }
     }
     
     function unwindZeroForOne(address[] calldata whose) 
-        external { uint160 sqrtPriceX96 = V3.repackNFT();
+        external { uint160 sqrtPriceX96 = V3.repackNFT(0);
         int price = int(V3.getPrice(sqrtPriceX96)); 
         // ^ 1 value yields outcome for all whose
         Types.viaAAVE memory pledge; uint i;
         uint buffer; uint pivot; uint touched;
         // ^ individual values for each whose
-        (uint repayS, // < in wrapped S... 
+        (uint repay, // < in wrapped ETH... 
         uint repayUSDC) = _howMuchInterest();
-        // we always take profits (fully exit) in USDC
+        // take profits (fully exit) in USDC
         while (i < 30 && i < whose.length) {
             address who = whose[i]; 
             pledge = pledgesZeroForOne[who];
             int delta = (price - pledge.price)
                         * 1000 / pledge.price;
+
             if (delta <= -49 || delta >= 49) { 
-                // touched += 1;
-                // supplied is in USDC
-                if (pledge.borrowed > 0) { pivot = getS(pledge.borrowed);
+                // touched += 1; // supplied is in USDC
+                if (pledge.borrowed > 0) { pivot = get(pledge.borrowed);
                     require(stdMath.delta(pledge.borrowed, pivot) <= 5);
-                    _unwind(address(wS), address(USDC), pivot, pledge.supplied);
+                    _unwind(address(weth), address(USDC), pivot, pledge.supplied);
                     
                     if (delta <= -49) { // use all of the dollars we possibly can to buy the dip
                         buffer = FullMath.mulDiv(pledge.borrowed, uint(pledge.price), WAD * 1e12);
-                        // recover USDC that we got from selling the borrowed wS...
+                        // recover USDC that we got from selling the borrowed weth...
                         pivot = _getUSDC(buffer); 
                         require(stdMath.delta(pivot, buffer) <= 5); 
                         
                         buffer = pivot + pledge.supplied;
                         pivot = FullMath.mulDiv(WAD, buffer * 1e12, uint(price));
-                        buffer = _buyS(buffer, pivot - pivot / 200); putS(buffer);
+                        buffer = _buy(buffer, pivot - pivot / 200); put(buffer);
 
                         pledge.supplied = buffer; 
                         pledge.price = price; // < so we may know when to sell later
                     } else { // the buffer will be saved in USDC, used to pivot later
-                        buffer = getS(pledge.buffer); // 
+                        buffer = get(pledge.buffer); // 
                         require(stdMath.delta(buffer, pledge.buffer) <= 5);
                         pivot = FullMath.mulDiv(buffer, uint(price), WAD * 1e12);
                         pivot = _buyUSDC(buffer, pivot - pivot / 200) + pledge.supplied;
                         pledge.buffer = pivot + FullMath.mulDiv(pledge.borrowed,
                                                 uint(pledge.price), WAD * 1e12);
-                        
                         pledge.supplied = 0;
                         putUSDC(pivot); 
                     }
                     pledge.borrowed = 0;
                     pledgesZeroForOne[who] = pledge;
                 }
-                // following condition is our initial pivot
+                // following condition is our initial pivot...
                 else if (delta <= -49 && pledge.buffer > 0) { 
                     buffer = _getUSDC(pledge.buffer); // buy dip
                     require(stdMath.delta(buffer, pledge.buffer) <= 5);
                     pivot = FullMath.mulDiv(WAD, buffer * 1e12, uint(price));
-                    buffer = _buyS(buffer, pivot - pivot / 200);
-                    pledge.supplied = buffer; putS(buffer);
-                    pledge.price = price; // < so we know when to sell
+                    buffer = _buy(buffer, pivot - pivot / 200);
+                    pledge.supplied = buffer; put(buffer);
+                    pledge.price = price; // < so we know when to sell...
                     pledgesZeroForOne[who] = pledge; // later for profit
                 }
                 else if (delta >= 49 && pledge.supplied > 0) {
-                    buffer = getS(pledge.supplied); // supplied is wS
-                    if (repayS > 0) {
-                        pivot = Math.min(buffer, repayS);
+                    buffer = get(pledge.supplied); // supplied is weth
+                    if (repay > 0) {
+                        pivot = Math.min(buffer, repay);
                         buffer -= pivot; 
-                        _unwind(address(wS), address(0), pivot, 0);
+                        _unwind(address(weth), address(0), pivot, 0);
                         // ^ address "out" and "supplied" irrelevant
                     }
                     pivot = FullMath.mulDiv(uint(price), buffer, 1e12 * WAD);
@@ -374,15 +404,13 @@ contract AuxV3 is Ownable {
                         pivot -= buffer;
                         _unwind(address(USDC), address(0), buffer, 0);
                         // ^ address "out" and "supplied" irrelevant
-                    }
-                    pivot -= breakeven;
-                    USDC.transfer(who, breakeven + pivot / 10);
-                    pivot -= pivot / 10;
+                    } 
+                    pivot = (pivot - breakeven) / 2;
+                    USDC.transfer(who, breakeven + pivot);
                     V3.depositUSDC(pivot, uint(price));   
                     delete pledgesZeroForOne[who]; 
                     // completed the cross-over... 
-                }
-                emit PositionUnwound(who, true,
+                } emit PositionUnwound(who, true,
                 price, delta, block.number); i++;
             }
         }
@@ -390,58 +418,58 @@ contract AuxV3 is Ownable {
     } // ^ gas compensation for service worker (caller)
 
     function unwindOneForZero(address[] calldata whose) 
-        external { uint160 sqrtPriceX96 = V3.repackNFT();
+        external { uint160 sqrtPriceX96 = V3.repackNFT(0);
         int price = int(V3.getPrice(sqrtPriceX96)); 
         // ^ 1 value yields outcome for all whose
         Types.viaAAVE memory pledge; uint i;
         uint buffer; uint pivot; uint touched;
         // ^ individual values for each whose
-        (uint repayS, // < in wrapped S... 
+        (uint repay, // < in wrapped ETH... 
         uint repayUSDC) = _howMuchInterest();
-        // we always take profits (fully exit) in USDC
+        // take profits (fully exit) in USDC
         while (i < 30 && i < whose.length) {
             address who = whose[i]; 
             pledge = pledgesOneForZero[who];
             int delta = (price - pledge.price)
                         * 1000 / pledge.price;
+            
             if (delta <= -49 || delta >= 49) {
                 // touched += 1;
                 if (pledge.borrowed > 0) {
                     pivot = _getUSDC(pledge.borrowed);
-                    _unwind(address(USDC), address(wS),
+                    _unwind(address(USDC), address(weth),
                                  pivot, pledge.supplied); 
 
-                    if (delta >= 49) { // after sell suppled wS, "supplied" will store $
+                    if (delta >= 49) { // after sell suppled weth, "supplied" will store $
                         pivot = FullMath.mulDiv(pledge.supplied, uint(price), WAD * 1e12);
                         pledge.supplied = _buyUSDC(pledge.supplied, pivot - pivot / 200);
                         putUSDC(pledge.supplied); pledge.price = price;
-                    } else { // buffer is is now in wS
+                    } else { // buffer is is now in weth
                         pledge.buffer = pledge.supplied;
-                        putS(pledge.supplied);
+                        put(pledge.supplied);
                         pledge.supplied = 0;
                     }   pledge.borrowed = 0;
                         pledgesOneForZero[who] = pledge;
-                }
-                // the following condition is our initial pivot
+                } // the following condition is our initial pivot
                 else if (delta <= -49 && pledge.supplied > 0) {
                     pivot = _getUSDC(pledge.supplied);
                     require(stdMath.delta(pledge.supplied, pivot) <= 5); 
                     pivot = FullMath.mulDiv(WAD, pledge.supplied * 1e12, uint(price));
-                    pledge.buffer =_buyS(pledge.supplied, pivot - pivot / 200);
+                    pledge.buffer =_buy(pledge.supplied, pivot - pivot / 200);
                     
-                    putS(pledge.buffer);
+                    put(pledge.buffer);
                     pledge.supplied = 0;
                     pledge.price = price;
                     pledgesOneForZero[who] = pledge;
                 }
                 else if (delta >= 49 && pledge.buffer > 0) {
-                    buffer = getS(pledge.buffer);
-                    if (repayS > 0) {
-                        pivot = Math.min(buffer, repayS);
+                    buffer = get(pledge.buffer);
+                    if (repay > 0) {
+                        pivot = Math.min(buffer, repay);
                         buffer -= pivot; 
-                        _unwind(address(wS), address(0), pivot, 0);
+                        _unwind(address(weth), address(0), pivot, 0);
                         // ^ address "out" and "supplied" irrelevant
-                    }
+                    } 
                     pivot = FullMath.mulDiv(uint(price), buffer, 1e12 * WAD);
                     pivot = _buyUSDC(buffer, pivot - pivot / 200);
                     uint breakeven = pledge.breakeven / 1e12;
@@ -449,15 +477,12 @@ contract AuxV3 is Ownable {
                         buffer = Math.min(pivot - breakeven, repayUSDC);
                         pivot -= buffer;
                         _unwind(address(USDC), address(0), buffer, 0);   
-                    }
-                    pivot -= breakeven;
-                    USDC.transfer(who, breakeven + pivot / 10);
-                    pivot -= pivot / 10;
+                    } pivot = (pivot - breakeven) / 2; // half profit
+                    USDC.transfer(who, breakeven + pivot);
                     V3.depositUSDC(pivot, uint(price));
                     delete pledgesOneForZero[who];
                     // completed the cross-over...
-                }
-                emit PositionUnwound(who, false,
+                } emit PositionUnwound(who, false,
                 price, delta, block.number); i++;
             }
         }
