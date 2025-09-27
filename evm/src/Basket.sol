@@ -171,15 +171,23 @@ contract Basket is OFT, // QD
     function mint(address pledge, uint amount, 
         address token, uint when) external {
         // delayed maturity ^^^^
-        AUX.deposit(pledge, token, amount);
-        uint month = Math.max(when, 
-            currentMonth() + 1);
-     
+        uint nextMonth = currentMonth() + 1;
+        if (msg.sender == V4) {
+            _mint(pledge, nextMonth, amount);
+            return;
+        }
+        uint deposited = AUX.deposit(pledge, token, amount);
+        uint decimals = IERC20(token).decimals();
+        uint normalized = decimals < 18 ? 
+            deposited * (10 ** (18 - decimals)) : 
+            deposited / (10 ** (decimals - 18));
+            
+        uint month = Math.max(when, nextMonth);
         (, uint yield) = AUX.get_metrics(false);
-        amount += FullMath.mulDiv(amount * yield,
-                month - currentMonth(), WAD * 12);
-                     _mint(pledge, month, amount);
-    } // same function in BasketL2.sol and here...
+        normalized += FullMath.mulDiv(normalized * yield,
+                        month - currentMonth(), WAD * 12);
+                         _mint(pledge, month, normalized);
+    } // same function in BasketL2.sol as we have here...
 
     function transferFrom(address from,
         address to, uint value) public 

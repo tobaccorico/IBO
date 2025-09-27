@@ -15,8 +15,8 @@ import {IUiPoolDataProviderV3} from "aave-v3/helpers/interfaces/IUiPoolDataProvi
 import {IPoolAddressesProvider} from "aave-v3/interfaces/IPoolAddressesProvider.sol";
 
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
-// import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
-import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol";
+import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
+// import {IV3SwapRouter as ISwapRouter} from "./imports/v3/IV3SwapRouter.sol";
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 
@@ -34,6 +34,7 @@ contract Amp is Ownable {
     IUniswapV3Pool v3Pool;
     ISwapRouter v3Router; 
     Rover V3; IPool AAVE;
+    address public AUX;
 
     // uint internal UNWIND_COST;
     uint constant WAD = 1e18;
@@ -45,7 +46,8 @@ contract Amp is Ownable {
 
     modifier onlyUs {
         require(msg.sender == address(this) 
-             || msg.sender == address(V3), "403"); _;
+             || msg.sender == address(V3)
+             || msg.sender == AUX, "403"); _;
     }
 
     constructor(address _aave, address _data, 
@@ -74,11 +76,12 @@ contract Amp is Ownable {
         uint256 blockNumber
     );
 
-    function setup(address payable _rover, address) external onlyOwner { 
-        require(address(Rover(_rover).AMP()) == address(this));
-    
+    function setup(address payable _rover, address _aux) external onlyOwner { 
+        require(address(Rover(_rover).AMP()) == address(this)); AUX = _aux;
+        
         renounceOwnership();
         V3 = Rover(_rover); 
+        
         USDC = IERC20(V3.USDC());
         weth = WETH9(payable(
           address(V3.weth())));
@@ -106,21 +109,22 @@ contract Amp is Ownable {
                  type(uint).max);  
     }
 
-    /// @notice Open leveraged long position (borrow weth against USDC)
+    /// @notice leveraged long (borrow weth against USDC)
     /// @dev 70% LTV, excess USDC locked as collateral
     /// @param amount weth amount to deposit
     function leverETH(address who, uint amount, 
         uint fromV4) payable external {
-        uint160 sqrtPriceX96 = V3.repackNFT(0);
+        uint160 sqrtPriceX96 = V3.repackNFT();
         uint price = V3.getPrice(sqrtPriceX96);
-        if (fromV4 > 0) { // msg.sender is Aux...
-            weth.transferFrom(msg.sender,
-                    address(this), amount);
-            
-            USDC.transferFrom(msg.sender,
-                    address(this), fromV4);
+        
+         if (fromV4 > 0) { // msg.sender is Aux
+            weth.transferFrom(msg.sender, 
+                address(this), amount);
+            USDC.transferFrom(msg.sender, 
+                address(this), fromV4);
         }
-        else { amount = _deposit(amount); }
+        else amount = _deposit(amount); 
+
         uint borrowing = amount * 7 / 10;
         uint buffer = amount - borrowing;
         uint totalValue = FullMath.mulDiv(
@@ -130,11 +134,15 @@ contract Amp is Ownable {
         // selling the amount borrowed for USDC and 
         // depositing the USDC for a future step in
         // unwind which is a basketball crossover
-        uint took = totalValue / 1e12 - fromV4;
-        if (took > 0) // borrow dollars from UniV3...
-            require(took - V3.withdrawUSDC(took) == 0);
-        
-        putUSDC(totalValue / 1e12); put(amount);
+        uint usdcNeeded = totalValue / 1e12;
+        uint took = 0;
+        if (fromV4 < usdcNeeded) {
+            took = usdcNeeded - fromV4;
+            if (took > 0) // borrow dollars from UniV3...
+                require(took - V3.withdrawUSDC(took) == 0);
+        }
+        putUSDC(fromV4 + took); put(amount);
+
         totalBorrowed[address(weth)] += borrowing;
         // ^ there will always be enough to pay this
         // back because we are depositting ETH first
@@ -161,7 +169,6 @@ contract Amp is Ownable {
             require(pledgesZeroForOne[who].breakeven == 0);
             pledgesZeroForOne[who] = order; 
         }
-        
         emit LeveragedPositionOpened(
             msg.sender, true, took, 
             borrowing, buffer, int(price), 
@@ -173,7 +180,7 @@ contract Amp is Ownable {
     /// @param amount Stablecoin amount to deposit
     function leverUSD(address who, uint amount, 
         uint fromV4) payable external {
-        uint160 sqrtPriceX96 = V3.repackNFT(0);
+        uint160 sqrtPriceX96 = V3.repackNFT();
         uint price = V3.getPrice(sqrtPriceX96);
         if (fromV4 > 0) 
             weth.transferFrom(msg.sender,
@@ -186,28 +193,29 @@ contract Amp is Ownable {
         putUSDC(amount);
         
         uint inWETH = FullMath.mulDiv(WAD,
-                        amount, price);
-        amount = inWETH;
-        inWETH -= fromV4;
-        if (inWETH > 0) 
-            require(inWETH - V3.take(inWETH) == 0); 
+                        amount * 1e12, price);
+        // ^ convert USDC to 18 decimals first
+        
+        uint neededFromV3 = 0;
+        if (inWETH > fromV4) 
+            neededFromV3 = V3.take(inWETH - fromV4);
         // borrow WETH from V3, use in AAVE
-        // as collateral to borrow dollars
-            
-        put(amount); // deposit WETH as collat...
-        amount = FullMath.mulDiv(inWETH * 7 / 10, 
+        // as collateral to borrow dollars   
+        put(fromV4 + neededFromV3); // collat
+        uint totalWETH = fromV4 + neededFromV3;
+        amount = FullMath.mulDiv(totalWETH * 7 / 10, 
                             price, WAD * 1e12);
         
         // borrow 70% of the WETH value in USDC
         AAVE.borrow(address(USDC), amount, 2, 0, 
-           address(this)); putUSDC(amount);
+        address(this)); putUSDC(amount);
         
         totalBorrowed[address(USDC)] += amount; 
         Types.viaAAVE memory order = Types.viaAAVE({
             breakeven: deposited, // < "supplied" gets
             // reset; need to remember original value
             // in order to calculate gains eventually
-            supplied: inWETH, borrowed: amount,
+            supplied: neededFromV3, borrowed: amount,
             buffer: 0, price: int(price) });
 
         if (token1isWETH) { // check for pre-existing order
@@ -219,7 +227,7 @@ contract Amp is Ownable {
             pledgesOneForZero[who] = order; 
         }
         emit LeveragedPositionOpened(
-            msg.sender, false, inWETH,
+            msg.sender, false, neededFromV3,
             amount, 0, int(price),
             deposited, block.number);
     }
@@ -256,16 +264,31 @@ contract Amp is Ownable {
         uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
             abi.encodePacked(address(weth), uint24(500), address(USDC)),
-            address(this), /* block.timestamp, */ howMuch, minExpected));
+            address(this), block.timestamp, howMuch, minExpected));
     }
 
     function _buy(uint howMuch, 
         uint minExpected) internal returns (uint) {
         return v3Router.exactInput(ISwapRouter.ExactInputParams(
             abi.encodePacked(address(USDC), uint24(500), address(weth)),
-            address(this), /* block.timestamp, */ howMuch, minExpected));
+            address(this), block.timestamp, howMuch, minExpected));
     }
-    
+
+    /*
+    function _buyUSDC(uint howMuch,
+        uint minExpected) internal returns (uint) {
+        return v3Router.exactInput(ISwapRouter.ExactInputParams(
+            abi.encodePacked(address(weth), uint24(500), address(USDC)),
+            address(this), howMuch, minExpected));
+    }
+    function _buy(uint howMuch, 
+        uint minExpected) internal returns (uint) {
+        return v3Router.exactInput(ISwapRouter.ExactInputParams(
+            abi.encodePacked(address(USDC), uint24(500), address(weth)),
+            address(this), howMuch, minExpected));
+    }
+    */ 
+
     function send(uint howMuch, address toWhom) 
         public onlyUs { _send(howMuch, toWhom); }
                    
@@ -332,7 +355,7 @@ contract Amp is Ownable {
     }
     
     function unwindZeroForOne(address[] calldata whose) 
-        external { uint160 sqrtPriceX96 = V3.repackNFT(0);
+        external { uint160 sqrtPriceX96 = V3.repackNFT();
         int price = int(V3.getPrice(sqrtPriceX96)); 
         // ^ 1 value yields outcome for all whose
         Types.viaAAVE memory pledge; uint i;
@@ -418,7 +441,7 @@ contract Amp is Ownable {
     } // ^ gas compensation for service worker (caller)
 
     function unwindOneForZero(address[] calldata whose) 
-        external { uint160 sqrtPriceX96 = V3.repackNFT(0);
+        external { uint160 sqrtPriceX96 = V3.repackNFT();
         int price = int(V3.getPrice(sqrtPriceX96)); 
         // ^ 1 value yields outcome for all whose
         Types.viaAAVE memory pledge; uint i;

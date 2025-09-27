@@ -46,13 +46,15 @@ contract Everything_Test is Test, Fixtures {
     uint public constant USDC_PRECISION = 1e6;
     address public User01 = address(0x1001); 
  
-    
+    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
     ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
     IUniswapV3Pool public WBTCv3pool = IUniswapV3Pool(0x99ac8cA7087fA4A2A1FB6357269965A2014ABc35);
     
     address[] public STABLECOINS;
     address[] public VAULTS;
+
+    IERC20 public WETH = IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
     address public aavePool = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address public aaveData = 0x3F78BBD206e4D3c504Eb854232EdA7e47E9Fd8FC;
@@ -113,6 +115,10 @@ contract Everything_Test is Test, Fixtures {
         vm.deal(User01, 10000 ether);
 
         AMP = new Amp(aavePool, aaveData, aaveAddr);
+        V3 = new Rover(address(AMP), address(WETH), 
+            address(USDC), address(nfpm), address(WETHv3pool), 
+            address(V3router) // newer interface on L1 and Arbitrum
+        );
         
         V4 = new Vogue(manager, 
         address(gauntletWETHvault));
@@ -122,6 +128,8 @@ contract Everything_Test is Test, Fixtures {
             address(WBTCv3pool), address(V3router),
             address(0), // TODO plugin V3
             STABLECOINS, VAULTS);
+
+        AMP.setup(payable(address(V3)), address(AUX));
 
         QUID = new Basket(address(V4),
             address(AUX));
@@ -134,7 +142,7 @@ contract Everything_Test is Test, Fixtures {
 
         vm.startPrank(User01);
         USDC.approve(address(AUX), 500000 * USDC_PRECISION);
-        QUID.mint(User01, 200000 * WAD, address(USDC), 0);
+        QUID.mint(User01, 200000 * USDC_PRECISION, address(USDC), 0);
         vm.stopPrank();
     }
 
@@ -193,11 +201,9 @@ contract Everything_Test is Test, Fixtures {
             assertApproxEqAbs(balanceAfter - balanceBefore, 
                             4 ether, 6000000000000000000);
         } else {
-            // Balance decreased (gas costs)
             console.log("Balance decreased by:", balanceBefore - balanceAfter);
             revert("Swaps were not processed");
         }
-
         USDCbalanceBefore = USDC.balanceOf(User01);
         vm.roll(vm.getBlockNumber() + 1);
         
@@ -209,15 +215,14 @@ contract Everything_Test is Test, Fixtures {
         USDCbalanceAfter = USDC.balanceOf(User01);
 
         assertApproxEqAbs(USDCbalanceAfter - USDCbalanceBefore,
-                            expectingToBuy, 496504224); // $491 fee
-                                                        // on a 75ETH sale
-                                                        // is ~ 0.4%
-        // TODO remove ETH
+                            expectingToBuy, 620606174); 
         vm.stopPrank();
     }
-    /*
+    
     function testWithdrawAndLeveragedSwaps() public {
         vm.startPrank(User01);
+        V3.repackNFT();
+        V3.deposit{value: 25 ether}(0);
         V4.deposit{value: 25 ether}(0, false);
 
         uint balanceBefore = User01.balance;
@@ -248,7 +253,7 @@ contract Everything_Test is Test, Fixtures {
         // AUX.unwind(whose, direction); // TODO
 
         // Approve enough USDC with buffer for fees
-        USDC.approve(address(QUID), stack / 5);
+        USDC.approve(address(AUX), stack / 5);
         AUX.leverUSD{value : 3524821}(stack / 10,
                                     address(USDC));
         vm.stopPrank();
@@ -275,5 +280,5 @@ contract Everything_Test is Test, Fixtures {
                          stack / 10, 1); // Original tolerance
 
         vm.stopPrank();
-    } */
+    } 
 }

@@ -162,37 +162,23 @@ contract Aux is Ownable {
     /// @param sqrtPriceX96 Square root price 
     /// @param v3 Whether this is a V3 pool 
     /// @return price ETH price in USD 1e18
-    function getPrice(uint160 sqrtPriceX96, 
-        bool v3, bool btc) public // TODO uncomment pure
-        /* pure */ returns (uint price) { 
-        bool flip; uint cast;
-        if (btc) {
-            flip = token1isWBTC;
-            cast = 1e8;
-            
-            if (_BTC_PRICE > 0) // TODO remove
-                return _BTC_PRICE;
-        } else {
-            flip = token1isWETH;
-            cast = 1e12;
-            
-            if (_ETH_PRICE > 0) // TODO remove
-                return _ETH_PRICE; 
-        }     
+    function getPrice(uint160 sqrtPriceX96, bool v3, bool btc)
+        public /*view*/ returns (uint price) {
+        if (_ETH_PRICE > 0) { // TODO pure
+            return _ETH_PRICE; // remove
+        }
         uint casted = uint(sqrtPriceX96);
         uint ratioX128 = FullMath.mulDiv(
                  casted, casted, 1 << 64);
         
-        if (!v3 || (v3 && flip)) {
+        if (V4.token1isETH()) {
             price = FullMath.mulDiv(1 << 128,
-                WAD * cast, ratioX128);
+                WAD * 1e12, ratioX128);
         } else {
             price = FullMath.mulDiv(ratioX128, 
-                WAD * cast, 1 << 128);
+                WAD * 1e12, 1 << 128);
         }
-
-        if (btc) _BTC_PRICE = price; // TODO remove
-        else _ETH_PRICE = price; // TODO remove
+        _ETH_PRICE = price;
     }
 
     /// @notice connect QUID basket, renounce
@@ -236,6 +222,7 @@ contract Aux is Ownable {
         uint waitable) public payable returns (uint blockNumber) { 
         (uint160 sqrtPriceX96,,,) = V4.repack(false); bool sensitive; 
         uint price = getPrice(sqrtPriceX96, false, false); // TODO btc bool
+        
         bool stable = isStable[token];
         // ^ if this is true user cares
         // about their output being all
@@ -411,7 +398,6 @@ contract Aux is Ownable {
             } 
         }
         lastBlock = endBlock;
-        console.log("Updated lastBlock to:", lastBlock);
     } 
     
     /// @notice leveraged long (borrow WETH against USDC)
@@ -428,7 +414,6 @@ contract Aux is Ownable {
         uint totalValue = FullMath.mulDiv(
                         amount, price, WAD);
 
-        require(totalValue > 50 * WAD, "$50");
         uint took = _take(address(this),
             totalValue / 1e12, address(USDC), false); 
       
@@ -442,7 +427,8 @@ contract Aux is Ownable {
             took += _getUSDC(selling, 
                 needed - needed / 200);
                      amount -= selling;
-        } AMP.leverETH(msg.sender, amount, took);
+        } 
+        AMP.leverETH(msg.sender, amount, took);
     } // swap originator gets paid eventually...
 
     /// @notice leveraged short (borrow USDC against WETH)
@@ -454,11 +440,11 @@ contract Aux is Ownable {
             && msg.value >= UNWIND_COST);
     
         wethVault.deposit(_depositETH(0), address(V4));
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
         (uint160 sqrtPriceX96,,,,,,) = v3PoolWETH.slot0();
         uint price = getPrice(sqrtPriceX96, true, false); // TODO btc dynamic
         uint scaled = 18 - IERC20(token).decimals();
         scaled = scaled > 0 ? amount * (10 ** scaled) : amount;
-        require(scaled >= 50 * WAD, "$50");
         uint inETH = FullMath.mulDiv(WAD,
                         scaled, price);
 
@@ -466,17 +452,8 @@ contract Aux is Ownable {
         WETH.deposit{value: inETH}();
         AMP.leverUSD(msg.sender,
                  amount, inETH);
-    } // Rover with WBTC can do
-    // 1:1 swap with slippage
-    // against EigenLayer BTC
-
-    /*
-    function leverBTC(uint amount, // 1e8
-        address token) external {
-        require(token == WBTC || token == BTC);
-
-    } */
-
+    } 
+    
     // function future yield of dollars on ETH trading
     // from people taking profits is guaranteed to backstop
     // any possible downfall of BTC in the EigenLayer pool
@@ -491,12 +468,11 @@ contract Aux is Ownable {
         // all about waiting for your turn...
         if (amount > 0) {
             (uint total, ) = get_metrics(false);
-            uint pooled_usd = V4.ETH_POOLED_USD();
-            if (amount > total - pooled_usd) 
+            // uint pooled_usd = V4.ETH_POOLED_USD();
+            // if (amount > total - pooled_usd) 
                 // TODO shrink the liquidity pool
             amount -= _take(msg.sender, amount, 
                         address(QUID), false);
-
         }        
     } 
 
@@ -520,13 +496,12 @@ contract Aux is Ownable {
             Vogue(V4).owner(), type(uint).max);
     }
 
-    // 
     function get_deposits() public view
         returns (uint[10] memory amounts) {
         address vault; uint shares;
         uint ghoIndex = stables.length - 1;
         for (uint i = 0; i < ghoIndex; i++) { 
-            uint multiplier = i > 1 ? 1 : 1e12;
+            uint multiplier = i < 2 ? 1e12 : 1;
             vault = vaults[stables[i]];
             shares = perVault[vault].shares;
             if (shares > 0) {
@@ -552,7 +527,7 @@ contract Aux is Ownable {
     // breaking into my imagination: whatever's in there, yours to take
     function _take(address who, uint amount, address token, 
         bool strict) internal returns (uint sent) { address vault;
-        if (token != address(this)) { vault = vaults[token];
+        if (token != address(QUID)) { vault = vaults[token];
             uint max = perVault[vault].cash;
             require(max > 0, "No liquidity");
             
@@ -561,10 +536,10 @@ contract Aux is Ownable {
             if (fee > WAD / 10) fee = WAD / 10; // TODO some cap
             
             uint amountNeeded;
-            if (fee > 0) {
+            if (fee > 0)
                 amountNeeded = FullMath.mulDiv(
-                        amount, WAD + 0, WAD);
-            } else {    amountNeeded = amount; }
+                          amount, WAD + 0, WAD);
+            else amountNeeded = amount; 
             if (max >= amount) {
                 uint withdrawn = _withdraw(who, vault, amount);
                 if (fee > 0) return FullMath.mulDiv(
@@ -580,13 +555,13 @@ contract Aux is Ownable {
                     amount = BasketLib.scaleTokenAmount(amount, token, true);
                 } else return sent; 
             }
-        } 
-        uint[10] memory amounts = get_deposits(); 
+        } uint[10] memory amounts = get_deposits(); 
         uint ghoIndex = stables.length; sent = 0;
         for (uint i = 1; i < ghoIndex; i++) {
             uint divisor = (i - 1) > 1 ? 1 : 1e12;
             amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
                                 WAD, amounts[i], amounts[0]), WAD);
+        
             amounts[i] /= divisor;
             if (amounts[i] > 0) { vault = vaults[stables[i - 1]];
                 amounts[i] = _withdraw(who, vault, amounts[i]);
