@@ -158,7 +158,6 @@ impl Depositor {
                     .and_then(|v| v.checked_div(self.deposited_usd_star as u128))
                     .unwrap_or(0);
             }
-            
             self.last_updated = current_time;
         }
     }
@@ -173,6 +172,9 @@ impl Depositor {
     // Some cynic wrote on Twitter that "Ostium is broken," reason being unbounded gains
     // for borrowers dilute depositors' yield; following solution creates speed bumps
     pub fn repo(&mut self, ticker: &str, // reposition, or repossession (it depends)
+        // i want to use the ema here in another way...for the 4 days grace period
+        // on liquidations to also be a calibrator for 10% delta that is hardcoded 
+        // because that only protects in flash crashes 
         mut amount: i64, price: u64, current_time: i64,
         interest_rate: u64, depository: &mut Depository) -> Result<(i64, u64)> {
         let padded = Self::pad_ticker(ticker);
@@ -233,8 +235,8 @@ impl Depositor {
                     // giving the depositor time to react and close their position
                         require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
                         // delta = ((pod.exposure as f32 * // amortised over 4 days...
+                        // 96 hours, to be ammends in this wicked lend, i'm trouble sum
                         //     (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
-
                         delta = ((pod.exposure.abs() as f32 * 
                             (time_elapsed / MAX_AGE as f32)) / 
                             (1152 as f32 / util_factor as f32)) as u64;

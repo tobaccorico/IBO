@@ -46,10 +46,8 @@ contract Vogue is SafeCallback, Ownable {
     using PoolIdLibrary for PoolKey;
     Basket QUID; Aux AUX; WETH9 WETH;
 
-    mapping(uint => Types.Batch) BTCswapsZeroForOne;
-    mapping(uint => Types.Batch) BTCswapsOneForZero;
-    mapping(uint => Types.Batch) ETHswapsZeroForOne;
-    mapping(uint => Types.Batch) ETHswapsOneForZero;
+    mapping(uint => Types.Batch) swapsZeroForOne;
+    mapping(uint => Types.Batch) swapsOneForZero;
     mapping(address => Types.Deposit) autoManaged;
     // ^ price range is managed by our contracts
 
@@ -62,16 +60,10 @@ contract Vogue is SafeCallback, Ownable {
 
     IERC4626 public wethVault;
     mockToken internal mockETH; 
-    mockToken internal mockBTC;
     mockToken internal mockUSD;
-    mockToken internal USDmock;
-    
     uint constant WAD = 1e18;
     bool public token1isETH;
-    bool public token1isBTC;
-    PoolKey VANILLA_ETH; 
-    PoolKey VANILLA_BTC; 
-    
+    PoolKey VANILLA; 
     enum Action { 
         Swap, BatchSwap, 
         Repack, ModLP,
@@ -80,27 +72,19 @@ contract Vogue is SafeCallback, Ownable {
     // currently "in-range"...
     // which is distinct from 
     // its mockToken.totalSupply()
-    uint public ETH_POOLED;
-    uint public ETH_POOLED_USD;
-    uint public BTC_POOLED;
-    uint public BTC_POOLED_USD;
+    uint public POOLED_ETH;
+    uint public POOLED_USD;
 
-    uint public LAST_REPACK_ETH;
-    uint public LAST_REPACK_BTC;
-    // range = between the ticks
-    int24 public UPPER_TICK_BTC;
-    int24 public LOWER_TICK_BTC;
-    int24 public UPPER_TICK_ETH;
-    int24 public LOWER_TICK_ETH;
+    uint public LAST_REPACK;
+    // range = between ticks
+    int24 public UPPER_TICK;
+    int24 public LOWER_TICK;
     
     // ^ timestamp allows us
     // to measure APY% for...
-    uint public USD_FEES_ETH;
-    uint public USD_FEES_BTC;
+    uint public USD_FEES;
     uint public ETH_FEES;
-    uint public BTC_FEES;
-    uint public YIELD_BTC;
-    uint public YIELD_ETH; 
+    uint public YIELD;
     
     bytes internal constant ZERO_BYTES = bytes("");
     modifier onlyAux {
@@ -112,77 +96,46 @@ contract Vogue is SafeCallback, Ownable {
             wethVault = IERC4626(_vault);
         }   fallback() external payable {}
     
-    function setup(address _quid, address _aux, // < auxiliary 
-        address _poolETH, address _poolBTC) external payable
+    function setup(address _quid, 
+        address _aux, address _poolETH) external payable
         onlyOwner { require(address(QUID) == address(0), "!");
         QUID = Basket(_quid); AUX = Aux(payable(_aux));
         // virtual balances represent assets in curve
         mockETH = new mockToken(address(this), 18);
-        mockBTC = new mockToken(address(this), 8);
-        USDmock = new mockToken(address(this), 6);
         mockUSD = new mockToken(address(this), 6);
-        address token0_eth; address token1_eth; 
+        address token0; address token1; 
         if (address(mockETH) > address(mockUSD)) { 
             token1isETH = true;
-            token0_eth = address(mockUSD); 
-            token1_eth = address(mockETH);
+            token0 = address(mockUSD); 
+            token1 = address(mockETH);
         } else {
-            token0_eth = address(mockETH); 
-            token1_eth = address(mockUSD);
+            token0 = address(mockETH); 
+            token1 = address(mockUSD);
         } 
-        address token0_btc; address token1_btc; 
-        if (address(mockBTC) > address(USDmock)) { 
-            token1isBTC = true;
-            token0_btc = address(USDmock);
-            token1_btc = address(mockBTC);
-        } else { 
-            token0_btc = address(mockBTC); 
-            token1_btc = address(USDmock); 
-        }
+        VANILLA = PoolKey({
+            currency0: Currency.wrap(
+                     address(token0)),
+            currency1: Currency.wrap(
+                     address(token1)),
+            fee: 420, tickSpacing: 10,
+            hooks: IHooks(address(0))}); 
+
+        (,int24 tickETH,,,,,) = IUniswapV3Pool(_poolETH).slot0();
         mockUSD.approve(address(poolManager), type(uint).max);
         mockETH.approve(address(poolManager), type(uint).max);
-        mockBTC.approve(address(poolManager), type(uint).max);
-        USDmock.approve(address(poolManager), type(uint).max);
         
         WETH = WETH9(payable(address(AUX.WETH())));
         WETH.approve(address(AUX), type(uint).max);
         WETH.approve(address(wethVault), type(uint).max);
         require(QUID.V4() == address(this), "?");
 
-        VANILLA_ETH = PoolKey({
-            currency0: Currency.wrap(
-                 address(token0_eth)),
-            currency1: Currency.wrap(
-                 address(token1_eth)),
-            fee: 420, tickSpacing: 10,
-            hooks: IHooks(address(0))}); 
-
-        VANILLA_BTC = PoolKey({
-            currency0: Currency.wrap(
-                 address(token0_btc)),
-            currency1: Currency.wrap(
-                 address(token1_btc)),
-            fee: 420, tickSpacing: 60,
-            hooks: IHooks(address(0))}); 
-
-        (,int24 tickETH,,,,,) = IUniswapV3Pool(_poolETH).slot0();
-        (,int24 tickBTC,,,,,) = IUniswapV3Pool(_poolBTC).slot0();
-
         if (token1isETH)
             tickETH *= AUX.token1isWETH() ? int24(1) : int24(-1);
         else 
             tickETH *= AUX.token1isWETH() ? int24(-1) : int24(1);
-
-        if (token1isBTC)
-            tickBTC *= AUX.token1isWBTC() ? int24(1) : int24(-1);
-        else 
-            tickBTC *= AUX.token1isWBTC() ? int24(-1) : int24(1);
         
-        poolManager.initialize(VANILLA_ETH, 
+        poolManager.initialize(VANILLA, 
         TickMath.getSqrtPriceAtTick(tickETH));
-
-        poolManager.initialize(VANILLA_BTC, 
-        TickMath.getSqrtPriceAtTick(tickBTC));
 
         // renounceOwnership(); TODO ?
     }
@@ -190,15 +143,15 @@ contract Vogue is SafeCallback, Ownable {
     // withdrawal by LP of ETH specifically, depositor may
     // not know exactly how much they have accumulated in 
     // fees, so it's alright to pass in a huge number...
-    function withdraw(uint amount, bool btc) external { 
+    function withdraw(uint amount) external { 
         (uint160 sqrtPriceX96,
-        int24 tickLower, int24 tickUpper,) = _repack(btc); 
+        int24 tickLower, int24 tickUpper,) = _repack(); 
         Types.Deposit memory LP = autoManaged[msg.sender]; 
 
-        uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES_ETH;
+        uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES;
         // ^ above snapshots will always be bigger than LP's
 
-        uint pooled_eth = ETH_POOLED;
+        uint pooled_eth = POOLED_ETH;
         uint fees_eth = FullMath.mulDiv((eth_fees - LP.fees_eth),
                                       LP.pooled_eth, pooled_eth);
 
@@ -237,23 +190,17 @@ contract Vogue is SafeCallback, Ownable {
         uint amount = Math.min(wethVault.balanceOf(address(this)),
                                wethVault.convertToShares(howMuch));
         withdrawn = wethVault.redeem(amount, address(this), address(this));
-    }   
-
-    function _sendBTC(uint howMuch,
-        address toWhom) internal returns (uint sent) {
-        
     }
 
     function _sendETH(uint howMuch,
         address toWhom) internal returns (uint sent) {
-        // unused gas from clearSwaps() lands back in 
+        // any unused gas from clearSwaps() lands back in 
         // address(this) as residual ETH; re-appropriate:
         uint alreadyInETH = address(this).balance;
         if (alreadyInETH >= howMuch) {
-            // Already have enough ETH
+            // Already have enough 
             sent = howMuch;
         } else {
-            // Need to withdraw more WETH
             uint needed = howMuch - alreadyInETH;
             uint withdrawn = _takeWETH(needed);
             WETH.withdraw(withdrawn);
@@ -263,31 +210,33 @@ contract Vogue is SafeCallback, Ownable {
         assert(_success);
     }
 
-    function _depositETH(uint amount) internal returns (uint) {
-       if (amount > 0) { 
-            WETH.transferFrom(msg.sender, address(this), amount);
-        } 
+    function _depositETH(uint amount) 
+        internal returns (uint) {
+        if (amount > 0) 
+            WETH.transferFrom(msg.sender, 
+                    address(this), amount);
+        
         if (msg.value > 0) {
             WETH.deposit{value: msg.value}();
             amount += msg.value;
         }
         wethVault.deposit(amount, address(this));
-        return amount;  // Return the total amount
+        return amount; // return the total amount
     }
 
     // this is for single-sided liquidity (ETH deposit)
     // if you want to deposit dollars, mint with Basket
-    function deposit(uint amount, bool btc) 
+    function deposit(uint amount) 
         external payable { amount = _depositETH(amount); 
         Types.Deposit memory LP = autoManaged[msg.sender];
-        uint pooled_eth = ETH_POOLED;
-        uint pooled_usd = ETH_POOLED_USD;
+        uint pooled_eth = POOLED_ETH;
+        uint pooled_usd = POOLED_USD;
         uint deltaETH; uint deltaUSD; 
         LP.pooled_eth += amount;
         (uint160 sqrtPriceX96,
-        int24 tickLower, int24 tickUpper,) = _repack(btc); 
-        uint price = AUX.getPrice(sqrtPriceX96, false, btc);
-        uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES_ETH;
+        int24 tickLower, int24 tickUpper,) = _repack(); 
+        uint price = AUX.getPrice(sqrtPriceX96);
+        uint eth_fees = ETH_FEES; uint usd_fees = USD_FEES;
         if (LP.fees_eth > 0 || LP.fees_usd > 0) {
             LP.usd_owed += FullMath.mulDiv((usd_fees - LP.fees_usd),
                                           LP.pooled_eth, pooled_eth);
@@ -303,7 +252,8 @@ contract Vogue is SafeCallback, Ownable {
             abi.decode(poolManager.unlock(abi.encode(
                 Action.ModLP, sqrtPriceX96, deltaETH, deltaUSD, 
                 tickLower, tickUpper, msg.sender)), (BalanceDelta));
-        }                 autoManaged[msg.sender] = LP; 
+        }                               
+        autoManaged[msg.sender] = LP; 
     }
 
     function _addLiquidityHelper(
@@ -339,12 +289,10 @@ contract Vogue is SafeCallback, Ownable {
     /// @param distance Distance from current price in ticks  
     /// positive = subtract (below), negative = add (above)
     /// @param range Width of the position in ticks 
-    /// @param btc if it's for BTC pool (false for ETH)
     /// @return next The ID of the newly created position
     function outOfRange(uint amount, address token, 
-        int24 distance, int24 range, bool btc) 
-        public payable returns (uint next) {
-        int24 width = btc ? int24(60) : int24(10);
+        int24 distance, int24 range) public 
+        payable returns (uint next) { int24 width = int24(10);
         require(range >= 100 && range <= 1000 && range % 50 == 0, 
             "Range must be 100-1000 in increments of 50");
         require(distance % 100 == 0 && distance != 0 && 
@@ -355,8 +303,9 @@ contract Vogue is SafeCallback, Ownable {
         // always means "position for USD", regardless of ordering...
         if (!token1isETH) distance = -distance; 
 
-        (uint160 currentSqrtPrice, int24 currentLowerTick, 
-        int24 currentUpperTick,) = _repack(btc);
+        (uint160 currentSqrtPrice, 
+        int24 currentLowerTick, 
+        int24 currentUpperTick,) = _repack();
         int24 targetTick = TickMath.getTickAtSqrtPrice(
                            currentSqrtPrice) - distance;
         
@@ -392,7 +341,8 @@ contract Vogue is SafeCallback, Ownable {
                              lowerSqrtPrice, upperSqrtPrice, amount);
             }
         } else {
-            uint deposited = AUX.deposit(msg.sender, token, amount);
+            uint deposited = AUX.deposit(
+                msg.sender, token, amount);
             uint decimals = IERC20(token).decimals();
             if (decimals > 6) deposited /= 10 ** (decimals - 6);
             if (token1isETH) {
@@ -408,8 +358,8 @@ contract Vogue is SafeCallback, Ownable {
                 liquidity = LiquidityAmounts.getLiquidityForAmount1(
                           lowerSqrtPrice, upperSqrtPrice, deposited);
             }
-        } Types.SelfManaged memory newPosition = Types.SelfManaged({owner: msg.sender, 
-                lower: newLowerTick, upper: newUpperTick, liq: int(uint(liquidity))});
+        } Types.SelfManaged memory newPosition = Types.SelfManaged({ owner: msg.sender, 
+                lower: newLowerTick, upper: newUpperTick, liq: int(uint(liquidity)) });
 
         next = ++ID;
         selfManaged[next] = newPosition;
@@ -447,25 +397,16 @@ contract Vogue is SafeCallback, Ownable {
 
     // this is for batched swaps, which clear through simple ASS...
     function pushSwap(bool zeroForOne, // < direction of this swap
-        Types.Trade calldata trade, uint waitable, bool btc) onlyAux public 
+        Types.Trade calldata trade, uint waitable) onlyAux public 
         returns (uint currentBlock) { currentBlock = block.number;
         Types.Batch storage forOne; Types.Batch storage forZero;
-        if (btc) {
-            forOne = BTCswapsZeroForOne[currentBlock];
-            forZero = BTCswapsOneForZero[currentBlock];
-            while (forOne.swaps.length + forZero.swaps.length > 30) {
-                currentBlock += 1;
-                forOne = BTCswapsZeroForOne[currentBlock];
-                forZero = BTCswapsOneForZero[currentBlock];
-            }
-        } else {
-            forOne = ETHswapsZeroForOne[currentBlock];
-            forZero = ETHswapsOneForZero[currentBlock];
-            while (forOne.swaps.length + forZero.swaps.length > 30) {
-                currentBlock += 1;
-                forOne = ETHswapsZeroForOne[currentBlock];
-                forZero = ETHswapsOneForZero[currentBlock];
-            }
+       
+        forOne = swapsZeroForOne[currentBlock];
+        forZero = swapsOneForZero[currentBlock];
+        while (forOne.swaps.length + forZero.swaps.length > 30) {
+            currentBlock += 1;
+            forOne = swapsZeroForOne[currentBlock];
+            forZero = swapsOneForZero[currentBlock];
         }
         Types.Batch storage ourBatch; // < will be writing to this
         require(waitable >= currentBlock - block.number, "time");
@@ -477,35 +418,23 @@ contract Vogue is SafeCallback, Ownable {
     function getSwapsETH(uint blockNumber) public view returns 
         (Types.Batch memory, Types.Batch memory) {
         if (token1isETH)
-            return (ETHswapsOneForZero[blockNumber], 
-                    ETHswapsZeroForOne[blockNumber]);
+            return (swapsOneForZero[blockNumber], 
+                    swapsZeroForOne[blockNumber]);
         else
-            return (ETHswapsZeroForOne[blockNumber], 
-                    ETHswapsOneForZero[blockNumber]);
-    }
-
-    function getSwapsBTC(uint blockNumber) public view returns 
-        (Types.Batch memory, Types.Batch memory) {
-        if (token1isBTC)
-            return (BTCswapsOneForZero[blockNumber], 
-                    BTCswapsZeroForOne[blockNumber]);
-        else
-            return (BTCswapsZeroForOne[blockNumber], 
-                    BTCswapsOneForZero[blockNumber]);
+            return (swapsZeroForOne[blockNumber], 
+                    swapsOneForZero[blockNumber]);
     }
     
-    // TODO add btc as callback parameter
     function swap(uint160 sqrtPriceX96, address sender, 
-        bool forOne, address token, uint amount, bool btc) 
+        bool forOne, address token, uint amount) 
         onlyAux public returns (BalanceDelta delta) {
         delta = abi.decode(poolManager.unlock(abi.encode(Action.Swap, 
             sqrtPriceX96, sender, forOne, token, amount)), (BalanceDelta));
     }
-    // TODO add btc as callback parameter
     
     function batchSwap(uint160 sqrtPriceX96, uint blockNumber, 
         uint splitForUSD, uint splitForETH, uint gotForETH, 
-        uint gotForUSD, bool btc) onlyAux public returns (BalanceDelta delta) {
+        uint gotForUSD) onlyAux public returns (BalanceDelta delta) {
         delta = abi.decode(poolManager.unlock(abi.encode(Action.BatchSwap, 
                     sqrtPriceX96, blockNumber, splitForUSD, splitForETH, 
                     gotForETH, gotForUSD)), (BalanceDelta));
@@ -526,16 +455,14 @@ contract Vogue is SafeCallback, Ownable {
                 address token, uint amount) = abi.decode(data[32:], 
                  (uint160, address, bool, address, uint));
             
-            delta = poolManager.swap(VANILLA_ETH, IPoolManager.SwapParams({
+            delta = poolManager.swap(VANILLA, IPoolManager.SwapParams({
                     zeroForOne: forOne, amountSpecified: -int(amount),
                     sqrtPriceLimitX96: _paddedSqrtPrice(sqrtPriceX96, 
                                           !forOne, 300) }), ZERO_BYTES);
             if (token1isETH)
-                _handleDelta0isUSD(delta, true, false, 
-                                 sender, token, false);
+                _handleDelta0isUSD(delta, true, false, sender, token);
             else
-                _handleDelta1isUSD(delta, true, false,
-                                 sender, token, false); // TODO btc
+                _handleDelta1isUSD(delta, true, false, sender, token);
         } 
         else if (discriminator == Action.BatchSwap) {
             // NOTE: order is crucial (first buy ETH)
@@ -545,7 +472,7 @@ contract Vogue is SafeCallback, Ownable {
                 data[32:], (uint160, uint, uint, uint, uint, uint));
 
             uint swapped; uint i;
-            (Types.Batch memory forUSD, // TODO getSwapsBTC
+            (Types.Batch memory forUSD,
             Types.Batch memory forETH) = getSwapsETH(lastBlock);
             
             uint amount = forETH.total - splitForETH;
@@ -553,23 +480,22 @@ contract Vogue is SafeCallback, Ownable {
             // was already covered by V3, only needs
             // to be distributed (not swapped by V4) 
             if (amount > 0) { // selling USD for ETH
-                delta = poolManager.swap(VANILLA_ETH, IPoolManager.SwapParams({ 
+                delta = poolManager.swap(VANILLA, IPoolManager.SwapParams({ 
                     zeroForOne: token1isETH, amountSpecified: -int(amount), 
                     sqrtPriceLimitX96: _paddedSqrtPrice(sqrtPriceX96, 
-                                             !token1isETH, 1000) }), ZERO_BYTES);
+                                     !token1isETH, 1000) }), ZERO_BYTES);
                 if (token1isETH)
                     (, swapped) = _handleDelta0isUSD(delta, true, false, 
-                                        address(0), address(QUID), false);
+                                            address(0), address(QUID));
                 else
                     (swapped, ) = _handleDelta1isUSD(delta, true, false, 
-                                        address(0), address(QUID), false);
-                
-                // must obtain a new price in light of the above swaps...
-                swapped += gotForUSD; (sqrtPriceX96,,,) = poolManager.getSlot0(
-                                                            VANILLA_ETH.toId()); 
+                                            address(0), address(QUID));
+                // obtain new price... 
+                swapped += gotForUSD; // in light of the above swaps...
+                (sqrtPriceX96,,,) = poolManager.getSlot0(VANILLA.toId()); 
                
                 require(stdMath.delta(swapped, FullMath.mulDiv(forETH.total * 1e12, WAD, 
-                        AUX.getPrice(sqrtPriceX96, false, false))) <= swapped / 50);
+                                    AUX.getPrice(sqrtPriceX96))) <= swapped / 50);
 
                 for (i = 0; i < forETH.swaps.length; i++) {
                     // we get the ETH amount to send by...
@@ -583,23 +509,23 @@ contract Vogue is SafeCallback, Ownable {
             // was already covered by V3, only needs
             // to be distributed (not swapped by V4) 
             if (amount > 0) { // selling ETH for USD
-                delta = poolManager.swap(VANILLA_ETH, IPoolManager.SwapParams({
+                delta = poolManager.swap(VANILLA, IPoolManager.SwapParams({
                     zeroForOne: !token1isETH, amountSpecified: -int(amount),
                     sqrtPriceLimitX96: _paddedSqrtPrice(sqrtPriceX96, 
-                                            token1isETH, 1000) }), ZERO_BYTES);
+                                      token1isETH, 1000) }), ZERO_BYTES);
                 if (token1isETH)
                     (swapped,) = _handleDelta0isUSD(delta, true, false, 
-                                      address(0), address(QUID), false);
+                                            address(0), address(QUID));
                 else 
                     (, swapped) = _handleDelta1isUSD(delta, true, false, 
-                                       address(0), address(QUID), false);
+                                            address(0), address(QUID));
            
                 address out; uint scale; swapped += gotForETH;
                 (sqrtPriceX96,,,) = poolManager.getSlot0(
-                                      VANILLA_ETH.toId());
+                                      VANILLA.toId());
 
                 require(stdMath.delta(swapped, FullMath.mulDiv(forUSD.total, 
-                    AUX.getPrice(sqrtPriceX96, false, false), WAD * 1e12)) <= swapped / 50);
+                        AUX.getPrice(sqrtPriceX96), WAD * 1e12)) <= swapped / 50);
 
                 for (i = 0; i < forUSD.swaps.length; i++) {
                     out = forUSD.swaps[i].token;
@@ -611,82 +537,71 @@ contract Vogue is SafeCallback, Ownable {
                     uint actualReceived = AUX.take(forUSD.swaps[i].sender, 
                                                     amount, out, false);
                 }
-            } delete ETHswapsOneForZero[lastBlock];
-              delete ETHswapsZeroForOne[lastBlock];
+            } delete swapsOneForZero[lastBlock];
+              delete swapsZeroForOne[lastBlock];
         } 
         else if (discriminator == Action.Repack) {
             // remove all liquidity, then add it back
             (uint128 myLiquidity, uint160 sqrtPriceX96,
-            int24 tickLower, int24 tickUpper, bool btc) = abi.decode(
-                    data[32:], (uint128, uint160, int24, int24, bool));
-                    uint price = AUX.getPrice(sqrtPriceX96, false, btc);
-                    
-            uint volatile_fees; uint stable_fees;
+            int24 tickLower, int24 tickUpper) = abi.decode(
+                    data[32:], (uint128, uint160, int24, int24));
+            
+            uint price = AUX.getPrice(sqrtPriceX96);        
+            uint eth_fees; uint usd_fees;
             // ^ these 2 are accounting our gains
             // collected since last repack event
-            uint delta0; uint delta1; bool flip;
-            if (btc) { flip = token1isBTC;
-                BTC_POOLED_USD = 0;
-                BTC_POOLED = 0;
-            } else { flip = token1isETH;
-                ETH_POOLED_USD = 0;
-                ETH_POOLED = 0;
-            }
-            BalanceDelta fees; 
+            uint delta0; uint delta1; 
+            
+            POOLED_USD = 0; POOLED_ETH = 0; BalanceDelta fees; 
             (delta, fees) = _modifyLiquidity(-int(uint(myLiquidity)), 
-                                        tickLower, tickUpper, btc);
-            if (flip) { // flip is true, token1 is volatile
+                                            tickLower, tickUpper);
+            if (token1isETH) { 
                 (delta0, // who is irrelevant (address(0))
                  delta1) = _handleDelta0isUSD(delta, false, true, 
-                                address(0), address(QUID), btc);
+                                        address(0), address(QUID));
              
-                stable_fees = uint(int(fees.amount0()));
-                volatile_fees = uint(int(fees.amount1()));
+                usd_fees = uint(int(fees.amount0()));
+                eth_fees = uint(int(fees.amount1()));
                 
-                _calculateYield(volatile_fees, stable_fees,
-                                delta1, delta0, price, btc);
+                YIELD = _calculateYield(eth_fees, usd_fees,
+                                    delta1, delta0, price);
             } else { // token0 is the volatile token...
                 (delta0, // who is irrelevant (address(0))
                  delta1) = _handleDelta1isUSD(delta, false, true, 
-                                address(0), address(QUID), btc);
+                                        address(0), address(QUID));
 
-                stable_fees = uint(int(fees.amount1()));
-                volatile_fees = uint(int(fees.amount0()));
+                usd_fees = uint(int(fees.amount1()));
+                eth_fees = uint(int(fees.amount0()));
 
-                _calculateYield(volatile_fees, stable_fees, 
-                                delta0, delta1, price, btc);
+                YIELD = _calculateYield(eth_fees, usd_fees, 
+                                    delta0, delta1, price);
             } (tickLower,, 
                tickUpper,) = updateTicks(
-                  sqrtPriceX96, 200, btc);
-            if (btc) {
-                UPPER_TICK_BTC = tickUpper;
-                LOWER_TICK_BTC = tickLower;
-                USD_FEES_BTC += stable_fees;
-                BTC_FEES += volatile_fees;
-            } else {
-                UPPER_TICK_ETH = tickUpper;
-                LOWER_TICK_ETH = tickLower;
-                USD_FEES_ETH += stable_fees;
-                ETH_FEES += volatile_fees;
-            }
-            if (flip) {
+                        sqrtPriceX96, 200);
+           
+            UPPER_TICK = tickUpper;
+            LOWER_TICK = tickLower;
+            USD_FEES += usd_fees;
+            ETH_FEES += eth_fees;
+            
+            if (token1isETH) {
                 (delta0, delta1) = _addLiquidityHelper(
                                       0, delta1, price);
 
                 delta = _modLP(delta0, delta1, tickLower,
-                            tickUpper, sqrtPriceX96, btc);
+                                tickUpper, sqrtPriceX96);
 
                 _handleDelta0isUSD(delta, true, false,
-                        address(0), address(QUID), btc);
+                            address(0), address(QUID));
             } else {
                 (delta1, delta0) = _addLiquidityHelper(
                                       0, delta0, price);
 
                 delta = _modLP(delta1, delta0, tickLower,
-                            tickUpper, sqrtPriceX96, btc);
+                                tickUpper, sqrtPriceX96);
                 
                 _handleDelta1isUSD(delta, true, false,
-                        address(0), address(QUID), btc);
+                            address(0), address(QUID));
             }
         } else if (discriminator == Action.OutsideRange) {
             (address sender, int liquidity, 
@@ -694,14 +609,14 @@ contract Vogue is SafeCallback, Ownable {
                     data[32:], (address, int, int24, int24));
 
             (delta, ) = _modifyLiquidity(liquidity,
-                            tickLower, tickUpper, false); // TODO BTC
+                            tickLower, tickUpper);
 
             if (token1isETH)
                 _handleDelta0isUSD(delta, false, false,
-                          sender, address(QUID), false);
+                                sender, address(QUID));
             else
                 _handleDelta1isUSD(delta, false, false,
-                         sender, address(QUID), false);
+                                sender, address(QUID));
         }
         else if (discriminator == Action.ModLP) {
             (uint160 sqrtPriceX96, uint deltaETH, uint deltaUSD,
@@ -709,14 +624,14 @@ contract Vogue is SafeCallback, Ownable {
                     data[32:], (uint160, uint, uint, int24, int24, address));
             
             delta = _modLP(deltaUSD, deltaETH, tickLower,
-                                tickUpper, sqrtPriceX96, false); // TODO 
+                                tickUpper, sqrtPriceX96); 
                                 bool keep = deltaUSD == 0;    
             if (token1isETH)
                 _handleDelta0isUSD(delta, true, keep, 
-                         sender, address(QUID), false);
+                                sender, address(QUID));
             else
                 _handleDelta1isUSD(delta, true, keep, 
-                         sender, address(QUID), false);
+                                sender, address(QUID));
         }   
         return abi.encode(delta);
     } 
@@ -724,110 +639,82 @@ contract Vogue is SafeCallback, Ownable {
     // if who = address(0), keep & token are
     // irrelevant (for repack and batch swaps)
     function _handleDelta0isUSD(BalanceDelta delta, bool inRange, 
-        bool keep, address who, address token, bool btc) internal 
-        returns (uint delta0, uint delta1) { PoolKey storage pool;
-        uint POOLED_TOKEN0; uint POOLED_TOKEN1;
-        address volatile; address stable; 
-        if (btc) { pool = VANILLA_BTC;
-            stable = address(USDmock);
-            volatile = address(mockBTC);
-            POOLED_TOKEN1 = BTC_POOLED;
-            POOLED_TOKEN0 = BTC_POOLED_USD;
-        } 
-        else { pool = VANILLA_ETH;
-            stable = address(mockUSD);
-            volatile = address(mockETH);
-            POOLED_TOKEN1 = ETH_POOLED;
-            POOLED_TOKEN0 = ETH_POOLED_USD;
-        }
+        bool keep, address who, address token) internal 
+        returns (uint delta0, uint delta1) {
         if (delta.amount0() > 0) {
             delta0 = uint(int(delta.amount0()));
-            pool.currency0.take(poolManager,
+            VANILLA.currency0.take(poolManager,
                 address(this), delta0, false);
             
-            mockToken(stable).burn(delta0); 
-            if (inRange) POOLED_TOKEN0 -= delta0;
+            mockUSD.burn(delta0); 
+            if (inRange) POOLED_USD -= delta0;
             if (!keep && who != address(0)) {
                 uint scale = IERC20(token).decimals() - 6;
                 if (scale > 0) // upscale
                     delta0 *= 10 ** scale;
     
-                // Increase tolerance for fees - allow up to 2% difference
-                uint actualReceived = AUX.take(who, delta0, token, false);
-                require(stdMath.delta(delta0, actualReceived) <= delta0 / 50, "fee");
+                // up to 2% tolerance for fees
+                uint actualReceived = AUX.take(who,
+                         delta0, token, false);
+
+                require(stdMath.delta(delta0, 
+                        actualReceived) <= delta0 / 50, "fee");
             } // keep is for preventing disbursal of $ 
             // when single-sided LPs withdraw their ETH 
         } else if (delta.amount0() < 0) {
             delta0 = uint(int(-delta.amount0())); 
-            mockToken(stable).mint(delta0);
-            pool.currency0.settle(poolManager, 
-                address(this), delta0, false);
-            if (inRange) POOLED_TOKEN0 += delta0;
+            mockUSD.mint(delta0);
+            
+            VANILLA.currency0.settle(poolManager, 
+                    address(this), delta0, false);
+            if (inRange) POOLED_USD += delta0;
         } 
         if (delta.amount1() > 0) { 
             delta1 = uint(int(delta.amount1()));
-            pool.currency1.take(poolManager, 
+            VANILLA.currency1.take(poolManager, 
                 address(this), delta1, false);
-            mockToken(volatile).burn(delta1); 
-            if (inRange) POOLED_TOKEN1 -= delta1;
-            if (who != address(0)) btc ? _sendBTC(delta1, who): 
-                                         _sendETH(delta1, who);
-        } else if (delta.amount1() < 0) {
+            
+            mockETH.burn(delta1); 
+            if (inRange) POOLED_ETH -= delta1;
+            if (who != address(0)) _sendETH(delta1, who);
+        } 
+        else if (delta.amount1() < 0) {
             delta1 = uint(int(-delta.amount1())); 
-            mockToken(volatile).mint(delta1);
-            pool.currency1.settle(poolManager, 
-                address(this), delta1, false);
-            if (inRange) POOLED_TOKEN1 += delta1;
-        }
-        if (btc) {
-            BTC_POOLED = POOLED_TOKEN1;
-            BTC_POOLED_USD = POOLED_TOKEN0;
-        } else {
-            ETH_POOLED = POOLED_TOKEN1;
-            ETH_POOLED_USD = POOLED_TOKEN0;
+            mockETH.mint(delta1);
+            
+            VANILLA.currency1.settle(poolManager, 
+                    address(this), delta1, false);
+            if (inRange) POOLED_ETH += delta1;
         }
     }
 
     function _handleDelta1isUSD(BalanceDelta delta, bool inRange, 
-        bool keep, address who, address token, bool btc) internal 
-        returns (uint delta0, uint delta1) { PoolKey storage pool;
-        uint POOLED_TOKEN0; uint POOLED_TOKEN1;
-        address volatile; address stable; 
-        if (btc) { pool = VANILLA_BTC;
-            stable = address(USDmock);
-            volatile = address(mockBTC);
-            POOLED_TOKEN1 = BTC_POOLED_USD;
-            POOLED_TOKEN0 = BTC_POOLED;
-        } 
-        else { pool = VANILLA_ETH;
-            stable = address(mockUSD);
-            volatile = address(mockETH);
-            POOLED_TOKEN1 = ETH_POOLED_USD;
-            POOLED_TOKEN0 = ETH_POOLED;
-        }
+        bool keep, address who, address token) internal 
+        returns (uint delta0, uint delta1) { 
         if (delta.amount0() > 0) {
             delta0 = uint(int(delta.amount0())); 
-            pool.currency0.take(poolManager, 
+            VANILLA.currency0.take(poolManager, 
                 address(this), delta0, false);
-            mockToken(volatile).burn(delta0);
-            if (inRange) POOLED_TOKEN0 -= delta0;
-            if (who != address(0)) btc ? _sendBTC(delta0, who): 
-                                         _sendETH(delta0, who);          
+            
+            mockETH.burn(delta0);
+            if (inRange) POOLED_ETH -= delta0;
+            if (who != address(0)) _sendETH(delta0, who);          
         } // liquidity pool received ETH
         else if (delta.amount0() < 0) { 
             delta0 = uint(int(-delta.amount0())); 
-            mockToken(volatile).mint(delta0);
-            pool.currency0.settle(poolManager, 
+            mockETH.mint(delta0);
+            
+            VANILLA.currency0.settle(poolManager, 
                 address(this), delta0, false);
-            if (inRange) POOLED_TOKEN0 += delta0;
+            if (inRange) POOLED_ETH += delta0;
         } 
         if (delta.amount1() > 0) { 
             delta1 = uint(int(delta.amount1()));
-            pool.currency1.take(poolManager,
+            VANILLA.currency1.take(poolManager,
                 address(this), delta1, false);
             
-            mockToken(stable).burn(delta1); 
-            if (inRange) POOLED_TOKEN1 -= delta1;
+            mockUSD.burn(delta1); 
+            if (inRange) POOLED_USD -= delta1;
             if (!keep && who != address(0)) {
                 uint scale = IERC20(token).decimals() - 6;
                 if (scale > 0) // upscale
@@ -835,47 +722,42 @@ contract Vogue is SafeCallback, Ownable {
                 
                 // Increase tolerance for fees - allow up to 2% difference
                 uint actualReceived = AUX.take(who, delta1, token, false);
-                require(stdMath.delta(delta1, actualReceived) <= delta1 / 50, "fee");
+                require(stdMath.delta(delta1, 
+                        actualReceived) <= delta1 / 50, "fee");
             } // keep is for preventing disbursal of $ 
             // when single-sided LPs withdraw their ETH 
         } 
         else if (delta.amount1() < 0) {
             delta1 = uint(int(-delta.amount1())); 
-            mockToken(stable).mint(delta1);
-            pool.currency1.settle(poolManager, 
-                address(this), delta1, false);
-            if (inRange) POOLED_TOKEN1 += delta1;
-        }
-        if (btc) {
-            BTC_POOLED = POOLED_TOKEN0;
-            BTC_POOLED_USD = POOLED_TOKEN1;
-        } else {
-            ETH_POOLED = POOLED_TOKEN0;
-            ETH_POOLED_USD = POOLED_TOKEN1;
+            mockUSD.mint(delta1);
+            
+            VANILLA.currency1.settle(poolManager, 
+                    address(this), delta1, false);
+            if (inRange) POOLED_USD += delta1;
         }
     }
 
-    function _modifyLiquidity(int delta, // the liquidity delta...
-        int24 lowerTick, int24 upperTick, bool btc) internal returns 
+    function _modifyLiquidity(int delta, // liquidity delta
+        int24 lowerTick, int24 upperTick) internal returns 
         (BalanceDelta totalDelta, BalanceDelta feesAccrued) {
-        PoolKey storage pool = btc ? VANILLA_BTC : VANILLA_ETH;
         (totalDelta, feesAccrued) = poolManager.modifyLiquidity(
-            pool, IPoolManager.ModifyLiquidityParams({
+            VANILLA, IPoolManager.ModifyLiquidityParams({
             tickLower: lowerTick, tickUpper: upperTick,
             liquidityDelta: delta, salt: bytes32(0) }), ZERO_BYTES);
     }
     
-    // TODO rename from deltaETH to delta other side
     function _modLP(uint deltaUSD, uint deltaETH, int24 tickLower, 
-        int24 tickUpper, uint160 sqrtPriceX96, bool btc) internal returns (BalanceDelta) { 
+        int24 tickUpper, uint160 sqrtPriceX96) internal returns (BalanceDelta) { 
+        int flip = deltaUSD > 0 ? int(1) : int(-1);
+
         uint128 liquidity = token1isETH ? LiquidityAmounts.getLiquidityForAmount1(
                     TickMath.getSqrtPriceAtTick(tickLower), sqrtPriceX96, deltaETH) : 
                     LiquidityAmounts.getLiquidityForAmount0(sqrtPriceX96, 
                         TickMath.getSqrtPriceAtTick(tickUpper), deltaETH);
-                               int flip = deltaUSD > 0 ? int(1) : int(-1);
+                               
         (BalanceDelta totalDelta, 
          BalanceDelta feesAccrued) = _modifyLiquidity(flip * 
-            int(uint(liquidity)), tickLower, tickUpper, btc);
+            int(uint(liquidity)), tickLower, tickUpper);
         return totalDelta; // if we called _modify with (-) liquidity
         // then funds left the pool, so totalDelta should be positive
     }
@@ -887,9 +769,9 @@ contract Vogue is SafeCallback, Ownable {
         }   return (tick / width) * width;
     }
 
-    function updateTicks(uint160 sqrtPriceX96, uint delta, 
-        bool btc) public view returns (int24 tickLower, 
-        uint160 lower, int24 tickUpper, uint160 upper) {
+    function updateTicks(uint160 sqrtPriceX96, uint delta) 
+        public view returns (int24 tickLower, uint160 lower, 
+                             int24 tickUpper, uint160 upper) {
         
         lower = _paddedSqrtPrice(sqrtPriceX96, false, delta);
         upper = _paddedSqrtPrice(sqrtPriceX96, true, delta);
@@ -897,23 +779,20 @@ contract Vogue is SafeCallback, Ownable {
         require(lower >= TickMath.MIN_SQRT_PRICE + 1, "minPrice");
         require(upper <= TickMath.MAX_SQRT_PRICE - 1, "maxPrice");
 
-        int24 width = btc ? int24(60) : int24(10); 
-
-        tickLower = _alignTick(TickMath.getTickAtSqrtPrice(lower), width);        
-        tickUpper = _alignTick(TickMath.getTickAtSqrtPrice(upper), width);
+        tickLower = _alignTick(TickMath.getTickAtSqrtPrice(lower), int24(10));        
+        tickUpper = _alignTick(TickMath.getTickAtSqrtPrice(upper), int24(10));
     }
 
     function _calculateYield(uint fees, uint usd_fees, uint delta, 
-        uint deltaUSD, uint price, bool btc) internal returns (uint yield) {
-        uint last_repack = btc ? LAST_REPACK_BTC : LAST_REPACK_ETH;
+        uint deltaUSD, uint price) internal returns (uint yield) {
+        uint last_repack = LAST_REPACK;
         if (last_repack > 0) { // extrapolate (guestimate) an annual % yield... 
             // based on the % fee yield of the last period (in between repacks)
             yield = FullMath.mulDiv(365 days / (block.timestamp - last_repack),
                            usd_fees * 1e12 + FullMath.mulDiv(price, fees, WAD), 
                           deltaUSD * 1e12 + FullMath.mulDiv(price, delta, WAD));
-            
-            if (btc) LAST_REPACK_BTC = block.timestamp; 
-            else LAST_REPACK_ETH = block.timestamp; 
+
+            LAST_REPACK = block.timestamp; 
         } 
     }
 
@@ -924,43 +803,30 @@ contract Vogue is SafeCallback, Ownable {
         return uint160(FixedPointMathLib.mulDivDown(sqrtPriceX96, factor, 1e9));
     }
 
-    function _repack(bool btc) internal // auto-trigger
-        returns (uint160 sqrtPriceX96, int24 tickLower, 
+    function _repack() internal returns 
+        (uint160 sqrtPriceX96, int24 tickLower, 
         int24 tickUpper, uint128 myLiquidity) { 
-        int24 currentTick; PoolId pool; 
-        if (btc) {
-            pool = VANILLA_BTC.toId();
-            tickUpper = UPPER_TICK_BTC;
-            tickLower = LOWER_TICK_BTC;
-        } else {
-            pool = VANILLA_ETH.toId();
-            tickUpper = UPPER_TICK_ETH;
-            tickLower = LOWER_TICK_ETH;
-        }
+        int24 currentTick; PoolId pool = VANILLA.toId();
+        
+        tickUpper = UPPER_TICK; tickLower = LOWER_TICK;
         (sqrtPriceX96, currentTick,,) = poolManager.getSlot0(pool);
         if (currentTick > tickUpper || currentTick < tickLower) { 
             myLiquidity = poolManager.getLiquidity(pool);
             if (myLiquidity > 0) { // rm, then add liquidity
                 poolManager.unlock(abi.encode(Action.Repack,
                                   myLiquidity, sqrtPriceX96, 
-                                tickLower, tickUpper, btc));
+                                    tickLower, tickUpper));
             } else { // we only go in here once (first time)
                 (tickLower,, 
-                 tickUpper,) = updateTicks(sqrtPriceX96, 200, btc);
+                 tickUpper,) = updateTicks(sqrtPriceX96, 200);
                 // 1% delta up, 1% down from ^^^^^^ (2% wide)
-                if (btc) {
-                    UPPER_TICK_BTC = tickUpper; 
-                    LOWER_TICK_BTC = tickLower;
-                } else {
-                    UPPER_TICK_ETH = tickUpper; 
-                    LOWER_TICK_ETH = tickLower;
-                }
+                UPPER_TICK = tickUpper; 
+                LOWER_TICK = tickLower;
             }            
         }
     }
-    function repack(bool btc) public onlyAux returns (uint160 sqrtPriceX96,
+    function repack() public onlyAux returns (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper, uint128 myLiquidity) {
-        (sqrtPriceX96, tickLower, tickUpper, myLiquidity) = _repack(btc);
-        return (sqrtPriceX96, tickLower, tickUpper, myLiquidity);
+        (sqrtPriceX96, tickLower, tickUpper, myLiquidity) = _repack();
     }
 }

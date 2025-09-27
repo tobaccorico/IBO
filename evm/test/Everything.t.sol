@@ -136,8 +136,7 @@ contract Everything_Test is Test, Fixtures {
 
         V4.setup(address(QUID), 
                  address(AUX), 
-                 address(WETHv3pool), 
-                 address(WBTCv3pool));
+                 address(WETHv3pool));
         AUX.setQuid(address(QUID));
 
         vm.startPrank(User01);
@@ -149,14 +148,14 @@ contract Everything_Test is Test, Fixtures {
     function testRegularSwaps() public {    
         vm.startPrank(User01);
 
-        V4.deposit{value: 25 ether}(0, false); // ADD LIQUIDITY TO POOL
+        V4.deposit{value: 25 ether}(0); // ADD LIQUIDITY TO POOL
         uint balanceBefore = User01.balance; // USDC.balanceOf(User01);
 
         // With negative distance (-400), the code will subtract -400 
         // (which adds 400) to the current tick, creating a position 
         // above the current price, which is valid for ETH deposits when token1isETH = true.
         uint id = V4.outOfRange{value: 1 ether}(0, // TODO btc
-                            address(0), 4000, 100, false);
+                            address(0), 4000, 100);
 
         // USDC.approve(address(QUID), stack / 10);
         /* uint id = V4.outOfRange(stack / 10,
@@ -171,7 +170,7 @@ contract Everything_Test is Test, Fixtures {
         balanceAfter = User01.balance; // USDC.balanceOf(User01)
         assertApproxEqAbs(balanceBefore, balanceAfter, 108323224883144);
 
-        uint price = AUX.getPrice(0, false, false);
+        uint price = AUX.getPrice(0);
         uint expectingToBuy = price / 1e12;
         uint USDCbalanceBefore = USDC.balanceOf(User01);
 
@@ -182,7 +181,7 @@ contract Everything_Test is Test, Fixtures {
         assertApproxEqAbs(USDCbalanceAfter - USDCbalanceBefore, 
                                 expectingToBuy, 1501571); // Fixed tolerance matching original
 
-        price = AUX.getPrice(0, false, false);
+        price = AUX.getPrice(0);
         balanceBefore = User01.balance;
         
         // note, we're not approving the rover!
@@ -223,10 +222,10 @@ contract Everything_Test is Test, Fixtures {
         vm.startPrank(User01);
         V3.repackNFT();
         V3.deposit{value: 25 ether}(0);
-        V4.deposit{value: 25 ether}(0, false);
+        V4.deposit{value: 25 ether}(0);
 
         uint balanceBefore = User01.balance;
-        V4.withdraw(1 ether, false);
+        V4.withdraw(1 ether);
         uint balanceAfter = User01.balance;
 
         assertApproxEqAbs(balanceAfter - balanceBefore, 1 ether, 100000);

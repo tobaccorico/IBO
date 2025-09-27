@@ -1,23 +1,39 @@
 
-# зачем j'taime 
+# [alte liebe rostet nicht?](https://x.com/QuidMint/status/1965768120074936384)
 
-on three layer two EVMs...   
-the 3,3 contract is the v4  
-ETH, USDC, USDT on Morpho  
-(with sUSDS also on Base)    
-and DAI/GHO/FRAX on AAVE  
-for Arbitrum and Polygon.  
+A stablecoin basket to compete  
+with lvlUSD, powers re-staking  
+for BTC to compete with Zeus...  
 
+Liquidity boostrapping (the cold  
+start problem) is solved through  
+bonds: dollar depositors are able  
+to get their future yield upfront,  
+as a weighted average of all the  
+stable yields within the basket.  
 
-`Rover.sol` is the main contract,  
-the `Vogue.sol` version is UniV4;  
+Bridging the basket LP token to  
+Solana is made possibly by LZ...  
+from there it's usable as collat.  
+
+The stables are always trading  
+against ETH and/or BTC and LPs  
+can vote which side to provide  
+more liquidity for altogether.   
+
+`Rover.sol` is the UniV3 contract,  
+the name comes from "price range";  
+Vogue is a type of Range Rover...    
+the `Vogue.sol` version is UniV4.  
+
+The two contracts work together to  
+power a delta-neutral AAVE trading   
+strategy profitting off volatility:  
+for this the `AUX` plugs into `AMP`  
+
 "slip inside the eye of your mind,"    
-~~Ostium~~ oстрый ум?
+~~Ostium~~ oстрый ум
 [amórè ties](https://github.com/tobaccorico/IBO/blob/main/svm/programs/quid/src/lieb/clutch.rs#L62)...  
-
-"May the Lord [bless us] as   
-we dwell inside a paradox,"  
-journée quid...ось тріумф...  
 
 *zusammen examen*:  
 "this is my church...  
@@ -30,9 +46,10 @@ a rare and radiant maiden..." *mit*
 *ein bischen* ambition, "and so it is  
 just like you said...it would be..."   
 
-There's zero-IL, single-sided provision;  
+there's zero-IL, single-sided provision:  
+similar extra credit idea to YieldBasis,  
 if a swap can't be fulfilled by internal  
-liquidity alone, it gets split b/w v3/v4;    
+liquidity alone, tx gets split b/w V3/V4;    
  
 sandwich protection embedded as  
 batching (App-Specific Sequence)...  
@@ -41,9 +58,9 @@ their yield tokenised upfront through
 1-month+ bond (ERC6909 extension).  
   
 Swaps on V4 are executed "abstractly"  
-using “virtual balances”; this way ETH  
-gets deposited in Gauntlet's Morpho vault,  
-and not in the PoolManager, while various  
-dollars are either in Morpho vaults or their  
+using “virtual balances”; as such wETH  
+is deposited in Gauntlet's Morpho vault,  
+not in the PoolManager, while the basket  
+dollars are either in Morpho, AAVE or their  
 native staking (e.g. GHO’s safety module). 
- 
+

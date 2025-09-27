@@ -153,16 +153,15 @@ contract Aux is Ownable {
         UNWIND_COST = 3524821; // TODO recalculate
         // ^ gas for unwind()
         SWAP_SELECTOR = bytes4(
-            keccak256("batchSwap(uint160,uint256,uint256,uint256,uint256,uint256,bool)")
+            keccak256("batchSwap(uint160,uint256,uint256,uint256,uint256,uint256)")
         );
     } fallback() external payable {}
 
-    /// @notice Get ETH price from sqrtPriceX96
+    /// @notice ETH price from sqrtPriceX96
     /// @dev Converts V3/V4 sqrt price format 
-    /// @param sqrtPriceX96 Square root price 
-    /// @param v3 Whether this is a V3 pool 
+    /// @param sqrtPriceX96 Square root price  
     /// @return price ETH price in USD 1e18
-    function getPrice(uint160 sqrtPriceX96, bool v3, bool btc)
+    function getPrice(uint160 sqrtPriceX96)
         public /*view*/ returns (uint price) {
         if (_ETH_PRICE > 0) { // TODO pure
             return _ETH_PRICE; // remove
@@ -220,8 +219,8 @@ contract Aux is Ownable {
     /// @return blockNumber Block when trade will clear
     function swap(address token, bool forETH, uint amount, 
         uint waitable) public payable returns (uint blockNumber) { 
-        (uint160 sqrtPriceX96,,,) = V4.repack(false); bool sensitive; 
-        uint price = getPrice(sqrtPriceX96, false, false); // TODO btc bool
+        (uint160 sqrtPriceX96,,,) = V4.repack(); bool sensitive; 
+        uint price = getPrice(sqrtPriceX96); 
         
         bool stable = isStable[token];
         // ^ if this is true user cares
@@ -229,7 +228,7 @@ contract Aux is Ownable {
         // in 1 specific token, so they
         // won't get multiple tokens...
         bool zeroForOne;
-        if (!forETH) { // < trying to sell ETH for dollars...
+        if (!forETH) { // < trying to sell ETH for dollars
             require(token == address(QUID) || stable, "$!");
             zeroForOne = V4.token1isETH() ? false : true;
             amount = _depositETH(amount);
@@ -241,7 +240,7 @@ contract Aux is Ownable {
         } else {
             zeroForOne = V4.token1isETH() ? true : false;
             amount = deposit(msg.sender, token, amount);
-            uint scale = IERC20(token).decimals() - 6; // normalize
+            uint scale = IERC20(token).decimals() - 6; 
             amount /= scale > 0 ? 10 ** scale : 1;
             sensitive = amount >= 500 * 1e6; 
             if (sensitive) // < park the ETH for gas comp...
@@ -255,15 +254,15 @@ contract Aux is Ownable {
             current.sender = msg.sender;
             current.token = token;        
             current.amount = amount;
-            blockNumber = V4.pushSwap(zeroForOne, // TODO btc
-                                current, waitable, false);
+            blockNumber = V4.pushSwap(zeroForOne, 
+                                current, waitable);
         } else { blockNumber = block.number;
             // Executes instantly, no batching, 
             // no sandwich protection...cheaper, 
             // reliably scalable...suitable for: 
             // small trades, routine flow, etc.
-            V4.swap(sqrtPriceX96, msg.sender, // TODO btc
-                    zeroForOne, token, amount, false);
+            V4.swap(sqrtPriceX96, msg.sender,
+                    zeroForOne, token, amount);
         } 
     }
 
@@ -273,8 +272,8 @@ contract Aux is Ownable {
         // TODO clear against a specific segment 
         // in total liquidity, priority fee cut
         (uint160 sqrtPriceX96, int24 tickLower, 
-        int24 tickUpper, uint128 myLiquidity) = V4.repack(false);
-        uint price = getPrice(sqrtPriceX96, false, false);
+        int24 tickUpper, uint128 myLiquidity) = V4.repack();
+        uint price = getPrice(sqrtPriceX96);
         _clearSwaps(sqrtPriceX96, price);
     }
 
@@ -304,11 +303,10 @@ contract Aux is Ownable {
             blockToProcess <= endBlock; blockToProcess++) {
             (Types.Batch memory forUSD, 
             Types.Batch memory forETH) = V4.getSwapsETH(blockToProcess);
-            uint pooled_usd = V4.ETH_POOLED_USD();
-            uint pooled_eth = V4.ETH_POOLED();
+            uint pooled_usd = V4.POOLED_USD();
+            uint pooled_eth = V4.POOLED_ETH();
             pooled_usd *= 1e12;
             if (forUSD.total > 0) { // selling ETH for USD
-            // ^ amount in ETH 1e18
                 swaps += SWAP_COST * forUSD.swaps.length;
                 // dollar value of total ETH to sell...
                 value = FullMath.mulDiv(
@@ -361,7 +359,7 @@ contract Aux is Ownable {
                 // can't handle the whole swap batch
                     value -= pooled_eth;
                     remains = forETH.total - FullMath.mulDiv(
-                            pooled_eth, price, WAD * 1e12);
+                                pooled_eth, price, WAD * 1e12);
                     // dollars for swaps were placed
                     // into the basket through swap()
                     // but USDC may not necessarily
@@ -387,7 +385,7 @@ contract Aux is Ownable {
                 bytes memory payload = abi.encodeWithSelector(
                     SWAP_SELECTOR, sqrtPriceX96, blockToProcess,
                     splitForUSD, splitForETH, 
-                    gotForETH, gotForUSD, false); // TODO btc
+                    gotForETH, gotForUSD);
                     // NOTE our order here
 
                 uint forGas = V4.takeETH(swaps); 
@@ -410,7 +408,7 @@ contract Aux is Ownable {
             amount -= UNWIND_COST;
         
         (uint160 sqrtPriceX96,,,,,,) = v3PoolWETH.slot0();
-        uint price = getPrice(sqrtPriceX96, true, false);
+        uint price = getPrice(sqrtPriceX96);
         uint totalValue = FullMath.mulDiv(
                         amount, price, WAD);
 
@@ -442,7 +440,7 @@ contract Aux is Ownable {
         wethVault.deposit(_depositETH(0), address(V4));
         IERC20(token).transferFrom(msg.sender, address(this), amount);
         (uint160 sqrtPriceX96,,,,,,) = v3PoolWETH.slot0();
-        uint price = getPrice(sqrtPriceX96, true, false); // TODO btc dynamic
+        uint price = getPrice(sqrtPriceX96);
         uint scaled = 18 - IERC20(token).decimals();
         scaled = scaled > 0 ? amount * (10 ** scaled) : amount;
         uint inETH = FullMath.mulDiv(WAD,
@@ -463,17 +461,14 @@ contract Aux is Ownable {
     /// @notice Convert Basket tokens into dollars
     /// @param amount of tokens to redeem, 1e18
     function redeem(uint amount) external {
-    // when it comes to the AUX plug, life is
+        (uint total, ) = get_metrics(false);
+        uint burnable = total - V4.POOLED_USD();
+        require(burnable > amount, "untouchable");
+        // it's all about waiting for your turn
         amount = QUID.turn(msg.sender, amount);
-        // all about waiting for your turn...
-        if (amount > 0) {
-            (uint total, ) = get_metrics(false);
-            // uint pooled_usd = V4.ETH_POOLED_USD();
-            // if (amount > total - pooled_usd) 
-                // TODO shrink the liquidity pool
+        if (amount > 0) 
             amount -= _take(msg.sender, amount, 
                         address(QUID), false);
-        }        
     } 
 
     function get_metrics(bool force) 
@@ -698,7 +693,7 @@ contract Aux is Ownable {
     /// @param up True to increase price, false to decrease
     // TODO remove (for testing purposes only)
     function set_price_eth(bool up) external {
-        uint _price = getPrice(0, true, false);
+        uint _price = getPrice(0);
         uint delta = _price / 20;
         _ETH_PRICE = up ? _price + delta:
                           _price - delta;

@@ -1,6 +1,6 @@
 
 use anchor_lang::prelude::*;
-use lieb::*; mod lieb; 
+use liebe::*; mod liebe; 
 mod stay; mod etc; 
 
 declare_id!("QgV3iN5rSkBU8jaZy8AszQt5eoYwKLmBgXEK5cehAKX"); // < devnet
@@ -29,4 +29,4 @@ pub mod quid {
         // "Offer me that deathless death...stay with me,
         // まだ忘れず 大事にしていた...同じメロディ 繰り返していた
     } // teardrop on the fire, shakes me, makes me lighter"
-}
+} // 

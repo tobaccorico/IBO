@@ -11,50 +11,62 @@ use pyth_solana_receiver_sdk::price_update::{
 pub static HEX_MAP: phf::Map<&'static str, &'static str> = phf_map! { 
     "XAU" => "0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2", 
     "BTC" => "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
-    // ...
-};  // "drain the whole sea...get somethin' shiny..."
-// Auuuuuuuuu....56709...淋しさに Ah... 気づいてた Ah...
+}; 
 pub static ACCOUNT_MAP: phf::Map<&'static str, &'static str> = phf_map! {
     "XAU" => "2uPQGpm8X4ZkxMHxrAW1QuhXcse1AHEgPih6Xp9NuEWW", 
+     // "drain the whole sea...get somethin' shiny..."
+    // Auuuuuuuuu....56709...淋しさに Ah... 気づいてた Ah...
     "BTC" => "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo",
-    // ...
-};
+}; // Soonami waves 8 it seems Piscine was weight my scene
 
+// using layer zero cross chain
+// messaging allows to completely
+// bypass using pyth as an oracle
+// optionally for BTC itself as 
+// an alternative to Zeus on SOL
+// with EigenLayer and Uniswap
 pub const MAX_LEN: usize = 200;
 pub const MAX_AGE: u64 = 300; 
+// dog pound goes in dog years
 
 #[constant] 
 // pub const USD_STAR: Pubkey = pubkey!("BenJy1n3WTx9mTjEvy63e8Q1j4RqUc6E4VBMz3ir4Wo6");
 pub const USD_STAR: Pubkey = pubkey!("5qj9FAj2jdZr4FfveDtKyWYCnd73YQfmJGkAgRxjwbq6");
 // ^ this is currently a mock token deployed on devnet, for testing purposes only...
+// Etymology: name is believed to come from Latin word perennis
+// Meaning: perennis translates to "everlasting" or "perennial"
+// Possible Application: it could have described a person with 
+// lasting qualities, involved with nature, gardener or farmer
+pub const QUID: Pubkey = pubkey!("");
+// LayerZero bridged from Ethereum L1
+// also bridges into deployments for
+// Base, Arbitrum, Unichain, Polygon 
 
 #[error_code]
 pub enum PithyQuip { 
-    #[msg("If you are who you say you are, then you're not who you are.")]
-    forOhfour,
+    #[msg("if you are who you say you are then you're not who you are")]
+    forOhfour, 
 
-    #[msg("Not under-collateralised...still gains to be realised.")]
-    NotUndercollateralised,
+    #[msg("not under-collateralised...still gains to be realised")]
+    NotUndercollateralised, 
 
-    #[msg("Evict one of your other positons before trying to add a new one.")]
+    #[msg("cant be up another one pack a new gun")]
     MaxPositionsReached,
-    
-    #[msg("Think twice, make sure you pass in a price.")]
-    NoPrice,    
-
-    #[msg("Must pass in ticker(s).")]
+    #[msg("pass in a price or call it off twice")]
+    NoPrice,
+    #[msg("pass in ticker no miss it or hickups")]
     Tickers,
 
-    #[msg("Don't call in too often...show stops then.")]
+    #[msg("call in too often or show stops then")]
     TooSoon,
 
-    #[msg("You're ahead...take profit instead.")]
+    #[msg("too many ahead take profit instead")]
     TakeProfit,
     
-    #[msg("Imported a ticker that's not yet supported.")]
+    #[msg("")]
     UnknownSymbol,
     
-    #[msg("Re-capitalise; your position is under-collateralised.")]
+    #[msg("Recap .")]
     Undercollateralised,
 
     #[msg("Slow it up...amount is either not enough or too much.")]
