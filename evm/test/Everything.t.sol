@@ -125,19 +125,16 @@ contract Everything_Test is Test, Fixtures {
         AUX = new Aux(address(V4),
             address(gauntletWETHvault), 
             address(AMP), address(WETHv3pool), 
-            address(WBTCv3pool), address(V3router),
-            address(0), // TODO plugin V3
+            address(V3router), address(V3), 
             STABLECOINS, VAULTS);
 
         AMP.setup(payable(address(V3)), address(AUX));
+        QUID = new Basket(address(V4), address(AUX));
 
-        QUID = new Basket(address(V4),
-            address(AUX));
-
-        V4.setup(address(QUID), 
-                 address(AUX), 
+        V4.setup(address(QUID), address(AUX), 
                  address(WETHv3pool));
         AUX.setQuid(address(QUID));
+        V3.setAux(address(AUX));
 
         vm.startPrank(User01);
         USDC.approve(address(AUX), 500000 * USDC_PRECISION);
@@ -279,5 +276,5 @@ contract Everything_Test is Test, Fixtures {
                          stack / 10, 1); // Original tolerance
 
         vm.stopPrank();
-    } 
+    }
 }

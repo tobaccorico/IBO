@@ -36,19 +36,12 @@ interface IStakeToken is IERC20 { // (safety module)
 
 /// @title  Auxiliary System for Vogue specifically, vanilla V4
 /// @notice Handles ETH/USD conversions, and batch swap clearing
-/// @dev Integrates UniV3 for swaps, AAVEv3 for leverage, makes
-/// incentives for migrating away from WBTC to our restaked BTC
-/// as well as V3 to V4...
+/// @dev Integrates UniV3 for swaps, AAVEv3 for leverage
 contract Aux is Ownable { 
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IERC4626;
     
-    // these two refer to the
-    // UniswapV3 pool versions
     bool public token1isWETH;
-    bool public token1isWBTC;
-    // there are also two of
-    // these for the V4 pools
     address[] public stables;
     Metrics public metrics;
     IERC20 USDC; Basket QUID; 
@@ -70,13 +63,8 @@ contract Aux is Ownable {
     ISwapRouter v3Router; 
 
     uint internal _ETH_PRICE; // TODO remove
-    uint internal _BTC_PRICE; // TODO remove
-
     // QD balances are applied to total weights
     // for voted % (weights are the balances)
-    uint public deployed; uint internal K = 28; // TODO values
-    uint public SUM; uint[33] public WEIGHTS;
-    mapping (address => uint) public feeVotes;
 
     bytes4 immutable SWAP_SELECTOR;
     // ^ just for calling the Vogue
@@ -98,21 +86,21 @@ contract Aux is Ownable {
     /// @param _vogue UniV4 rover  address...
     /// @param _vault Morpho for WETH deposits 
     /// @param _v3poolWETH V3 pool 
-    /// @param _v3poolWBTC V3 pool 
     /// @param _v3router V3 router for swaps
     /// @param _v3 our wrapper around UniV3
     /// @param _amp AAVE yield-amplifier...
     constructor(/// 
         address _vogue, address _vault, 
         address _amp, address _v3poolWETH, 
-        address _v3poolWBTC, address _v3router, 
-        address _v3, address[] memory _stables, 
-        address[] memory _vaults) Ownable(msg.sender) {
+        address _v3router, address _v3, 
+        address[] memory _stables, 
+        address[] memory _vaults) 
+        Ownable(msg.sender) {
         lastBlock = block.number - 1;
         deploymentBlock = lastBlock;
         v3Router = ISwapRouter(_v3router);
         v3PoolWETH = IUniswapV3Pool(_v3poolWETH);
-        // v3PoolWBTC = IUniswapV3Pool(_v3poolWBTC); // TODO
+        
         address token0 = v3PoolWETH.token0();
         address token1 = v3PoolWETH.token1();
         wethVault = IERC4626(_vault);
@@ -125,15 +113,7 @@ contract Aux is Ownable {
             WETH = WETH9(payable(token0));
             USDC = IERC20(token1);
         } V4 = Vogue(payable(_vogue)); 
-        /* token0 = v3PoolWBTC.token0();
-        token1 = v3PoolWBTC.token1();
-        if (IERC20(token1).decimals() >
-            IERC20(token0).decimals()) {
-            WBTC = ;
-            token1isWBTC = true; 
-        } else { token1isWBTC = false;
-            WBTC = WETH9(payable(token0));
-        } */
+      
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
         for (uint i = 0; i < _vaults.length; i++) {
@@ -142,7 +122,6 @@ contract Aux is Ownable {
             underlying[vault] = stable;
             isStable[stable] = true;
         }
-        
         if (_amp != address(0))   
             AMP = Amp(payable(_amp));
         if (_v3 != address(0))   
@@ -268,9 +247,7 @@ contract Aux is Ownable {
 
     /// @notice Public function to trigger batch clearing
     /// @dev Anyone can call to process pending swaps 
-    function clearSwaps(/* uint nft */) external { 
-        // TODO clear against a specific segment 
-        // in total liquidity, priority fee cut
+    function clearSwaps() external { 
         (uint160 sqrtPriceX96, int24 tickLower, 
         int24 tickUpper, uint128 myLiquidity) = V4.repack();
         uint price = getPrice(sqrtPriceX96);
@@ -329,12 +306,15 @@ contract Aux is Ownable {
                     // but slippage is absorbed by
                     // the V3 LPs rather than the 
                     // originators of the V4 batch
-                        gotForETH = V3.withdrawUSDC(remains / 1e12);
-                        remains -= gotForETH * 1e12;
-                        uint eth = FullMath.mulDiv(WAD * 1e12, 
-                                            gotForETH, price);
-                        V3.deposit(eth);
-                        value -= eth;
+                        gotForETH = V3.withdrawUSDC(
+                                     remains / 1e12);
+                        if (gotForETH > 0) {
+                            remains -= gotForETH * 1e12;
+                            uint eth = FullMath.mulDiv(WAD * 1e12, 
+                                                gotForETH, price);
+                            V3.deposit(eth);
+                            value -= eth;
+                        }
                     } 
                     if (!v3 || remains > 0) {
                         WETH.deposit{value: value}();
@@ -344,7 +324,9 @@ contract Aux is Ownable {
                     if (gotForETH > 0) {
                         address vault = vaults[address(USDC)];
                         USDC.approve(vault, gotForETH);
-                        uint shares = IERC4626(vault).deposit(gotForETH, address(this));
+                        uint shares = IERC4626(vault).deposit(
+                                    gotForETH, address(this));
+                        
                         perVault[vault].shares += shares;
                         perVault[vault].cash += gotForETH;
                     }
@@ -368,12 +350,14 @@ contract Aux is Ownable {
                         remains, address(USDC), true);
                     if (v3) {
                         uint eth = V3.take(value);
-                        uint usd = FullMath.mulDiv(
-                            eth, price, WAD * 1e12);
-                        V3.depositUSDC(usd, price);
-                        splitForETH -= usd;
-                        gotForUSD += eth; 
-                        value -= eth;
+                        if (eth > 0) {
+                            uint usd = FullMath.mulDiv(
+                                eth, price, WAD * 1e12);
+                            V3.depositUSDC(usd, price);
+                            splitForETH -= usd;
+                            gotForUSD += eth; 
+                            value -= eth;
+                        }
                     }
                     if (!v3 || splitForETH > 0)
                         gotForUSD += _getWETH(splitForETH, 
@@ -394,8 +378,7 @@ contract Aux is Ownable {
                 (bool success,) = address(V4).call
                 {gas: forGas + gasleft()}(payload);
             } 
-        }
-        lastBlock = endBlock;
+        } lastBlock = endBlock;
     } 
     
     /// @notice leveraged long (borrow WETH against USDC)
@@ -419,7 +402,7 @@ contract Aux is Ownable {
             uint needed = totalValue / 1e12 - took;
             uint selling = FullMath.mulDiv(needed, 
                                 WAD * 1e12, price);
-           // require(V4.unpend(selling) == selling); // TODO
+
             selling = V4.takeETH(selling);
             WETH.deposit{value: selling}();
             took += _getUSDC(selling, 
@@ -451,12 +434,6 @@ contract Aux is Ownable {
         AMP.leverUSD(msg.sender,
                  amount, inETH);
     } 
-    
-    // function future yield of dollars on ETH trading
-    // from people taking profits is guaranteed to backstop
-    // any possible downfall of BTC in the EigenLayer pool
-    // making re-staking using bonds the best way to make
-    // economic security a bootstrapped game theoretically
 
     /// @notice Convert Basket tokens into dollars
     /// @param amount of tokens to redeem, 1e18
@@ -486,9 +463,9 @@ contract Aux is Ownable {
     }
 
     function collect() external { // just pack a bag'n'GHO
-        address vault = vaults[stables[stables.length-1]];
+        address vault = vaults[stables[stables.length - 1]];
         IStakeToken(vault).claimRewards(
-            Vogue(V4).owner(), type(uint).max);
+        Vogue(V4).owner(), type(uint).max);
     }
 
     function get_deposits() public view
@@ -631,62 +608,6 @@ contract Aux is Ownable {
             require(false, "unsupported token");
         } require(usd > 0, "deposited nothing");
     }
-
-    /*
-    function vote(uint new_vote) external {
-        uint old_vote = feeVotes[msg.sender];
-        old_vote = old_vote == 0 ? 28 : old_vote;
-        require(new_vote != old_vote &&
-                new_vote < 33, "bad vote");
-        uint stake = totalBalances[msg.sender];
-        feeVotes[msg.sender] = new_vote;
-        _calculateMedian(stake, old_vote,
-                         stake, new_vote);
-    } */
-
-    /** https://x.com/QuidMint/status/1833820062714601782
-     *  Find value of k in range(0, len(Weights)) such that
-     *  sum(Weights[0:k]) = sum(Weights[k:len(Weights)+1]) = sum(Weights) / 2
-     *  If there is no such value of k, there must be a value of k
-     *  in the same range range(0, len(Weights)) such that
-     *  sum(Weights[0:k]) > sum(Weights) / 2
-     */ 
-    /* function _calculateMedian( // for fee
-        uint old_stake, uint old_vote,
-        uint new_stake, uint new_vote) internal {
-        if (old_vote != 28 && old_stake != 0) {
-            WEIGHTS[old_vote] -= FullMath.min(
-                WEIGHTS[old_vote], old_stake);
-            if (old_vote <= K) { 
-                SUM -= FullMath.min(SUM, old_stake); 
-            }
-        }   
-        if (new_stake != 0) { 
-            if (new_vote <= K) {
-                SUM += new_stake; 
-            }
-            WEIGHTS[new_vote] += new_stake; 
-        }
-        uint mid = SUM / 2; 
-        if (mid != 0) {
-            if (K > new_vote) {
-                while (K >= 1 && 
-                    ((SUM - WEIGHTS[K]) >= mid)) { 
-                        SUM -= WEIGHTS[K]; 
-                        K -= 1;
-                    }
-            } else { 
-                while (SUM < mid) { 
-                    K += 1;
-                    SUM += WEIGHTS[K]; 
-                }
-            } 
-        } else { 
-            K = new_vote;
-            SUM = new_stake;
-        } // TODO
-        // set the allocation
-    } */
 
     /// @notice Test function to manually set ETH price
     /// @dev TODO: Remove for production

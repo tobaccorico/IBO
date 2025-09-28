@@ -12,6 +12,7 @@ import {ReentrancyGuard} from "solmate/src/utils/ReentrancyGuard.sol";
 import {TickMath} from "./imports/v3/TickMath.sol";
 import {FullMath} from "./imports/v3/FullMath.sol";
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
 import {LiquidityAmounts} from "./imports/v3/LiquidityAmounts.sol";
 import {INonfungiblePositionManager} from "./imports/v3/INonfungiblePositionManager.sol";
@@ -19,7 +20,7 @@ import {INonfungiblePositionManager} from "./imports/v3/INonfungiblePositionMana
 import {ISwapRouter} from "./imports/v3/ISwapRouter.sol"; // on L1 and Arbitrum
 
 // import "lib/forge-std/src/console.sol"; 
-contract Rover is ReentrancyGuard {
+contract Rover is ReentrancyGuard, Ownable {
     using SafeTransferLib for ERC20;
     using SafeTransferLib for WETH;
     address public immutable USDC;
@@ -71,12 +72,13 @@ contract Rover is ReentrancyGuard {
     constructor(address _amp,
         address _weth, address _usdc,
         address _nfpm, address _pool, 
-        address _router) { USDC = _usdc;
-        POOL = _pool; ROUTER = _router;
+        address _router) Ownable(msg.sender) { 
+        USDC = _usdc; POOL = _pool; 
         _deployed = block.timestamp;
         weth = WETH(payable(_weth));
         AMP = Amp(payable(_amp)); 
-
+        ROUTER = _router;
+        
         address token0 = IUniswapV3Pool(POOL).token0();
         address token1 = IUniswapV3Pool(POOL).token1();
         token1isWETH = (token1 == _weth);
@@ -94,8 +96,9 @@ contract Rover is ReentrancyGuard {
         ERC20(USDC).approve(_nfpm, type(uint256).max);
     }
 
-    function setAux(address _aux) external onlyUs {
+    function setAux(address _aux) external onlyOwner {
         require(AUX == address(0)); AUX = _aux;
+        renounceOwnership();
     }
 
     function _repackNFT(uint amount0, uint amount1,
