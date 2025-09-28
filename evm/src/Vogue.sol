@@ -86,10 +86,10 @@ contract Vogue is SafeCallback, Ownable {
     uint public ETH_FEES;
     uint public YIELD;
     
-    bytes internal constant ZERO_BYTES = bytes("");
+    
     modifier onlyAux {
         require(msg.sender == address(AUX), "403"); _;
-    }
+    } bytes internal constant ZERO_BYTES = bytes("");
     constructor(IPoolManager _manager, address _vault) 
         SafeCallback(_manager) 
         Ownable(msg.sender) { 
