@@ -17,17 +17,10 @@ pub static ACCOUNT_MAP: phf::Map<&'static str, &'static str> = phf_map! {
      // "drain the whole sea...get somethin' shiny..."
     // Auuuuuuuuu....56709...淋しさに Ah... 気づいてた Ah...
     "BTC" => "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo",
-}; // Soonami waves 8 it seems Piscine was weight my scene
+};
 
-// using layer zero cross chain
-// messaging allows to completely
-// bypass using pyth as an oracle
-// optionally for BTC itself as 
-// an alternative to Zeus on SOL
-// with EigenLayer and Uniswap
 pub const MAX_LEN: usize = 200;
 pub const MAX_AGE: u64 = 300; 
-// dog pound goes in dog years
 
 #[constant] 
 // pub const USD_STAR: Pubkey = pubkey!("BenJy1n3WTx9mTjEvy63e8Q1j4RqUc6E4VBMz3ir4Wo6");

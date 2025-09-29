@@ -30,6 +30,7 @@ import {Amp} from "../src/Amp.sol";
 import {Vogue} from "../src/Vogue.sol";
 import {Rover} from "../src/Rover.sol";
 import {Basket} from "../src/Basket.sol";
+import {VogueCore} from "../src/VogueCore.sol";
 
 // that is my beautiful dream...
 // no snowball derivative, but...    
@@ -81,6 +82,7 @@ contract Everything_Test is Test, Fixtures {
     IERC4626 public SUSDE = IERC4626(0x9D39A5DE30e57443BfF2A8307A4256c8797A3497);
     IERC4626 public SCRVUSD = IERC4626(0x0655977FEb2f289A4aB78af67BAB0d17aAb84367);
 
+    VogueCore public CORE;
     Basket public QUID;
     Vogue public V4;
     Rover public V3;
@@ -119,10 +121,12 @@ contract Everything_Test is Test, Fixtures {
             address(USDC), address(nfpm), address(WETHv3pool), 
             address(V3router) // newer interface on L1 and Arbitrum
         );
-        
-        V4 = new Vogue(manager, 
-        address(gauntletWETHvault));
+
+        V4 = new Vogue(address(gauntletWETHvault));
+        CORE = new VogueCore(manager);
+
         AUX = new Aux(address(V4),
+            address(CORE),
             address(gauntletWETHvault), 
             address(AMP), address(WETHv3pool), 
             address(V3router), address(V3), 
@@ -131,8 +135,9 @@ contract Everything_Test is Test, Fixtures {
         AMP.setup(payable(address(V3)), address(AUX));
         QUID = new Basket(address(V4), address(AUX));
 
-        V4.setup(address(QUID), address(AUX), 
-                 address(WETHv3pool));
+        V4.setup(address(QUID), address(AUX), address(CORE));
+        CORE.setup(address(V4), address(AUX), address(WETHv3pool));
+
         AUX.setQuid(address(QUID));
         V3.setAux(address(AUX));
 
@@ -162,7 +167,8 @@ contract Everything_Test is Test, Fixtures {
         // assertApproxEqAbs(balanceBefore - balanceAfter, stack/10, 100);
         assertApproxEqAbs(balanceBefore - balanceAfter, 1 ether, 100);
 
-        V4.pull(id, 100);
+        balanceBefore = User01.balance;
+        V4.pull(id, 100, address(USDC));
 
         balanceAfter = User01.balance; // USDC.balanceOf(User01)
         assertApproxEqAbs(balanceBefore, balanceAfter, 108323224883144);

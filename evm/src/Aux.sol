@@ -5,6 +5,7 @@ import {BasketLib} from "./BasketLib.sol";
 import {Types} from "./imports/Types.sol";
 import {Basket} from "./Basket.sol";
 import {Vogue} from "./Vogue.sol";
+import {VogueCore} from "./VogueCore.sol";
 import {Rover} from "./Rover.sol";
 import {Amp} from "./Amp.sol";
 
@@ -45,8 +46,8 @@ contract Aux is Ownable {
     address[] public stables;
     Metrics public metrics;
     IERC20 USDC; Basket QUID; 
-    WETH9 public WETH;
-    Vogue V4; Rover V3;
+    Vogue V4; VogueCore CORE;
+    WETH9 public WETH; Rover V3;
     struct Metrics {
         uint total;
         uint last;
@@ -78,7 +79,8 @@ contract Aux is Ownable {
     uint deploymentBlock;
     // ^ for ASS...
     modifier onlyVogue { 
-        require(msg.sender == address(V4) , "403"); _;
+        require(msg.sender == address(V4)
+             || msg.sender == address(CORE) , "403"); _;
     }    
 
     /// @notice init (plug) Aux with addresses
@@ -89,9 +91,9 @@ contract Aux is Ownable {
     /// @param _v3router V3 router for swaps
     /// @param _v3 our wrapper around UniV3
     /// @param _amp AAVE yield-amplifier...
-    constructor(/// 
-        address _vogue, address _vault, 
-        address _amp, address _v3poolWETH, 
+    constructor(address _vogue, address _core,
+        address _vault, address _amp, 
+        address _v3poolWETH, 
         address _v3router, address _v3, 
         address[] memory _stables, 
         address[] memory _vaults) 
@@ -113,7 +115,8 @@ contract Aux is Ownable {
             WETH = WETH9(payable(token0));
             USDC = IERC20(token1);
         } V4 = Vogue(payable(_vogue)); 
-      
+        CORE = VogueCore(_core);
+
         require(_stables.length == _vaults.length, "align"); 
         address stable; address vault; stables = _stables;
         for (uint i = 0; i < _vaults.length; i++) {
@@ -128,7 +131,7 @@ contract Aux is Ownable {
             V3 = Rover(payable(_v3));
             
         SWAP_COST = 637000 * 2; // TODO recalculate
-        // ^ gas for 1 loop iteration in V4.swap()
+        // ^ gas for 1 loop iteration in CORE.swap()
         UNWIND_COST = 3524821; // TODO recalculate
         // ^ gas for unwind()
         SWAP_SELECTOR = bytes4(
@@ -149,7 +152,7 @@ contract Aux is Ownable {
         uint ratioX128 = FullMath.mulDiv(
                  casted, casted, 1 << 64);
         
-        if (V4.token1isETH()) {
+        if (CORE.token1isETH()) {
             price = FullMath.mulDiv(1 << 128,
                 WAD * 1e12, ratioX128);
         } else {
@@ -198,7 +201,7 @@ contract Aux is Ownable {
     /// @return blockNumber Block when trade will clear
     function swap(address token, bool forETH, uint amount, 
         uint waitable) public payable returns (uint blockNumber) { 
-        (uint160 sqrtPriceX96,,,) = V4.repack(); bool sensitive; 
+        (uint160 sqrtPriceX96,,,) = CORE.repack(); bool sensitive; 
         uint price = getPrice(sqrtPriceX96); 
         
         bool stable = isStable[token];
@@ -209,7 +212,7 @@ contract Aux is Ownable {
         bool zeroForOne;
         if (!forETH) { // < trying to sell ETH for dollars
             require(token == address(QUID) || stable, "$!");
-            zeroForOne = V4.token1isETH() ? false : true;
+            zeroForOne = CORE.token1isETH() ? false : true;
             amount = _depositETH(amount);
             wethVault.deposit(amount, address(V4)); 
             sensitive = FullMath.mulDiv(amount,
@@ -217,7 +220,7 @@ contract Aux is Ownable {
             if (sensitive) 
                 amount -= SWAP_COST;
         } else {
-            zeroForOne = V4.token1isETH() ? true : false;
+            zeroForOne = CORE.token1isETH() ? true : false;
             amount = deposit(msg.sender, token, amount);
             uint scale = IERC20(token).decimals() - 6; 
             amount /= scale > 0 ? 10 ** scale : 1;
@@ -233,14 +236,14 @@ contract Aux is Ownable {
             current.sender = msg.sender;
             current.token = token;        
             current.amount = amount;
-            blockNumber = V4.pushSwap(zeroForOne, 
+            blockNumber = CORE.pushSwap(zeroForOne, 
                                 current, waitable);
         } else { blockNumber = block.number;
             // Executes instantly, no batching, 
             // no sandwich protection...cheaper, 
             // reliably scalable...suitable for: 
             // small trades, routine flow, etc.
-            V4.swap(sqrtPriceX96, msg.sender,
+            CORE.swap(sqrtPriceX96, msg.sender,
                     zeroForOne, token, amount);
         } 
     }
@@ -249,7 +252,7 @@ contract Aux is Ownable {
     /// @dev Anyone can call to process pending swaps 
     function clearSwaps() external { 
         (uint160 sqrtPriceX96, int24 tickLower, 
-        int24 tickUpper, uint128 myLiquidity) = V4.repack();
+        int24 tickUpper, uint128 myLiquidity) = CORE.repack();
         uint price = getPrice(sqrtPriceX96);
         _clearSwaps(sqrtPriceX96, price);
     }
@@ -279,9 +282,9 @@ contract Aux is Ownable {
         for (uint blockToProcess = startBlock;
             blockToProcess <= endBlock; blockToProcess++) {
             (Types.Batch memory forUSD, 
-            Types.Batch memory forETH) = V4.getSwapsETH(blockToProcess);
-            uint pooled_usd = V4.POOLED_USD();
-            uint pooled_eth = V4.POOLED_ETH();
+            Types.Batch memory forETH) = CORE.getSwapsETH(blockToProcess);
+            uint pooled_usd = CORE.POOLED_USD();
+            uint pooled_eth = CORE.POOLED_ETH();
             pooled_usd *= 1e12;
             if (forUSD.total > 0) { // selling ETH for USD
                 swaps += SWAP_COST * forUSD.swaps.length;
@@ -297,7 +300,7 @@ contract Aux is Ownable {
                     // entered into the wethVault via
                     // swap() in this contract, the 
                     // amount should be available...
-                    value = V4.takeETH(splitForUSD);
+                    value = V4.takeETH(splitForUSD, address(this));
                     // this amount gets placed in
                     // V3 in exchange for drawing $
                     if (v3) { // slippage is double
@@ -372,7 +375,7 @@ contract Aux is Ownable {
                     gotForETH, gotForUSD);
                     // NOTE our order here
 
-                uint forGas = V4.takeETH(swaps); 
+                uint forGas = V4.takeETH(swaps, address(this)); 
                 // because the way we do this low-level call, our swap 
                 // has to be AUX (not rover, would otherwise make sense)
                 (bool success,) = address(V4).call
@@ -403,7 +406,7 @@ contract Aux is Ownable {
             uint selling = FullMath.mulDiv(needed, 
                                 WAD * 1e12, price);
 
-            selling = V4.takeETH(selling);
+            selling = V4.takeETH(selling, address(this));
             WETH.deposit{value: selling}();
             took += _getUSDC(selling, 
                 needed - needed / 200);
@@ -429,7 +432,7 @@ contract Aux is Ownable {
         uint inETH = FullMath.mulDiv(WAD,
                         scaled, price);
 
-        inETH = V4.takeETH(inETH);
+        inETH = V4.takeETH(inETH, address(this));
         WETH.deposit{value: inETH}();
         AMP.leverUSD(msg.sender,
                  amount, inETH);
@@ -439,7 +442,7 @@ contract Aux is Ownable {
     /// @param amount of tokens to redeem, 1e18
     function redeem(uint amount) external {
         (uint total, ) = get_metrics(false);
-        uint burnable = total - V4.POOLED_USD();
+        uint burnable = total - CORE.POOLED_USD();
         require(burnable > amount, "untouchable");
         // it's all about waiting for your turn
         amount = QUID.turn(msg.sender, amount);
