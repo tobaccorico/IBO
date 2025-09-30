@@ -60,19 +60,13 @@ contract Aux is Ownable {
     mapping(address => address) public underlying;
     IERC4626 public wethVault;
     IUniswapV3Pool v3PoolWETH;
+    uint constant WAD = 1e18;
     ISwapRouter v3Router; 
 
     uint internal _ETH_PRICE; // TODO remove
     // QD balances are applied to total weights
     // for voted % (weights are the balances)
-
-    bytes4 immutable SWAP_SELECTOR;
-    // ^ just for calling the Vogue
-
-    uint internal SWAP_COST; 
-    uint internal UNWIND_COST;
-    uint constant WAD = 1e18;
-    
+        
     Amp public AMP;
     uint lastBlock; 
     uint deploymentBlock;
@@ -128,14 +122,7 @@ contract Aux is Ownable {
             AMP = Amp(payable(_amp));
         if (_v3 != address(0))   
             V3 = Rover(payable(_v3));
-            
-        SWAP_COST = 637000 * 2; // TODO recalculate
-        // ^ gas for 1 loop iteration in CORE.swap()
-        UNWIND_COST = 3524821; // TODO recalculate
-        // ^ gas for unwind()
-        SWAP_SELECTOR = bytes4(
-            keccak256("batchSwap(uint160,uint256,uint256,uint256,uint256,uint256)")
-        );
+           
     } fallback() external payable {}
 
     /// @notice ETH price from sqrtPriceX96
@@ -216,21 +203,15 @@ contract Aux is Ownable {
             wethVault.deposit(amount, address(V4)); 
             sensitive = FullMath.mulDiv(amount,
                              price, WAD) >= 5000 * WAD;
-            if (sensitive) 
-                amount -= SWAP_COST;
         } else {
             zeroForOne = CORE.token1isETH() ? true : false;
             amount = deposit(msg.sender, token, amount);
             uint scale = IERC20(token).decimals() - 6; 
             amount /= scale > 0 ? 10 ** scale : 1;
-            sensitive = amount >= 500 * 1e6; 
-            if (sensitive) // < park the ETH for gas comp...
-                wethVault.deposit(_depositETH(0), address(V4)); 
+            sensitive = amount >= 5000 * 1e6; 
         } 
-        if (sensitive) { // subsidise gas cost...
-            require(msg.value >= SWAP_COST, "gas");
-            // entering into protected clearing
-            // pipeline: no sandwiches, slower
+        if (sensitive) { 
+            // no sandwiches, slower
             Types.Trade memory current;
             current.sender = msg.sender;
             current.token = token;        
@@ -347,14 +328,17 @@ contract Aux is Ownable {
         (uint160 sqrtPriceX96,,,,,,) = v3PoolWETH.slot0();
         uint price = getPrice(sqrtPriceX96);
         uint totalValue = FullMath.mulDiv(amount, price, WAD);
-        uint took = _take(address(this), totalValue / 1e12, address(USDC), false); 
+        uint took = _take(address(this), totalValue / 1e12, 
+                          address(USDC), false); 
     
         if (totalValue / 1e12 > took + 1) {
             uint needed = totalValue / 1e12 - took;
-            uint selling = FullMath.mulDiv(needed, WAD * 1e12, price);
+            uint selling = FullMath.mulDiv(
+                 needed, WAD * 1e12, price);
             selling = V4.takeETH(selling, address(this));
             WETH.deposit{value: selling}();
-            took += _getUSDC(selling, needed - needed / 200);
+            took += _getUSDC(selling, 
+            needed - needed / 200);
             amount -= selling;
         } 
         AMP.leverETH(msg.sender, amount, took);

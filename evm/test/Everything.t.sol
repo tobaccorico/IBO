@@ -52,8 +52,7 @@ contract Everything_Test is Test, Fixtures {
     IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
     IUniswapV3Pool public WBTCv3pool = IUniswapV3Pool(0x99ac8cA7087fA4A2A1FB6357269965A2014ABc35);
     
-    address[] public STABLECOINS;
-    address[] public VAULTS;
+    address[] public STABLECOINS; address[] public VAULTS;
 
     IERC20 public WETH = IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
@@ -90,7 +89,6 @@ contract Everything_Test is Test, Fixtures {
     Amp public AMP;
 
     uint stack = 10000 * USDC_PRECISION;
-    uint SWAP_COST = 1817119; // TODO...
     function setUp() public {
         STABLECOINS = [
             address(USDC), address(USDT),
@@ -191,10 +189,10 @@ contract Everything_Test is Test, Fixtures {
         // Approve enough USDC for 4 swaps with buffer for fees
         USDC.approve(address(AUX), (price / 1e12) * 5); 
 
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
-        AUX.swap{value: SWAP_COST}(address(USDC), true, price / 1e12, 2);
+        AUX.swap(address(USDC), true, price / 1e12, 2);
+        AUX.swap(address(USDC), true, price / 1e12, 2);
+        AUX.swap(address(USDC), true, price / 1e12, 2);
+        AUX.swap(address(USDC), true, price / 1e12, 2);
         vm.roll(vm.getBlockNumber() + 1);
         AUX.clearSwaps();
 
@@ -236,28 +234,22 @@ contract Everything_Test is Test, Fixtures {
         address[] memory whose = new address[](1);
         whose[0] = User01;
 
-        bool[] memory direction = new bool[](1);
-        direction[0] = true;
-
         // uint price = AUX.getPrice(0, false, false);
         // uint expectingToBuy = price * 1 ether;
         // expectingToBuy += expectingToBuy / 25;
         // ^ leveraged swaps give a boosted gain
 
-        AUX.leverETH{value: 1 ether + 3524821}(0);
-
+        AUX.leverETH{value: 1 ether}(0);
         // Simulate spike in price
         AUX.set_price_eth(true);
 
         // We will get "Too little received"
         // because the simulated price spike
         // will not correspond to pool price
-        // AUX.unwind(whose, direction); // TODO
 
         // Approve enough USDC with buffer for fees
         USDC.approve(address(AUX), stack / 5);
-        AUX.leverUSD{value : 3524821}(stack / 10,
-                                    address(USDC));
+        AUX.leverUSD(stack / 10, address(USDC));
         vm.stopPrank();
     } 
     
