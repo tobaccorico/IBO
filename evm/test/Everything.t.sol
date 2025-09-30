@@ -135,8 +135,8 @@ contract Everything_Test is Test, Fixtures {
         AMP.setup(payable(address(V3)), address(AUX));
         QUID = new Basket(address(V4), address(AUX));
 
-        V4.setup(address(QUID), address(AUX), address(CORE));
         CORE.setup(address(V4), address(AUX), address(WETHv3pool));
+        V4.setup(address(QUID), address(AUX), address(CORE));
 
         AUX.setQuid(address(QUID));
         V3.setAux(address(AUX));
@@ -157,7 +157,7 @@ contract Everything_Test is Test, Fixtures {
         // (which adds 400) to the current tick, creating a position 
         // above the current price, which is valid for ETH deposits when token1isETH = true.
         uint id = V4.outOfRange{value: 1 ether}(0, // TODO btc
-                            address(0), 4000, 100);
+                            address(0), -1000, 100);
 
         // USDC.approve(address(QUID), stack / 10);
         /* uint id = V4.outOfRange(stack / 10,

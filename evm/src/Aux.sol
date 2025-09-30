@@ -53,8 +53,7 @@ contract Aux is Ownable {
         uint last;
         uint yield;
     }
-    struct Pod { uint shares; uint cash; }
-    mapping(address => Pod) public perVault;
+    
     mapping(address => bool) public isVault;
     mapping(address => bool) public isStable;
     mapping(address => address) public vaults;
@@ -201,7 +200,7 @@ contract Aux is Ownable {
     /// @return blockNumber Block when trade will clear
     function swap(address token, bool forETH, uint amount, 
         uint waitable) public payable returns (uint blockNumber) { 
-        (uint160 sqrtPriceX96,,,) = CORE.repack(); bool sensitive; 
+        (uint160 sqrtPriceX96,,,) = V4.repack(); bool sensitive; 
         uint price = getPrice(sqrtPriceX96); 
         
         bool stable = isStable[token];
@@ -236,7 +235,7 @@ contract Aux is Ownable {
             current.sender = msg.sender;
             current.token = token;        
             current.amount = amount;
-            blockNumber = CORE.pushSwap(zeroForOne, 
+            blockNumber = V4.pushSwap(zeroForOne, 
                                 current, waitable);
         } else { blockNumber = block.number;
             // Executes instantly, no batching, 
@@ -252,7 +251,7 @@ contract Aux is Ownable {
     /// @dev Anyone can call to process pending swaps 
     function clearSwaps() external { 
         (uint160 sqrtPriceX96, int24 tickLower, 
-        int24 tickUpper, uint128 myLiquidity) = CORE.repack();
+        int24 tickUpper, uint128 myLiquidity) = V4.repack();
         uint price = getPrice(sqrtPriceX96);
         _clearSwaps(sqrtPriceX96, price);
     }
@@ -261,182 +260,120 @@ contract Aux is Ownable {
     /// @dev Processes buys first, then sells 
     /// @param sqrtPriceX96 Current pool price
     /// @param price ETH price from UniswapV3...
-    function _clearSwaps( // process recent batch
-    // TODO BTC to USD as distinct from ETH to USD
-    // add v4.takeBTC and attach v3pool for WBTC...
-        uint160 sqrtPriceX96, uint price) internal {
-        uint currentBlock = block.number;
-        uint startBlock = lastBlock + 1;
-        if (startBlock >= currentBlock)
-            return;
+    function _clearSwaps(uint160 sqrtPriceX96, uint price) internal {
+        if (lastBlock + 1 >= block.number) return;
+        uint endBlock = block.number - 1;
+        if (endBlock > lastBlock + 10) 
+            endBlock = lastBlock + 10;
         
-        uint endBlock = currentBlock - 1;
-        if (endBlock > startBlock + 9) 
-            endBlock = startBlock + 9;
-        
-        uint gotForETH; uint gotForUSD;
-        uint swaps; uint value; uint remains; 
-        bool v3 = address(V3) != address(0);
-        // ^ optional (depends on deployment
-        uint splitForUSD; uint splitForETH;
-        for (uint blockToProcess = startBlock;
+        for (uint blockToProcess = lastBlock + 1; 
             blockToProcess <= endBlock; blockToProcess++) {
             (Types.Batch memory forUSD, 
-            Types.Batch memory forETH) = CORE.getSwapsETH(blockToProcess);
-            uint pooled_usd = CORE.POOLED_USD();
+            Types.Batch memory forETH) = V4.getSwapsETH(blockToProcess);
+            if (forUSD.total == 0 && forETH.total == 0) continue;
+            uint pooled_usd = CORE.POOLED_USD() * 1e12;
             uint pooled_eth = CORE.POOLED_ETH();
-            pooled_usd *= 1e12;
-            if (forUSD.total > 0) { // selling ETH for USD
-                swaps += SWAP_COST * forUSD.swaps.length;
-                // dollar value of total ETH to sell...
-                value = FullMath.mulDiv(
-                forUSD.total, price, WAD);
-                if (value > pooled_usd) { // V4 alone
-                // can't handle batch's entire value
-                    remains = value - pooled_usd;
-                    splitForUSD = FullMath.mulDiv(
-                            remains, WAD, price);
-                    // since the ETH for the swap was
-                    // entered into the wethVault via
-                    // swap() in this contract, the 
-                    // amount should be available...
-                    value = V4.takeETH(splitForUSD, address(this));
-                    // this amount gets placed in
-                    // V3 in exchange for drawing $
-                    if (v3) { // slippage is double
-                    // compared to a direct swap of
-                    // WETH for USDC (one step)...
-                    // but slippage is absorbed by
-                    // the V3 LPs rather than the 
-                    // originators of the V4 batch
-                        gotForETH = V3.withdrawUSDC(
-                                     remains / 1e12);
+            uint splitForUSD; uint splitForETH;
+            uint gotForETH; uint gotForUSD;
+            if (forUSD.total > 0) {
+                pooled_usd = FullMath.mulDiv(forUSD.total, price, WAD);    
+                if (pooled_usd > CORE.POOLED_USD() * 1e12) {
+                    pooled_eth = pooled_usd - (CORE.POOLED_USD() * 1e12);
+                    splitForUSD = FullMath.mulDiv(pooled_eth, WAD, price);
+                    pooled_usd = V4.takeETH(splitForUSD, address(this));
+                    
+                    if (address(V3) != address(0)) {
+                        gotForETH = V3.withdrawUSDC(pooled_eth / 1e12);
                         if (gotForETH > 0) {
-                            remains -= gotForETH * 1e12;
-                            uint eth = FullMath.mulDiv(WAD * 1e12, 
-                                                gotForETH, price);
-                            V3.deposit(eth);
-                            value -= eth;
+                            pooled_eth -= gotForETH * 1e12;
+                            V3.deposit(FullMath.mulDiv(WAD * 1e12, gotForETH, price));
+                            pooled_usd -= FullMath.mulDiv(WAD * 1e12, gotForETH, price);
                         }
-                    } 
-                    if (!v3 || remains > 0) {
-                        WETH.deposit{value: value}();
-                        gotForETH += _getUSDC(value, 
-                        (remains - (remains / 100)) / 1e12);
+                    }
+                    if (address(V3) == address(0) || pooled_eth > 0) {
+                        WETH.deposit{value: pooled_usd}();
+                        gotForETH += _getUSDC(pooled_usd, (pooled_eth - (pooled_eth / 100)) / 1e12);
                     }
                     if (gotForETH > 0) {
-                        address vault = vaults[address(USDC)];
-                        USDC.approve(vault, gotForETH);
-                        uint shares = IERC4626(vault).deposit(
-                                    gotForETH, address(this));
-                        
-                        perVault[vault].shares += shares;
-                        perVault[vault].cash += gotForETH;
+                        address vault = vaults[address(USDC)]; USDC.approve(vault, gotForETH);
+                        pooled_eth = IERC4626(vault).deposit(gotForETH, address(this));
                     }
-                } 
-            } // buying ETH for $...
-            if (forETH.total > 0) { // total in $ (1e6)
-                swaps += SWAP_COST * forETH.swaps.length;
-                // total ETH this batch is trying to buy
-                value = FullMath.mulDiv(forETH.total, 
-                                WAD * 1e12, price);
-                if (value > pooled_eth) { // V4 alone
-                // can't handle the whole swap batch
-                    value -= pooled_eth;
-                    remains = forETH.total - FullMath.mulDiv(
-                                pooled_eth, price, WAD * 1e12);
-                    // dollars for swaps were placed
-                    // into the basket through swap()
-                    // but USDC may not necessarily
-                    // be available to fully cover
+                }
+            } pooled_eth = CORE.POOLED_ETH();
+            if (forETH.total > 0) {
+                pooled_usd = FullMath.mulDiv(forETH.total, 
+                                        WAD * 1e12, price);
+                
+                if (pooled_usd > pooled_eth) {
+                    pooled_usd -= pooled_eth;
                     splitForETH = _take(address(this), 
-                        remains, address(USDC), true);
-                    if (v3) {
-                        uint eth = V3.take(value);
-                        if (eth > 0) {
-                            uint usd = FullMath.mulDiv(
-                                eth, price, WAD * 1e12);
-                            V3.depositUSDC(usd, price);
-                            splitForETH -= usd;
-                            gotForUSD += eth; 
-                            value -= eth;
+                        forETH.total - FullMath.mulDiv(pooled_eth, 
+                        price, WAD * 1e12), address(USDC), true);
+                    
+                    if (address(V3) != address(0)) {
+                        pooled_eth = V3.take(pooled_usd); 
+                        if (pooled_eth > 0) {
+                            V3.depositUSDC(FullMath.mulDiv(pooled_eth, 
+                                         price, WAD * 1e12), price);
+                            splitForETH -= FullMath.mulDiv(
+                            pooled_eth, price, WAD * 1e12);
+                            gotForUSD += pooled_eth;
+                            pooled_usd -= pooled_eth;
                         }
                     }
-                    if (!v3 || splitForETH > 0)
+                    if (address(V3) == address(0) || splitForETH > 0) {
                         gotForUSD += _getWETH(splitForETH, 
-                                    value - value / 100);
-                    
+                            pooled_usd - pooled_usd / 100);
+                    }
                     wethVault.deposit(gotForUSD, address(V4));
                 }
-            } if (swaps > 0) {    
-                bytes memory payload = abi.encodeWithSelector(
-                    SWAP_SELECTOR, sqrtPriceX96, blockToProcess,
-                    splitForUSD, splitForETH, 
-                    gotForETH, gotForUSD);
-                    // NOTE our order here
-
-                uint forGas = V4.takeETH(swaps, address(this)); 
-                // because the way we do this low-level call, our swap 
-                // has to be AUX (not rover, would otherwise make sense)
-                (bool success,) = address(V4).call
-                {gas: forGas + gasleft()}(payload);
-            } 
-        } lastBlock = endBlock;
-    } 
+            }
+            (pooled_usd, pooled_eth) = CORE.batchSwap(sqrtPriceX96, blockToProcess, 
+                                                        splitForUSD, splitForETH);
+            
+            V4.distributeBatchSwaps(blockToProcess, sqrtPriceX96, 
+                pooled_usd + gotForUSD, pooled_eth + gotForETH);
+        }
+        lastBlock = endBlock;
+    }
     
     /// @notice leveraged long (borrow WETH against USDC)
     /// @dev 70% LTV on AAVE, excess USDC as collateral
     /// @param amount WETH amount to deposit in AAVE
     function leverETH(uint amount) payable external {
-        require(address(AMP) != address(0) 
-            && msg.value >= UNWIND_COST);
-            amount = _depositETH(amount); 
-            amount -= UNWIND_COST;
+        require(address(AMP) != address(0));
+        amount = _depositETH(amount);
         
         (uint160 sqrtPriceX96,,,,,,) = v3PoolWETH.slot0();
         uint price = getPrice(sqrtPriceX96);
-        uint totalValue = FullMath.mulDiv(
-                        amount, price, WAD);
-
-        uint took = _take(address(this),
-            totalValue / 1e12, address(USDC), false); 
-      
+        uint totalValue = FullMath.mulDiv(amount, price, WAD);
+        uint took = _take(address(this), totalValue / 1e12, address(USDC), false); 
+    
         if (totalValue / 1e12 > took + 1) {
             uint needed = totalValue / 1e12 - took;
-            uint selling = FullMath.mulDiv(needed, 
-                                WAD * 1e12, price);
-
+            uint selling = FullMath.mulDiv(needed, WAD * 1e12, price);
             selling = V4.takeETH(selling, address(this));
             WETH.deposit{value: selling}();
-            took += _getUSDC(selling, 
-                needed - needed / 200);
-                     amount -= selling;
+            took += _getUSDC(selling, needed - needed / 200);
+            amount -= selling;
         } 
         AMP.leverETH(msg.sender, amount, took);
-    } // swap originator gets paid eventually...
+    }
 
-    /// @notice leveraged short (borrow USDC against WETH)
-    /// @param amount Stablecoin amount to deposit
-    /// @param token Stablecoin token address
     function leverUSD(uint amount, 
         address token) payable external {
-        require(address(AMP) != address(0) 
-            && msg.value >= UNWIND_COST);
-    
+        require(address(AMP) != address(0));
         wethVault.deposit(_depositETH(0), address(V4));
         IERC20(token).transferFrom(msg.sender, address(this), amount);
         (uint160 sqrtPriceX96,,,,,,) = v3PoolWETH.slot0();
         uint price = getPrice(sqrtPriceX96);
         uint scaled = 18 - IERC20(token).decimals();
         scaled = scaled > 0 ? amount * (10 ** scaled) : amount;
-        uint inETH = FullMath.mulDiv(WAD,
-                        scaled, price);
-
+        uint inETH = FullMath.mulDiv(WAD, scaled, price);
         inETH = V4.takeETH(inETH, address(this));
         WETH.deposit{value: inETH}();
-        AMP.leverUSD(msg.sender,
-                 amount, inETH);
-    } 
+        AMP.leverUSD(msg.sender, amount, inETH);
+    }
 
     /// @notice Convert Basket tokens into dollars
     /// @param amount of tokens to redeem, 1e18
@@ -478,7 +415,7 @@ contract Aux is Ownable {
         for (uint i = 0; i < ghoIndex; i++) { 
             uint multiplier = i < 2 ? 1e12 : 1;
             vault = vaults[stables[i]];
-            shares = perVault[vault].shares;
+            shares = IERC4626(vault).balanceOf(address(this));
             if (shares > 0) {
                 uint assets = IERC4626(vault).convertToAssets(shares);
                 shares = assets * multiplier; amounts[i + 1] = shares; 
@@ -495,62 +432,71 @@ contract Aux is Ownable {
                      IStakeToken(vault).balanceOf(address(this)));
             amounts[stables.length] = shares;
             amounts[0] += shares;
-        }
+        } 
     }
 
     // you let me in to a conversation, conversation only we could make
     // breaking into my imagination: whatever's in there, yours to take
     function _take(address who, uint amount, address token, 
-        bool strict) internal returns (uint sent) { address vault;
-        if (token != address(QUID)) { vault = vaults[token];
-            uint max = perVault[vault].cash;
+        bool strict) internal returns (uint sent) { 
+        address vault; address vaultToSkip;  
+        if (token != address(QUID)) { 
+            vault = vaults[token];
+            uint max = IERC4626(vault).maxWithdraw(address(this));
+            
             require(max > 0, "No liquidity");
             
             uint fee = 0;
             // uint fee = getFee(token, false, amount); NOTE
-            if (fee > WAD / 10) fee = WAD / 10; // TODO some cap
+            if (fee > WAD / 10) fee = WAD / 10;
             
             uint amountNeeded;
             if (fee > 0)
-                amountNeeded = FullMath.mulDiv(
-                          amount, WAD + 0, WAD);
-            else amountNeeded = amount; 
-            if (max >= amount) {
-                uint withdrawn = _withdraw(who, vault, amount);
-                if (fee > 0) return FullMath.mulDiv(
-                          withdrawn, WAD - fee, WAD);
+                amountNeeded = FullMath.mulDiv(amount, WAD + 0, WAD);
+            else 
+                amountNeeded = amount; 
+                
+            if (max >= amountNeeded) {
+                uint withdrawn = _withdraw(who, vault, amountNeeded);
+                if (fee > 0) return FullMath.mulDiv(withdrawn, WAD - fee, WAD);
                 else return withdrawn;
-            } else { uint withdrawn = _withdraw(who, vault, max);
-                if (fee > 0) sent = FullMath.mulDiv(
-                          withdrawn, WAD - fee, WAD);
+            } else { 
+                uint withdrawn = _withdraw(who, vault, max);
+                if (fee > 0) sent = FullMath.mulDiv(withdrawn, WAD - fee, WAD);
                 else sent = withdrawn;
                 amount -= withdrawn;
+                vaultToSkip = vault; 
                 if (!strict) {
                     sent = BasketLib.scaleTokenAmount(sent, token, true);
                     amount = BasketLib.scaleTokenAmount(amount, token, true);
                 } else return sent; 
             }
-        } uint[10] memory amounts = get_deposits(); 
-        uint ghoIndex = stables.length; sent = 0;
+        } 
+        uint[10] memory amounts = get_deposits();
+        uint ghoIndex = stables.length; 
         for (uint i = 1; i < ghoIndex; i++) {
+            vault = vaults[stables[i - 1]];
+            if (vault == vaultToSkip) continue;
             uint divisor = (i - 1) > 1 ? 1 : 1e12;
-            amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                                WAD, amounts[i], amounts[0]), WAD);
-        
-            amounts[i] /= divisor;
-            if (amounts[i] > 0) { vault = vaults[stables[i - 1]];
+            amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(WAD, 
+                                         amounts[i], amounts[0]), WAD);
+            amounts[i] /= divisor; 
+            if (amounts[i] > 0) { 
                 amounts[i] = _withdraw(who, vault, amounts[i]);
-                sent += amounts[i] * divisor;
-            }
+                sent += amounts[i] * divisor;  
+            } // back to 18 decimals for accounting
         } vault = vaults[stables[stables.length - 1]];
-        amounts[ghoIndex] = FullMath.mulDiv(amount, FullMath.mulDiv(
-                            WAD, amounts[ghoIndex], amounts[0]), WAD);
-                            
-        if (amounts[ghoIndex] > 0) {
-            amount = IStakeToken(vault).previewStake(amounts[ghoIndex]);
-            require(IStakeToken(vault).previewRedeem(amount) == amounts[ghoIndex], "sgho");
-            IStakeToken(vault).redeem(who, amount); sent += amounts[ghoIndex];
-        }
+        if (vault != vaultToSkip) {  // Also skip for GHO
+            amounts[ghoIndex] = FullMath.mulDiv(amount, FullMath.mulDiv(
+                                WAD, amounts[ghoIndex], amounts[0]), WAD);
+                                
+            if (amounts[ghoIndex] > 0) {
+                amount = IStakeToken(vault).previewStake(amounts[ghoIndex]);
+                require(IStakeToken(vault).previewRedeem(amount) == amounts[ghoIndex], "sgho");
+                IStakeToken(vault).redeem(who, amount); 
+                sent += amounts[ghoIndex];
+            }
+        } return sent;
     }
 
     function take(address who, uint amount, address token, bool strict) 
@@ -562,8 +508,10 @@ contract Aux is Ownable {
         address vault, uint amount) internal returns (uint sent) {
         (uint shares, uint assets) = BasketLib.calculateVaultWithdrawal(
                                                           vault, amount);
-        require(assets == IERC4626(vault).redeem(shares, 
-                to, address(this)), "$"); return assets;
+        
+        uint drew = IERC4626(vault).redeem(shares, to, address(this));
+        /* require(assets == IERC4626(vault).redeem(shares, 
+                to, address(this)), "$"); */ return drew;
     }
 
     // there's never an incentive
@@ -584,9 +532,6 @@ contract Aux is Ownable {
             usd = IERC4626(token).convertToAssets(amount);
                    IERC4626(token).transferFrom(msg.sender,
                                     address(this), amount);
-            
-            perVault[token].shares += amount; 
-            perVault[token].cash += usd;
         }    
         else if (isStable[token] || token == SGHO) {
             usd = Math.min(amount, 
@@ -605,8 +550,6 @@ contract Aux is Ownable {
                 amount = IERC4626(vault).deposit(usd, 
                                     address(this));
             } 
-            perVault[vault].shares += amount;
-            perVault[vault].cash += usd;
         } else {
             require(false, "unsupported token");
         } require(usd > 0, "deposited nothing");

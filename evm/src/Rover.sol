@@ -61,7 +61,7 @@ contract Rover is ReentrancyGuard, Ownable {
         (uint160 sqrtPrice, 
          int24 tick,,,,,) = IUniswapV3Pool(POOL).slot0();
         LAST_TICK = tick; uint price = getPrice(sqrtPrice);
-        return (LP, price, sqrtPrice);
+        _repackNFT(0, 0, price); return (LP, price, sqrtPrice);
     }   receive() external payable {}
 
     modifier onlyUs {
@@ -197,12 +197,15 @@ contract Rover is ReentrancyGuard, Ownable {
             liquidityUnderManagement = 0;
         } else {
             liquidityUnderManagement -= liquidity;
-        }   liq = liquidity;
-        NFPM.decreaseLiquidity(
-            INonfungiblePositionManager.DecreaseLiquidityParams(
-                ID, liquidity, 0, 0, block.timestamp));  
-                      (amount0, amount1) = _collect(0);
-    } // careful to prevent fee double count...param^
+        }   
+        if (liquidity > 0) {
+            NFPM.decreaseLiquidity(
+                INonfungiblePositionManager.DecreaseLiquidityParams(
+                    ID, liquidity, 0, 0, block.timestamp));  
+            (uint amount0, uint amount1) = _collect(0);
+            return (amount0, amount1, liquidity); 
+        } else return (0, 0, 0); 
+    } 
     function _adjustToNearestIncrement(int24 input)
         internal pure returns (int24) {
         int24 remainder = input % TICK_SPACING;
@@ -231,28 +234,14 @@ contract Rover is ReentrancyGuard, Ownable {
             return (lower, upper);
     }
     
-    function _swap(uint eth, uint usdc, uint price) internal 
-        returns (uint, uint) { uint targetETH; uint targetUSDC;
-        uint usd = FullMath.mulDiv(eth, price, WAD);
-        // if we assumed a 1:1 ratio of eth value
-        // to usdc, then this is how'd we balance:
-        // int delta = (int(usd) - int(scaled))
-        //            / int(2 * price / 1e18);
-        // if (delta < 0) { // sell $
-        //     selling = uint(delta * -1);
-        //     selling = FullMath.mulDiv(
-        //         selling, price, 1e30);
-        //     usdc -= selling;
-        //     eth += ISwapRouter(ROUTER).exactInput(
-        //         ISwapRouter.ExactInputParams(abi.encodePacked(
-        //             USDC, POOL_FEE, address(weth)), address(this),
-        //             block.timestamp, selling, 0));
-        // }
+    function _swap(uint eth, uint usdc, uint price) internal // TODO check what we pass in as usdc
+        returns (uint, uint) { uint targetETH; uint targetUSDC; // in case *= 1e12 is not necessary
+
         (int24 tick_lower, int24 tick_upper) = _adjustTicks(LAST_TICK);
-        uint160 lower = TickMath.getSqrtPriceAtTick(tick_lower);
         uint160 upper = TickMath.getSqrtPriceAtTick(tick_upper);
         uint160 current = TickMath.getSqrtPriceAtTick(LAST_TICK); 
-        uint128 liquidity; uint scaled = usdc * 1e12; // precision     
+        uint128 liquidity; 
+        usdc *= 1e12; // precision
         liquidity = token1isWETH ? LiquidityAmounts.getLiquidityForAmount1(
                                                         current, upper, eth) : 
                                     LiquidityAmounts.getLiquidityForAmount0(
@@ -260,18 +249,19 @@ contract Rover is ReentrancyGuard, Ownable {
         
         // v4-periphery/src/lib/LiqAmounts doesn't have this function...
         (targetETH, targetUSDC) = LiquidityAmounts.getAmountsForLiquidity(
-                                         current, lower, upper, liquidity);
+        current, TickMath.getSqrtPriceAtTick(tick_lower), upper, liquidity);
+        
         if (token1isWETH)
             (targetETH, targetUSDC) = (targetUSDC, targetETH);
 
         targetUSDC *= 1e12; 
-        if (scaled > targetUSDC) {
-            scaled -= targetUSDC;
-            scaled /= 1e12;
+        if (usdc > targetUSDC) {
+            usdc -= targetUSDC;
+            usdc /= 1e12;
             ERC20(USDC).transfer(
-            address(AMP), scaled);
-            AMP.putUSDC(scaled);
-            scaled = targetUSDC;
+            address(AMP), usdc);
+            AMP.putUSDC(usdc);
+            usdc = targetUSDC;
             // ^ this has to stay in 1e18
             // as weth, for formula purposes 
         } 
@@ -279,13 +269,12 @@ contract Rover is ReentrancyGuard, Ownable {
             weth.transfer(address(AMP), eth);
             AMP.put(eth); eth = targetETH;
         } 
-        if (targetUSDC > scaled) {
+        if (targetUSDC > usdc) {
             uint k = FullMath.mulDiv(
             targetETH, WAD, targetUSDC);
-            uint denom = WAD + FullMath.mulDiv(
-                                 k, price, WAD);
-        
-            uint ky = k * (scaled + 1);
+            
+            // this is actually ky
+            k *= usdc + 1;
             // Assume ETH is X and USDC is Y...
             // the formula is (x - ky)/(1 + kp);
             // we're selling X to buy Y, where
@@ -296,19 +285,19 @@ contract Rover is ReentrancyGuard, Ownable {
             // x - n = ky + knp
             // x - ky = n + knp
             // x - ky = n(1 + kp)
-            uint selling = FullMath.mulDiv(
-                      WAD, eth - ky, denom);
-           
-            eth -= selling; 
-            scaled += ISwapRouter(ROUTER).exactInput(
+            targetETH = FullMath.mulDiv(
+                      WAD, eth - k, // ky actually  
+                      WAD + FullMath.mulDiv(
+                             k, price, WAD));
+            eth -= targetETH; 
+            usdc += ISwapRouter(ROUTER).exactInput(
                 ISwapRouter.ExactInputParams(abi.encodePacked(
                     address(weth), POOL_FEE, USDC), address(this),
-                    block.timestamp, selling, 0)) * 1e12;
+                    block.timestamp, targetETH, 0)) * 1e12;
             
-            ky = FullMath.mulDiv(
-                eth, WAD, scaled);
-        } 
-        return (eth, scaled / 1e12);
+            // ky = FullMath.mulDiv(
+            //    eth, WAD, usdc);
+        } return (eth, usdc / 1e12);
     }
 
     // if deposited once prior, then
@@ -331,9 +320,10 @@ contract Rover is ReentrancyGuard, Ownable {
                                         amount1, price);
     }
 
-    function take(uint amount) // withdraw ETH
-        public onlyUs returns (uint wethAmount) { 
-        uint amount0; uint amount1; uint128 liquidity;
+    function take(uint amount) public onlyUs 
+        returns (uint wethAmount) { repackNFT();
+        uint amount0; uint amount1; 
+        uint128 liquidity;
         if (token1isWETH)
             liquidity = LiquidityAmounts.getLiquidityForAmount1(
                          TickMath.getSqrtPriceAtTick(LAST_TICK),  
@@ -346,15 +336,17 @@ contract Rover is ReentrancyGuard, Ownable {
         (amount0, amount1, ) = _withdrawAndCollect(liquidity);      
         uint usdcAmount = token1isWETH ? amount0 : amount1;
         wethAmount = token1isWETH ? amount1 : amount0;
-        
+        if (usdcAmount > 0) 
         wethAmount += ISwapRouter(ROUTER).exactInput(ISwapRouter.ExactInputParams(
                     abi.encodePacked(USDC, POOL_FEE, address(weth)),
                     address(this), block.timestamp, usdcAmount, 0));
-                              weth.transfer(msg.sender, wethAmount);
+        
+        weth.transfer(msg.sender, wethAmount);
     }
 
     function depositUSDC(uint amount, 
-        uint price) onlyUs public { uint amount0; uint amount1;
+        uint price) onlyUs public { repackNFT();
+        uint amount0; uint amount1;
         ERC20(USDC).transferFrom(address(AUX), address(this), amount);
         (uint eth, uint usd) = _swap(0, amount, price);
         ETH_FEES += eth; USD_FEES += usd * 1e12;
@@ -367,8 +359,8 @@ contract Rover is ReentrancyGuard, Ownable {
                             liquidityUnderManagement += liquidity;
     }
 
-    function withdrawUSDC(uint amount) public 
-        onlyUs returns (uint usd) { uint eth;
+    function withdrawUSDC(uint amount) public onlyUs 
+        returns (uint usd) { uint eth; repackNFT();
         uint128 liquidity;
         if (token1isWETH)
             liquidity = LiquidityAmounts.getLiquidityForAmount0(
@@ -381,10 +373,13 @@ contract Rover is ReentrancyGuard, Ownable {
 
         (uint amount0, uint amount1, ) = _withdrawAndCollect(liquidity);
         (eth, usd) = token1isWETH ? (amount1, amount0) : (amount0, amount1);
-        usd += ISwapRouter(ROUTER).exactInput(ISwapRouter.ExactInputParams(
-                    abi.encodePacked(address(weth), POOL_FEE, address(USDC)),
-                                    address(this), block.timestamp, eth, 0));
-                                       ERC20(USDC).transfer(msg.sender, usd);
+
+        if (eth > 0)
+            usd += ISwapRouter(ROUTER).exactInput(ISwapRouter.ExactInputParams(
+                        abi.encodePacked(address(weth), POOL_FEE, address(USDC)),
+                                        address(this), block.timestamp, eth, 0));
+        if (usd > 0)
+            ERC20(USDC).transfer(msg.sender, usd);
     }
     
     // @param (amount) is actually
