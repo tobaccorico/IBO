@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 library Types {
     struct SelfManaged {
@@ -14,7 +14,7 @@ library Types {
         uint borrowed;
         uint buffer;
         int price;
-    }    
+    }
     struct Deposit {
         uint pooled_eth;
         uint usd_owed;
@@ -23,13 +23,46 @@ library Types {
         uint fees_eth;
         uint fees_usd;
     }
-    struct Trade {
-        address sender;
-        address token; // receiving
-        uint amount; // selling
+    struct AuxContext {
+        address v3Pool;
+        address v3Router;
+        address weth;
+        address usdc;
+        address vault;
+        address v4;
+        uint24 v3Fee;
+        bool isAAVE;
     }
-    struct Batch { 
-        uint total; 
-        Trade[] swaps; 
-    } 
+      struct JamOrder {
+        address taker;
+        address receiver;
+        uint256 expiry;
+        uint256 nonce;
+        address executor;
+        uint16 minFillPercent;
+        bytes32 hooksHash;
+        address[] sellTokens;
+        address[] buyTokens;
+        uint256[] sellAmounts;
+        uint256[] buyAmounts;
+        uint256[] sellNFTIds;
+        uint256[] buyNFTIds;
+        bytes sellTokenTransfers;
+        bytes buyTokenTransfers;
+    }
+    struct Signature {
+        bytes signatureBytes;
+        uint8 signatureType;
+    }
+    struct JamIntent {
+        bool result;
+        address to;
+        uint256 value;
+        bytes data;
+    }
+    struct JamHooks {
+        address target;
+        bytes preHooksData;
+        bytes postHooksData;
+    }
 }

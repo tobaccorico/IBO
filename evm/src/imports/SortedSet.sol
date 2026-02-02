@@ -31,8 +31,8 @@ library SortedSetLib {
         require(index < self.sortedArray.length
          && self.sortedArray[index] == value, "Value not found");
 
-        self.sortedArray[index] = 0; // Mark as deleted
-        delete self.exists[value];
+        self.sortedArray[index] = type(uint).max; // Mark as deleted
+        delete self.exists[value]; // ^ max is just a sentinel value
 
         compactArray(self); // Cleanup on every removal
     }
@@ -64,7 +64,7 @@ library SortedSetLib {
         uint[] memory newArray = new uint[](self.sortedArray.length);
 
         for (uint i = 0; i < self.sortedArray.length; i++) {
-            if (self.sortedArray[i] != 0) {
+            if (self.sortedArray[i] != type(uint).max) {
                 newArray[newLength] = self.sortedArray[i];
                 newLength++;
             }

@@ -1,39 +1,44 @@
 
-/evm/out
-/evm/cache
-/svm/target
-**/test-ledger
-/svm/.anchor
-**/package-lock.json
-**/yarn.lock
-**/*.rs.bk
-**/node_modules
-**/.DS_Store
-**/.vscode
-/evm/.env
+evm/node_modules/*
+evm/out/*
+evm/.env
 
-/thuggable/releases/*
-/thuggable/Thuggable.app.app
-/thuggable/Thuggable_apk.apk
-/thuggable/Thuggable-app.app
-/thuggable/selfsigned.crt
-/thuggable/selfsigned.key
-/thuggable/selfsigned.pfx
-/thuggable/Thuggable.zip
-/thuggable/thuggable-go.app
-/thuggable/wasm/*
-/thuggable/models/*
-/thuggable/third_party/*
-/thuggable/release-key.jks
-/thuggable/thuggable_go.aab
-/thuggable/repo-structure.txt
-/thuggable/pepk.jar
-/thuggable/output.zip
+svm/node_modules/*
+svm/target/*
+svm/test-ledger/*
+svm/.yarn/*
+svm/.anchor/*
 
-/quid.io/build
-/quid.io/react/node_modules
+node_modules/*
+/.pnp
+.pnp.js
 
-/thuggable/encryption_public_key.pem
-/thuggable/fyne-cross/*
-/thuggable/deplpyment-rpc.info
-/thuggable/folders.txt
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+.env
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

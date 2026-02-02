@@ -10,9 +10,3 @@
 [submodule "evm/lib/aave-v3-origin"]
 	path = lib/aave-v3-origin
 	url = https://github.com/aave-dao/aave-v3-origin
-[submodule "contracts/lib/eigenlayer-middleware"]
-	path = contracts/lib/eigenlayer-middleware
-	url = https://github.com/Layr-Labs/eigenlayer-middleware
-[submodule "evm/lib/eigenlayer-middleware"]
-	path = evm/lib/eigenlayer-middleware
-	url = https://github.com/Layr-Labs/eigenlayer-middleware

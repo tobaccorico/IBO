@@ -1,551 +1,681 @@
 use anchor_lang::prelude::*;
-use std::f32::consts::E;
-
-use crate::etc::{ 
-    MAX_AGE, update_ema,
-    compute_rate_raw, 
-    PithyQuip, MAX_LEN
+use crate::etc::{ MAX_AGE,
+    MAX_LEN, PithyQuip,
+    Actuary, AssetClass,
+    collar_bps, rate_bps,
 };
-
-#[derive(AnchorSerialize, 
-    AnchorDeserialize, 
-    Clone, Copy, Debug, 
+#[derive(AnchorSerialize,
+    AnchorDeserialize,
+    Clone, Copy, Debug,
     PartialEq, Eq)]
-pub struct Position {
+pub struct Stock {
     // (b"GOOGL\0\0\0")
-    pub ticker: [u8; 8], 
+    pub ticker: [u8; 8],
     pub pledged: u64,
     pub exposure: i64,
     // ^ same precision
     // as USD* (10^6)
-    pub updated: i64
-} 
-impl Space for Position {
-    const INIT_SPACE: 
-    usize = 8 + 8 + 8 + 8; 
+    pub updated: i64,
+    pub rate_bps: u16,
+    pub collar_bps: u16
+}
+impl Space for Stock {
+    const INIT_SPACE:
+    usize = 8 + 8 + 8
+          + 8 + 2 + 2;
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct Depository {
     pub last_updated: i64,
-    pub total_deposits: u64, 
-    pub total_deposit_seconds: u128, 
-    // ^ the faster one enter & exit, 
+    pub total_deposits: u64,
+    pub total_deposit_seconds: u128,
+    // ^ the faster one enter & exit,
     // the less of an accrued yield
-    // one can take (slower, loyal
+    // one can take (slower, stickier
     // depositors get more, pro rata)
-    pub sum_tp_paid: u128,
-    pub ma_util: u64,
-    pub ma_payout: u64,
-    pub dyn_rate_bps: u16,
-    pub last_rate_change: i16,
-    pub high_vol_flag: bool,
-    // the above influences:
-    pub interest_rate: u64,
-    pub total_drawn: u64, 
+    pub total_drawn: u64,
     // ^ leverage exposure
-} 
-
-impl Depository {
-    pub fn reprice(&mut self) {
-        if self.total_deposits == 0 { return; }
-
-        // Calculate current utilization (how much is drawn vs total deposits)
-        let util_q32 = ((self.total_drawn  as u128) << 32) /  self.total_deposits as u128;
-        // Calculate payout ratio (how much has been paid out as take profits)
-        let payout_q32 = ((self.sum_tp_paid as u128) << 32) / (self.total_deposits as u128 + 1);
-
-        // Volatility detection → toggle fast/slow EMA based on utilization swings
-        let swing = util_q32.abs_diff(self.ma_util as u128) >> 32;
-        if swing > 10 { self.high_vol_flag = true;  } // High volatility threshold
-        if swing <  2 { self.high_vol_flag = false; } // Low volatility threshold
-
-        // EMA smoothing speeds - faster during high volatility
-        let alpha_u = if self.high_vol_flag { 2 } else { 3 }; // utilization EMA
-        let alpha_p = if self.high_vol_flag { 4 } else { 5 }; // payout EMA
-
-        // Update moving averages using math module functions
-        self.ma_util = update_ema(self.ma_util, util_q32 as u64, alpha_u);
-        self.ma_payout = update_ema(self.ma_payout, payout_q32 as u64, alpha_p);
-
-        // Calculate new raw interest rate using sophisticated math model
-        let raw = compute_rate_raw(
-            util_q32 as u64,   // Current utilization
-            payout_q32 as u64, // Current payout ratio
-            self.ma_util,      // Historical utilization EMA
-            self.ma_payout,    // Historical payout EMA
-            self.dyn_rate_bps, 
-        );
-
-        // Velocity damping – halve rate change
-        // on direction flip to prevent oscillation
-        let delta = raw as i16 - self.dyn_rate_bps as i16;
-        let new_rate = if delta * self.last_rate_change < 0 {
-            // Direction changed, dampen the movement
-            (self.dyn_rate_bps as i16 + delta / 2) as u16
-        } else { // Same direction, apply full change
-            raw 
-        };
-        self.last_rate_change = delta;
-        self.dyn_rate_bps = new_rate;
-        self.interest_rate = new_rate as u64; 
-    }
-    
-    /// Update take profit tracking when a position is closed profitably
-    /// This is called from instruction handlers as total_deposits is adjusted
-    pub fn record_take_profit(&mut self, amount: u64) {
-        self.sum_tp_paid += amount as u128;
-        // Don't double-count by adjusting total_deposits here
-        // Trigger repricing since take profit affects payout ratio
-        self.reprice();
-    }
-    
-    /// Update utilization when positions are opened/closed
-    /// tracks total amount at risk (value of all positions)
-    pub fn utilisation(&mut self, drawn_change: i64) {
-        if drawn_change > 0 {
-            self.total_drawn += drawn_change as u64;
-        } else {
-            self.total_drawn = self.total_drawn.saturating_sub((-drawn_change) as u64);
-        }
-        self.reprice();
-    }
+    pub market_count: u64,
+    // ^ prediction markets
+    pub max_liability: u64,
 }
 
 // naive timestamping: it over-weights early dust deposits;
 // can be gamed by adding size later to inherit "old" age.
-// To prevent this, we use dollar-seconds, time-weighted 
+// To prevent this, we use dollar-seconds, time-weighted
 // deposit value, updated continuously to stay accurate.
+
+impl Depository {
+    /// Update utilization when positions are opened/closed
+    /// tracks total amount at risk (value of all positions)
+    pub fn utilisation(&mut self, drawn_change: i64) {
+        if drawn_change > 0 {
+            self.total_drawn = self.total_drawn.saturating_add(
+                                            drawn_change as u64);
+        } else {
+            self.total_drawn = self.total_drawn.saturating_sub(
+                                    drawn_change.unsigned_abs());
+        }
+    }
+
+    pub fn concentration(&self) -> i64 {
+        if self.total_deposits == 0 { return 0; }
+        ((self.total_drawn as u128 * 10_000 / self.total_deposits as u128) as u64) as i64
+    }
+
+    pub fn update_liability(&mut self, old: u64, new: u64) {
+        self.max_liability = self.max_liability.saturating_sub(old).saturating_add(new);
+    }
+
+    /// Check if pool has capacity for additional exposure draw.
+    ///
+    /// Solvency requirement: deposits must cover worst-case losses.
+    /// Worst case = all positions hit collar simultaneously.
+    /// With typical collar ~15% (1500 bps), need ~1.15x coverage.
+    ///
+    /// Formula: total_deposits >= total_drawn × (10000 + collar) / 10000
+    /// Rearranged: total_drawn × 10000 / total_deposits <= 10000 × 10000 / (10000 + collar)
+    ///
+    /// At collar=1500: max util = 10000 × 10000 / 11500 ≈ 8696 bps (87%)
+    /// At collar=1000: max util = 10000 × 10000 / 11000 ≈ 9091 bps (91%)
+    ///
+    /// We use conservative 1500 bps collar assumption → 87% max utilization
+    pub fn has_capacity(&self, additional_draw: u64) -> bool {
+        if self.total_deposits == 0 { return false; }
+        let projected_drawn = self.total_drawn.saturating_add(additional_draw);
+        // Rearrange: projected_drawn <= total_deposits * 8700 / 10000
+        let max_draw = self.total_deposits.saturating_mul(8700) / 10_000;
+        projected_drawn <= max_draw
+    }
+
+    /// Maximum amount LP can withdraw without breaking solvency.
+    /// Must maintain enough deposits to cover worst-case collar losses.
+    ///
+    /// Required deposits = total_drawn × 11500 / 10000 (for 15% collar)
+    pub fn withdrawable(&self) -> u64 {
+        // Need 1.15x coverage for 15% collar
+        let required = self.total_drawn.saturating_mul(11500) / 10000;
+        self.total_deposits.saturating_sub(required)
+    }
+}
 
 #[account]
 #[derive(InitSpace)]
 pub struct Depositor {
     pub owner: Pubkey,
-    pub deposited_usd_star: u64,
+    pub deposited_quid: u64,
     pub deposit_seconds: u128,
     pub last_updated: i64,
     #[max_len(MAX_LEN)]
-    pub balances: Vec<Position>,
-    // TODO support up to 200
-    // if this fits into storage
-    // of a single account...
+    pub balances: Vec<Stock>,
 }
 
-impl Depositor {    
-    fn pad_ticker(ticker: &str) -> [u8; 8] {
-        let mut padded_ticker = [0u8; 8];
-        let ticker_bytes = ticker.trim().as_bytes();
-        let len = ticker_bytes.len().min(8);
-        padded_ticker[..len].copy_from_slice(&ticker_bytes[..len]);
-        padded_ticker
+/// Helper for liability
+/// state transitions
+/// (transient, not persisted)
+struct LiabilityUpdate {
+    old_collar_dollars: u64,
+    new_collar_bps: u16,
+    new_collar_dollars: u64,
+}
+
+impl LiabilityUpdate {
+    fn compute(old_exposure: u64, old_collar_bps: u16,
+        new_exposure: u64, new_pledged: u64, actuary: &Actuary,
+        asset_class: AssetClass) -> Self {
+        let old_collar_dollars = old_exposure.saturating_mul(old_collar_bps as u64) / 10_000;
+        let new_leverage = if new_pledged > 0 {
+            ((new_exposure as u128 * 100) / new_pledged as u128).min(i64::MAX as u128) as i64
+        } else { 100 };
+        let new_collar = collar_bps(new_leverage, actuary, asset_class);
+        let new_collar_dollars = new_exposure.saturating_mul(new_collar as u64) / 10_000;
+        Self { old_collar_dollars, new_collar_bps: new_collar as u16, new_collar_dollars }
+    }
+    fn apply(self, pod: &mut Stock,
+            depository: &mut Depository) {
+        pod.collar_bps = self.new_collar_bps;
+        depository.update_liability(self.old_collar_dollars,
+                                    self.new_collar_dollars);
+    }
+}
+
+impl Depositor {
+    pub fn pad_ticker(ticker: &str) -> [u8; 8] {
+        let mut padded = [0u8; 8];
+        let bytes = ticker.trim().as_bytes();
+        let len = bytes.len().min(8);
+        padded[..len].copy_from_slice(&bytes[..len]);
+        padded
     }
 
     pub fn adjust_deposit_seconds(&mut self, amount_reduced: u64, current_time: i64) {
-        if self.deposited_usd_star > 0 && amount_reduced > 0 {
-            // Update time-weighted balance before adjustment
-            let time_delta = (current_time - self.last_updated) as u64;
-            self.deposit_seconds = self.deposit_seconds
-                .saturating_add((time_delta * self.deposited_usd_star) as u128);
-            
-            // Reduce deposit_seconds proportionally
-            // let reduction_ratio = amount_reduced.min(self.deposited_usd_star) as u128;
-            let remaining_ratio = self.deposited_usd_star.saturating_sub(amount_reduced) as u128;
-            
-            if self.deposited_usd_star > 0 {
-                self.deposit_seconds = self.deposit_seconds
-                    .checked_mul(remaining_ratio)
-                    .and_then(|v| v.checked_div(self.deposited_usd_star as u128))
-                    .unwrap_or(0);
+        if self.deposited_quid > 0 && amount_reduced > 0 {
+            let time_delta = (current_time - self.last_updated).max(0) as u128;
+            self.deposit_seconds = self.deposit_seconds.saturating_add(
+                time_delta.saturating_mul(self.deposited_quid as u128));
+
+            let remaining = self.deposited_quid.saturating_sub(
+                                                amount_reduced) as u128;
+            if self.deposited_quid > 0 {
+                self.deposit_seconds = self.deposit_seconds .checked_mul(remaining)
+                .and_then(|v| v.checked_div(self.deposited_quid as u128)).unwrap_or(0);
             }
             self.last_updated = current_time;
         }
     }
 
-    // payments depend not only on time elapsed, but also on the value of debt at time of payment 
-    // using a floating rate that is reflexive/adaptive with respect to inflow/outflow behavior...
-    fn calculate_accrued_interest(principal: u64, time_elapsed: f32, interest_rate: f32) -> f64 {
-        return principal as f64 * E.powf(interest_rate / (100 as f32) * time_elapsed) as f64;
-    } // Position shrinking means "virtual sale": profitable synthetic redemption withdraws
+    // Position shrinking means "virtual sale": profitable synthetic redemption withdraws
     // Banks.total_deposits (more than pledged); similar to a collar (hedge wrapper), one
-    // strategy for protecting against losses...though it limits large gains (under 10%).
-    // Some cynic wrote on Twitter that "Ostium is broken," reason being unbounded gains
-    // for borrowers dilute depositors' yield; following solution creates speed bumps
+    // strategy for protecting against losses...though it limits large gains (under X%);
+    // lest borrowers dilute depositors' yield, following solution creates speed bumps
     pub fn repo(&mut self, ticker: &str, // reposition, or repossession (it depends)
-        // i want to use the ema here in another way...for the 4 days grace period
-        // on liquidations to also be a calibrator for 10% delta that is hardcoded 
-        // because that only protects in flash crashes 
-        mut amount: i64, price: u64, current_time: i64,
-        interest_rate: u64, depository: &mut Depository) -> Result<(i64, u64)> {
+        mut amount: i64, price: u64, current_time: i64, actuary: &Actuary,
+        depository: &mut Depository, asset_class: AssetClass) -> Result<(i64, u64)> {
+        require!(price > 0, PithyQuip::InvalidPrice);
         let padded = Self::pad_ticker(ticker);
-        // the ticker must already be present in depositor's balances...
-        if let Some(pod) = self.balances.iter_mut().find(
-                             |pod| pod.ticker == padded) {
-            // Instead of fixed calculation, base it on system utilization
-            let util_factor = if depository.total_deposits > 0 {
-                let util_pct = (depository.total_drawn * 100) / depository.total_deposits;
-                // Scale liquidation: 1% at low util, up to 10% at high util
-                    1 + (util_pct.min(90) / 10)
-            } else { 1 }; // default is 1%       
-            let mut exposure: u64 = pod.exposure.abs() as u64;
-            let time_elapsed: f32 = (current_time - pod.updated) as f32;
-            let mut accrued_interest = Self::calculate_accrued_interest(
-            exposure, time_elapsed, interest_rate as f32) as u64;
-        
-            accrued_interest = (accrued_interest - exposure) * price;
-            pod.pledged -= accrued_interest; let mut delta: u64;
-            if pod.exposure > 0 || (pod.exposure == 0 && amount > 0) {
-                // if increasing exposure for long...it must not be
-                // either worth > pledged, or less than 10%
-                // same for decreasing, except that whole 
-                // amount can be decreased to take profit
-                // before we apply changes to exposure, 
-                // run checks against current ^^^^^^^^
-                exposure *= price; // < 0 if started as 0
-                delta = pod.pledged + pod.pledged / 10;
-                // for the first clause, amount irrelevant
-                // (contains solely a preventative intent)
-                // unless amount == 0 (liquidator caller)
-                if exposure > delta { // must take profit
-                    delta = exposure - delta; // unless:
-                    delta += delta / 250; // ликарь cut... 
-                    if self.deposited_usd_star >= delta { 
-                        // buying more exposure impacts P&L
-                        // instead extending uptrend ride 
-                        self.deposited_usd_star -= delta;
-                        pod.pledged += delta - delta / 250;
-                        pod.updated = current_time;
-                        // Update utilization for new exposure
-                        depository.utilisation(delta as i64);
-                        return Ok((delta as i64, accrued_interest));
-                    } // need to burn ^ from depository's shares...
-                    else if amount != 0 { // caller is not liquidator;
-                        // if your profit is too much, you can only TP 
-                        // when it's 10% above the max profitabiltiy, as
-                        // you caller deducts from Banks.total_deposits...
-                        return Err(PithyQuip::Undercollateralised.into());
-                        // can't increase exposure or TP (collar constraint)...
-                    } // "this is beginning to feel like the bolt busted loose from 
-                    // the lever...I'm trying to reconstruct the air and all that it  
-                    // brings...oxidation is the compromise you own...if you plant 
-                    // ice...then harvest wind..from a static explosion," amortised.
-                    else if amount == 0 { // < function got called by a liquidator...
-                    // it means profit attribution that should belong to 1 depositor
-                    // is actually getting appropriated by all depositors, slowly, 
-                    // giving the depositor time to react and close their position
-                        require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                        // delta = ((pod.exposure as f32 * // amortised over 4 days...
-                        // 96 hours, to be ammends in this wicked lend, i'm trouble sum
-                        //     (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
-                        delta = ((pod.exposure.abs() as f32 * 
-                            (time_elapsed / MAX_AGE as f32)) / 
-                            (1152 as f32 / util_factor as f32)) as u64;
-                        
-                        pod.exposure -= delta as i64; 
-                        delta *= price; // to dollars;
-                        pod.pledged -= delta; // сlip
-                        pod.updated = current_time;
-                        
-                        // Update utilization (size decreased)
-                        depository.utilisation(-(delta as i64));
-                        // Don't record take profit, happens when 
-                        // calling instruction (avoids double-count)
-                        
-                        return Ok(((delta as i64 * -1), accrued_interest));
-                    } // ^ (-) indicates amount is (+) to Banks.total_deposits
-                // as it performs a credit (ditto for UniV4's PoolManager) and
-                // pays the liquidator a small cut (delta - 0.05% gets absorbed)
-                } else { // long hasn't exceeded max growth 
-                    delta = pod.pledged - pod.pledged / 10;
-                    if  delta > exposure && exposure > 0 { 
-                        // exceeding maximum drop of 10% sostate
-                        // first, try to prevent liquidation:
-                        delta -= exposure + pod.pledged / 10;
-                        delta += delta / 250; // < ликарь cut 
-                        if self.deposited_usd_star >= delta {
-                            self.deposited_usd_star -= delta;
-                            pod.exposure += ((delta - delta / 250) as f32 
-                                                            / price as f32) as i64;          
-                            pod.updated = current_time;
-                            // Track increased exposure
-                            depository.utilisation(delta as i64);
-                            return Ok((delta as i64, 
-                                accrued_interest));
-                        } 
-                        else if amount == 0 {
-                            require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                            // delta = ((pod.exposure as f32 * // amortised over 4 days...
-                            //    (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
-                            
-                            delta = ((pod.exposure.abs() as f32 * 
-                                (time_elapsed / MAX_AGE as f32)) / 
-                                (1152 as f32 / util_factor as f32)) as u64;
-                            
-                            pod.updated = current_time;
-                            pod.exposure -= delta as i64; 
-                            delta *= price; // to dollars;
-                            pod.pledged -= delta; // deduct liquidated value...
-                            depository.utilisation(-(delta as i64));
-                            return Ok(((delta as i64 * -1), accrued_interest));
-                        } else { // ^ total deposits ^ incremented plus ^
-                            return Err(PithyQuip::Undercollateralised.into());
-                        }  
-                    } require!(amount != 0, PithyQuip::InvalidAmount);
-                    pod.exposure += amount as i64; // apply reposition
-                    if amount < 0 { // trying to redeem units,
-                        // this reduces exposure and pledged
-                        if pod.exposure < 0 { 
-                            // decreased too far... 
-                            // with negative amount
-                            amount += -pod.exposure;
-                            pod.exposure = 0; 
-                        } 
-                        delta = -amount as u64 * price;
-                        // ^ the $ value to be sent to 
-                        // depositor is accounted as:
-                        if delta > pod.pledged { // all-in TP...
-                            exposure = delta; // < total transfer
-                            delta -= pod.pledged + accrued_interest;
-                            // ^ amount to be deducted from total_deposits
-                            // should exclude accrued_interest (retained):
-                            // we already deducted it once (at the start),
-                            // but usually we append it; here we deduct
-                            // it twice only because we don't append it
-                            // in out.rs (accrued is interpreted as TP)
-                            pod.pledged = 0; accrued_interest = exposure;
-                            // record_take_profit happens in lieb handler
-                        } // otherwise, it's only a partial TP, just in 
-                        // case the price will increase even more later
-                        else { accrued_interest = delta - accrued_interest;
-                            pod.pledged -= delta; delta = 0; // < no need to 
-                            // record_take_profit happens in lieb handler...
-                        } 
-                        pod.updated = current_time; // reduces total_deposits
-                        depository.utilisation(-(-amount as i64 * price as i64));
-                        return Ok((((delta as i64) * -1), accrued_interest));
-                    // interest represents amount to transfer...this includes 
-                    // both what was pledged and remainder from total_deposits
-                    } else { // amount is greater than zero (exposure issuance)
-                        exposure = pod.exposure as u64 * price;
-                        delta = pod.pledged + pod.pledged / 10;
-                        if exposure > delta { // too profitable
-                            delta = exposure - delta;
-                            if self.deposited_usd_star >= delta {
-                                self.deposited_usd_star -= delta;
-                                pod.pledged += delta;
-                            } else {
-                                pod.exposure -= ((delta / price) 
-                                    as f32 / price as f32) as i64;
-                            }
-                        } else { delta = pod.pledged - pod.pledged / 10;
-                                if delta > exposure {
-                                    pod.exposure += ((delta - exposure) 
-                                        as f32 / price as f32) as i64;
-                                } // why would you put exposure above 
-                            // and not at the current price? >10% drop 
-                            // protection, leaves less room for upside...
-                            delta = 0; // clear variable (it's returned)
-                        } // exposure is less than 10% above pledged...
-                        // but not less than 10% below pledged (valid)
-                        pod.updated = current_time; // no burn shares
-                        depository.utilisation(amount * price as i64);
-                        return Ok((delta as i64, accrued_interest));
-                    } 
+        let pod = self.balances.iter_mut()
+            .find(|p| p.ticker == padded)
+            .ok_or(PithyQuip::DepositFirst)?;
+
+        let old_exposure_value = (pod.exposure.unsigned_abs() as u128)
+            .saturating_mul(price as u128)
+            .min(u64::MAX as u128) as u64;
+
+        let leverage = if pod.pledged > 0 {
+            ((old_exposure_value as u128 * 100) / pod.pledged as u128).min(i64::MAX as u128) as i64
+        } else { 100 };
+
+        let collar = collar_bps(leverage, actuary, asset_class);
+        let collar_amt = pod.pledged.saturating_mul(collar as u64) / 10_000;
+        let time_elapsed = current_time.saturating_sub(pod.updated);
+        let conc = depository.concentration();
+        let rate = rate_bps(conc, leverage, actuary, asset_class);
+        let accrued_interest = ((old_exposure_value as u128)
+                                .saturating_mul(rate as u128)
+                                .saturating_mul(time_elapsed.max(0) as u128)
+                                / (31_536_000u128 * 10_000u128)) as u64;
+
+        let util_factor = (conc as f64 / 10000.0).max(0.1).min(1.0);
+
+        pod.pledged = pod.pledged.saturating_sub(accrued_interest);
+        if pod.exposure > 0 || (pod.exposure == 0 && amount > 0) {
+            // if increasing exposure for long...it must not be
+            // either worth > pledged, or less than X%
+            // same for decreasing, except that whole
+            // amount can be decreased to take profit
+            // before we apply changes to exposure,
+            // run checks against current ^^^^^^^^
+            let upper = pod.pledged.saturating_add(collar_amt);
+            let exposure = old_exposure_value;
+            // for the first clause, amount irrelevant
+            // (contains solely a preventative intent)
+            // unless amount == 0 (liquidator caller)
+            if exposure > upper { // Over-profitable:
+                // must take profit or add collateral
+                let mut delta = exposure.saturating_sub(upper);
+                delta = pod.pledged.saturating_add(delta).saturating_sub(delta / 250);
+                if self.deposited_quid >= delta {
+                    let new_pledged = pod.pledged + delta - delta / 250;
+                    let lu = LiabilityUpdate::compute(old_exposure_value,
+                    pod.collar_bps, exposure, new_pledged, actuary, asset_class);
+                    require!(depository.has_capacity(delta), PithyQuip::PoolAtCapacity);
+
+                    self.deposited_quid -= delta;
+                    pod.updated = current_time;
+                    pod.pledged = new_pledged;
+                    lu.apply(pod, depository);
+                    depository.utilisation(delta as i64);
+                    // Don't record take profit, happens when
+                    // calling instruction (avoids double-count)
+                    return Ok((delta as i64, accrued_interest));
+                } // need to burn ^ from depository's shares...
+                else if amount != 0 { // caller is not liquidator;
+                    // if your profit is too much, you can only TP
+                    // when it's X% above the max profitabiltiy, as
+                    // you caller deducts from Banks.total_deposits...
+                    return Err(PithyQuip::Undercollateralised.into());
+                    // can't increase exposure or TP (collar constraint)...
+                } // "this is beginning to feel like the bolt busted loose from
+                // the lever...I'm trying to reconstruct the air and all that it
+                // brings...oxidation is the compromise you own...if you plant
+                // ice...then harvest wind..from a static explosion," amortised.
+                else if amount == 0 { // < function got called by a liquidator...
+                // it means profit attribution that should belong to 1 depositor
+                // is actually getting appropriated by all depositors, slowly,
+                // giving the depositor time to react and close their position
+                    require!(time_elapsed > MAX_AGE as i64, PithyQuip::TooSoon);
+                    // Amortization speed: 0.5x at 10% util, 2.0x at 100% util
+                    // Base: 4 days to liquidate, faster at high utilization
+                    let speed = 0.5 + 1.5 * util_factor;
+                    let reduce =  ((pod.exposure.unsigned_abs() as f64 *
+                        (time_elapsed as f64 / MAX_AGE as f64)) * speed) as u64;
+                    let reduce = reduce.max(1);
+
+                    pod.exposure = pod.exposure.saturating_sub(reduce as i64);
+                    let reduce_dollars = reduce.saturating_mul(price);
+                    pod.pledged = pod.pledged.saturating_sub(reduce_dollars);
+                    pod.updated = current_time;
+
+                    let new_exp = (pod.exposure.unsigned_abs() as u128)
+                        .saturating_mul(price as u128)
+                        .min(u64::MAX as u128) as u64;
+
+                    let lu = LiabilityUpdate::compute(old_exposure_value,
+                    pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                    lu.apply(pod, depository);
+                    let neg_reduce = (reduce_dollars as i64).saturating_neg();
+
+                    depository.utilisation(neg_reduce);
+                    return Ok((neg_reduce, accrued_interest));
+                } // ^ (-) indicates amount is (+) to Banks.total_deposits
+             // as it performs a credit (ditto for UniV4's PoolManager) and
+            // pays the liquidator a small cut (delta - 0.05% gets absorbed)
+            } let lower = pod.pledged.saturating_sub(collar_amt);
+            if lower > exposure && exposure > 0 { // under-exposed:
+                // exceeding maximum drop of X%
+                // first, try prevent liquidation
+                let mut delta = lower.saturating_sub(exposure).saturating_sub(collar_amt);
+                delta = delta.saturating_add(delta / 250);
+
+                if self.deposited_quid >= delta {
+                    let new_exp = exposure.saturating_add(delta).saturating_sub(delta / 250);
+                    let lu = LiabilityUpdate::compute(old_exposure_value, pod.collar_bps,
+                                            new_exp, pod.pledged, actuary, asset_class);
+
+                    require!(depository.has_capacity(delta),
+                              PithyQuip::PoolAtCapacity);
+
+                    self.deposited_quid -= delta;
+                    pod.exposure = pod.exposure.saturating_add(
+                        ((delta.saturating_sub(delta / 250)) as f64 / price as f64) as i64
+                    );
+                    // Track increased exposure
+                    pod.updated = current_time;
+                    lu.apply(pod, depository);
+                    depository.utilisation(delta as i64);
+                    return Ok((delta as i64, accrued_interest));
                 }
-            } else { // short position: the same but different;
-                // exposure can neither be worth 10% more nor
-                // 10% less than the value of pod.pledged...
-                exposure = -pod.exposure as u64 * price;
-                let pivot: u64 = pod.pledged - pod.pledged / 10;
-                if pivot >= exposure && exposure > 0 { 
-                    // price dropped more than 10% this means
-                    // must take profit regardless, lest repair
-                    let mut delta = pivot - exposure;
-                    delta += delta / 250; // liquidator's cut
-                    // to try and repair the position against
-                    // our deposits, we can't do the same as
-                    // we do in longs (would only widen delta)
-                    if self.deposited_usd_star >= delta {
-                        self.deposited_usd_star -= delta;
-                        // increasing exposure (buying the dip) to
-                        // decreases the impact of price drop, but 
-                        // only deducted (not added to pod.pledged) 
-                        // as the increase in value is represented by 
-                        pod.exposure += (((delta - delta / 250) as f32) 
-                                                         / price as f32) as i64;
-                        pod.updated = current_time; // track position adjustment
-                        depository.utilisation(delta as i64);
-                        return Ok((delta as i64, 
-                                accrued_interest)); 
+                else if amount == 0 {
+                    require!(time_elapsed > MAX_AGE as i64, PithyQuip::TooSoon);
+                    let speed = 0.5 + 1.5 * util_factor;
+
+                    let reduce = ((pod.exposure.abs() as f64 *
+                        (time_elapsed as f64 / MAX_AGE as f64)) * speed) as u64;
+
+                    let reduce = reduce.max(1);
+                    pod.exposure -= reduce as i64;
+                    let reduce_dollars = reduce * price;
+                    pod.pledged = pod.pledged.saturating_sub(reduce_dollars);
+                    pod.updated = current_time;
+
+                    let new_exp = pod.exposure.abs() as u64 * price;
+                    let lu = LiabilityUpdate::compute(
+                        old_exposure_value, pod.collar_bps,
+                        new_exp, pod.pledged, actuary, asset_class);
+
+                    lu.apply(pod, depository);
+                    depository.utilisation(-(reduce_dollars as i64));
+                    return Ok((-(reduce_dollars as i64), accrued_interest));
+                } else { // ^ total deposits ^ incremented plus ^
+                    return Err(PithyQuip::Undercollateralised.into());
+                }
+            } require!(amount != 0, PithyQuip::InvalidAmount);
+            pod.exposure = pod.exposure.saturating_add(amount);
+            if amount < 0 { // trying to redeem units,
+                // this reduces exposure and pledged,
+                // while trying to redeem units...
+                if pod.exposure < 0 {
+                    amount = amount.saturating_add(pod.exposure.saturating_neg());
+                    pod.exposure = 0;
+                }
+                // $ value to be sent to depositor is accounted as:
+                let redeem_dollars = (amount.unsigned_abs() as u128)
+                                      .saturating_mul(price as u128)
+                                     .min(u64::MAX as u128) as u64;
+
+                if redeem_dollars > pod.pledged { // all-in TP...
+                    let total = redeem_dollars; // full take-profit...
+                    let from_pool = total.saturating_sub(pod.pledged).saturating_sub(accrued_interest);
+
+                    pod.pledged = 0; pod.updated = current_time;
+                    let new_exp = (pod.exposure.unsigned_abs() as u128)
+                                         .saturating_mul(price as u128)
+                                        .min(u64::MAX as u128) as u64;
+
+                    let lu = LiabilityUpdate::compute(old_exposure_value,
+                    pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                    lu.apply(pod, depository);
+                    let util_change = -((amount.unsigned_abs() as i128)
+                                         .saturating_mul(price as i128)
+                                        .min(i64::MAX as i128) as i64);
+
+                    depository.utilisation(util_change);
+                    return Ok((-(from_pool as i64), total));
+                } else { // partial take-profit
+                    pod.pledged = pod.pledged.saturating_sub(redeem_dollars);
+                    let transfer = redeem_dollars.saturating_sub(accrued_interest);
+                    pod.updated = current_time;
+                    let new_exp = (pod.exposure.unsigned_abs() as u128)
+                                         .saturating_mul(price as u128)
+                                                 .min(u64::MAX as u128) as u64;
+
+                    let lu = LiabilityUpdate::compute(old_exposure_value,
+                    pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                    lu.apply(pod, depository);
+                    let util_change = -((amount.unsigned_abs() as i128)
+                                           .saturating_mul(price as i128)
+                                           .min(i64::MAX as i128) as i64);
+
+                    depository.utilisation(util_change);
+                    return Ok((0, transfer));
+                }
+            } else { // Adding exposure
+                let new_exp = (pod.exposure as u64).saturating_mul(price);
+                let delta = pod.pledged.saturating_add(collar_amt);
+                if new_exp > delta {
+                    let excess = new_exp.saturating_sub(delta);
+                    if self.deposited_quid >= excess {
+                        self.deposited_quid -= excess;
+                        pod.pledged = pod.pledged.saturating_add(excess);
+                    } else {
+                        pod.exposure = pod.exposure.saturating_sub(
+                             (excess as f64 / price as f64) as i64);
                     }
-                    else if amount != 0 {// caller is not a liquidator...
-                        return Err(PithyQuip::Undercollateralised.into());
-                    } 
-                    else { // lookin' too hot, simmer down cadence,
-                    // "menace ou prière, l'un parle bien, l'autre 
-                    // se tait; et c'est l'autre que je préfère..."
-                    // unlike with longs, we don't shrink exposure 
-                    // as this increases position's profitability
-                        require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                        delta = ((pod.exposure.abs() as f32 * // amortised over 4 days
-                            (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64; 
-                            
-                        pod.updated = current_time;
-                        pod.exposure += delta as i64;
-                        // ^ adding positive numebr to
-                        // negative exposure shrinks it,
-                        // a forced buy by depositors,
-                        // so they get paid pro rata
-                        // to cancel out (ceteris...)
-                        pod.pledged -= delta * price;
-                        depository.utilisation(-(delta as i64 * price as i64));
-                        return Ok(((delta as i64 * -1), 
-                                    accrued_interest));
+                } else if pod.pledged > collar_amt {
+                    let room = pod.pledged.saturating_sub(collar_amt);
+                    if room > new_exp {
+                        pod.exposure = pod.exposure.saturating_add(
+                            ((room.saturating_sub(new_exp)) as f64 / price as f64) as i64
+                        );
                     }
-                } else if exposure > pivot || exposure == 0 {
-                    // if the position is up more than 10% less 
-                    delta = pod.pledged + pod.pledged / 10;
-                    if exposure > delta { // < too much...
-                        delta = exposure - delta;
-                        delta += delta / 250;
-                        if self.deposited_usd_star >= delta {
-                            self.deposited_usd_star -= delta;
-                            pod.pledged += delta - delta / 250;
-                            pod.updated = current_time;
-                            depository.utilisation(delta as i64);
-                            return Ok((delta as i64, 
-                                    accrued_interest));
-                        } 
-                        else if amount == 0 {
-                            require!(time_elapsed < MAX_AGE as f32, PithyQuip::TooSoon);
-                            // delta = ((pod.exposure.abs() as f32 * // amortised over 4 days
-                            //    (time_elapsed / MAX_AGE as f32)) / 1152 as f32) as u64;
-                            delta = ((pod.exposure.abs() as f32 * 
-                                (time_elapsed / MAX_AGE as f32)) / 
-                                (1152 as f32 / util_factor as f32)) as u64;
-                            
-                            pod.exposure += delta as i64;
-                            pod.pledged -= delta * price;
-                            pod.updated = current_time;
-                            depository.utilisation(-(delta as i64 * price as i64));
-                            return Ok(((delta as i64 * -1), 
-                                        accrued_interest));
-                        }
-                        else { // upside has made this short too unprofitable
-                            return Err(PithyQuip::Undercollateralised.into());
-                        }
-                    } exposure = -pod.exposure as u64 * price;
-                    // ^ save this value for P&L calculations
-                    pod.exposure += amount as i64;
-                    if amount > 0 && exposure > 0 { 
-                        // redeem (burning exposure)
-                        if pod.exposure > 0 { 
-                            // decreased too far with positive amount
-                            amount -= pod.exposure; pod.exposure = 0;
-                        } // we calculate percentage we're redeeming:
-                        let amt: f32 = amount as f32 / exposure as f32;
-                        // percentage of the total profit we're about to absorb:
-                        delta = (((pod.pledged - exposure) as f32) * amt) as u64;
-                        delta -= accrued_interest; // < profit excludes interest
-                        // decrease pledged by the same percentage in order 
-                        // to prevent re-entry (continuous drawing of even 
-                        // greater profit each time, as the delta between
-                        // exposure and pledged widens more and more)...
-                        amount = (pod.pledged as f32 * amt) as i64;
-                        pod.pledged -= amount as u64;
+                } pod.updated = current_time;
+                let final_exp = (pod.exposure.unsigned_abs() as u128)
+                                        .saturating_mul(price as u128)
+                                        .min(u64::MAX as u128) as u64;
+
+                let lu = LiabilityUpdate::compute(old_exposure_value,
+                pod.collar_bps, final_exp, pod.pledged, actuary, asset_class);
+
+                if amount > 0 {
+                    let capacity_needed = (amount as u128)
+                            .saturating_mul(price as u128)
+                           .min(u64::MAX as u128) as u64;
+
+                    require!(depository.has_capacity(capacity_needed),
+                                        PithyQuip::PoolAtCapacity);
+                }
+                lu.apply(pod, depository);
+                let util_change = (amount as i128)
+                    .saturating_mul(price as i128)
+                          .clamp(i64::MIN as i128,
+                                 i64::MAX as i128) as i64;
+
+                depository.utilisation(util_change);
+                return Ok((0, accrued_interest));
+            }
+        } let exposure = ((-pod.exposure) as u64).saturating_mul(price);
+        let pivot = pod.pledged.saturating_sub(collar_amt);
+        if pivot >= exposure && exposure > 0 {
+            // Short in profit beyond collar
+            let mut delta = pivot.saturating_sub(exposure);
+            delta = delta.saturating_add(delta / 250);
+
+            if self.deposited_quid >= delta {
+                let new_exp = exposure.saturating_add(delta).saturating_sub(delta / 250);
+                let lu = LiabilityUpdate::compute(old_exposure_value,
+                pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                require!(depository.has_capacity(delta),
+                            PithyQuip::PoolAtCapacity);
+
+                self.deposited_quid -= delta;
+                pod.exposure = pod.exposure.saturating_add((
+                    ((delta.saturating_sub(delta / 250)) as f64) / price as f64) as i64);
+
+                pod.updated = current_time;
+                lu.apply(pod, depository);
+                let util_change = (amount as i128)
+                    .saturating_mul(price as i128)
+                    .clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+
+                depository.utilisation(util_change);
+                return Ok((delta as i64, accrued_interest));
+            }
+            else if amount != 0 {
+                return Err(PithyQuip::Undercollateralised.into());
+            } else {
+                require!(time_elapsed > MAX_AGE as i64, PithyQuip::TooSoon);
+
+                let speed = 0.5 + 1.5 * util_factor;
+                let reduce = ((pod.exposure.unsigned_abs() as f64 *
+                    (time_elapsed as f64 / MAX_AGE as f64)) * speed) as u64;
+
+                let reduce = reduce.max(1);
+                pod.exposure = pod.exposure.saturating_add(reduce as i64);
+                pod.pledged = pod.pledged.saturating_sub(reduce.saturating_mul(price));
+                pod.updated = current_time;
+
+                let new_exp = (pod.exposure.unsigned_abs() as u128)
+                                     .saturating_mul(price as u128)
+                                    .min(u64::MAX as u128) as u64;
+
+                let lu = LiabilityUpdate::compute(old_exposure_value,
+                pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                lu.apply(pod, depository);
+                let dollars = -((reduce as i128).saturating_mul(price as i128)
+                          .min(i64::MAX as i128) as i64);
+
+                depository.utilisation(dollars);
+                return Ok((dollars, accrued_interest));
+            }
+        }
+        if exposure > pivot || exposure == 0 {
+            let upper = pod.pledged.saturating_add(collar_amt);
+            if exposure > upper {
+                let mut delta = exposure.saturating_sub(upper);
+                delta = delta.saturating_add(delta / 250);
+
+                if self.deposited_quid >= delta {
+                    let new_pledged = pod.pledged.saturating_add(delta).saturating_sub(delta / 250);
+                    let lu = LiabilityUpdate::compute(old_exposure_value, pod.collar_bps,
+                                            exposure, new_pledged, actuary, asset_class);
+
+                    require!(depository.has_capacity(delta),
+                              PithyQuip::PoolAtCapacity);
+
+                    self.deposited_quid -= delta;
+                    pod.pledged = new_pledged;
+                    pod.updated = current_time;
+                    lu.apply(pod, depository);
+                    depository.utilisation(delta as i64);
+                    return Ok((delta as i64, accrued_interest));
+                }
+                else if amount == 0 {
+                    require!(time_elapsed > MAX_AGE as i64, PithyQuip::TooSoon);
+
+                    let speed = 0.5 + 1.5 * util_factor;
+                    let reduce = ((pod.exposure.abs() as f64 *
+                        (time_elapsed as f64 / MAX_AGE as f64)) * speed) as u64;
+
+                    let reduce = reduce.max(1);
+                    pod.exposure = pod.exposure.saturating_add(reduce as i64);
+                    pod.pledged = pod.pledged.saturating_sub(reduce.saturating_mul(price));
+                    pod.updated = current_time;
+
+                    let new_exp = (pod.exposure.unsigned_abs() as u128)
+                                         .saturating_mul(price as u128)
+                                        .min(u64::MAX as u128) as u64;
+
+                    let lu = LiabilityUpdate::compute(old_exposure_value,
+                    pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                    lu.apply(pod, depository);
+                    let dollars = -((reduce as i128).saturating_mul(price as i128)
+                                                    .min(i64::MAX as i128) as i64);
+                    depository.utilisation(dollars);
+                    return Ok((dollars, accrued_interest));
+                } else {
+                    return Err(PithyQuip::Undercollateralised.into());
+                }
+            }
+            let old_exp = exposure;
+            pod.exposure = pod.exposure.saturating_add(amount);
+            if amount > 0 && old_exp > 0 {
+                // Redeeming short
+                if pod.exposure > 0 {
+                    amount = amount.saturating_sub(pod.exposure);
+                    pod.exposure = 0;
+                }
+                let amt_frac = if old_exp > 0 {
+                    amount as f64 / old_exp as f64
+                } else { 0.0 };
+
+                let profit = ((((pod.pledged.saturating_sub(old_exp)) as f64) * amt_frac) as u64).saturating_sub(accrued_interest);;
+
+                let pledged_reduce = (pod.pledged as f64 * amt_frac) as i64;
+                pod.pledged = pod.pledged.saturating_sub(pledged_reduce.unsigned_abs());
+
+                let new_exp = (pod.exposure.unsigned_abs() as u128)
+                                     .saturating_mul(price as u128)
+                                    .min(u64::MAX as u128) as u64;
+
+                let lu = LiabilityUpdate::compute(old_exposure_value,
+                pod.collar_bps, new_exp, pod.pledged, actuary, asset_class);
+
+                lu.apply(pod, depository);
+                let util_change = -((pledged_reduce as i128)
+                              .saturating_mul(price as i128)
+                                    .clamp(i64::MIN as i128,
+                                           i64::MAX as i128) as i64);
+
+                depository.utilisation(util_change);
+
+                return Ok((-(profit as i64),
+                (profit as i64).saturating_add(pledged_reduce) as u64));
+            } else if amount < 0 { // issue short exposure...
+                let new_exp = ((-pod.exposure) as u64).saturating_mul(price);
+                let upper = pod.pledged.saturating_add(collar_amt);
+                if pod.pledged > new_exp {
+                    // ^ not a valid state unless we
+                    // are taking profits (don't let
+                    // taking on more exposure while
+                    // taking profit before TP first)
+                    let room = pod.pledged.saturating_sub(new_exp);
+                    if self.deposited_quid >= room {
+                        let lu = LiabilityUpdate::compute(old_exposure_value, pod.collar_bps,
+                        new_exp.saturating_add(room), pod.pledged, actuary, asset_class);
+                        require!(depository.has_capacity(room),
+                                  PithyQuip::PoolAtCapacity);
+
+                        self.deposited_quid -= room;
+                        pod.exposure = pod.exposure.saturating_sub(
+                                (room as f64 / price as f64) as i64);
+
                         pod.updated = current_time;
-                        depository.utilisation(-(amount as i64 * price as i64));
-                        return Ok(((delta as i64) * -1, 
-                        (delta as i64 + amount) as u64));
-                    } 
-                    else if amount < 0 { // exposure issuance...
-                        exposure = -pod.exposure as u64 * price;
-                        delta = pod.pledged + pod.pledged / 10;
-                        if pod.pledged > exposure {
-                            // ^ not a valid state unless we
-                            // are taking profits (don't let 
-                            // taking on more exposure while
-                            // taking profit before TP first)
-                            delta = pod.pledged - exposure;
-                            if self.deposited_usd_star >= delta {
-                                self.deposited_usd_star -= delta;
-                                // subtract positive number to increase (-) exposure:
-                                pod.exposure -= (delta as f32 / price as f32) as i64;
-                                // ^ we are selling against ourselves, buying to burn
-                                pod.updated = current_time; 
-                                depository.utilisation(delta as i64);
-                                return Ok((delta as i64, 
-                                                                    accrued_interest));
-                            } else { return Err(PithyQuip::UnderExposed.into()); }
-                        } else if exposure > delta { // to prevent OverExposed,
-                            // adding positive number shrinks negative exposure
-                            pod.exposure += (((exposure - delta) as f32) 
-                                                         / price as f32) as i64;
-                            depository.utilisation(-((exposure - delta) as i64));
-                        } 
-                    } pod.updated = current_time; // why wouldn't a depositor just: 
-                    return Ok((0, accrued_interest)); // select the smallest distance,
-                   // (greater than pod.pledged) in order to maximise potential profit?
-                } // maybe they know a big drop is ahead, and they want to minimise the
-            } // chance they might be liquidated; either way we want to maximise control
-        } else { return Err(PithyQuip::DepositFirst.into()); } 
-        Ok((0,0)) // the pill and the preacher who's gonna bless 
-    } // with it: sprezzatura, il dolce far niente...in separation 
-    // of subject from object, logic's final wisdom? constellation 
-    // got a twist in it...a few stars about make it feel like peace
-    pub fn renege(&mut self, ticker: Option<&str>, mut amount: i64, 
+                        lu.apply(pod, depository);
+                        depository.utilisation(room as i64);
+                        return Ok((room as i64, accrued_interest));
+                } else { return Err(PithyQuip::UnderExposed.into()); }
+                } else if new_exp > upper { // to prevent OverExposed,
+                // adding positive number shrinks negative exposure...
+                    pod.exposure = pod.exposure.saturating_add(
+                        (((new_exp.saturating_sub(upper)) as f64) / price as f64) as i64
+                    );
+                    depository.utilisation(-((new_exp.saturating_sub(upper)) as i64));
+                }
+            } pod.updated = current_time; // why wouldn't a depositor just:
+            // select the smallest distance, (greater than pod.pledged) in
+            // order to maximise potential profit?  maybe they know a big
+            // drop is ahead, and they want to minimise the chance they
+            // might be liquidated; either way we want to maximise control
+            let final_exp = (pod.exposure.unsigned_abs() as u128)
+                                    .saturating_mul(price as u128)
+                                    .min(u64::MAX as u128) as u64;
+            let lu = LiabilityUpdate::compute(old_exposure_value,
+            pod.collar_bps, final_exp, pod.pledged, actuary, asset_class);
+
+            lu.apply(pod, depository);
+            return Ok((0, accrued_interest));
+        }
+        Ok((0, 0)) // open halfway each morning to close halfway each night,
+    } // when I touch, it feel like heaven; when I kiss, it kiss to save...
+    // I ain't circlin' 'round for saviors, live my life a certain way...
+    // I don't need a kind of captain...grabbin' back and I don't beg...
+    // don't wanna hear how you are different...or how we are the same.
+    // When you gonna show me how you love me: the way to make me stay
+    pub fn renege(&mut self, ticker: Option<&str>, mut amount: i64,
         prices: Option<&Vec<u64>>, current_time: i64) -> Result<i64> { // pod: подушка
+        // eyes get shut with chains that pillow armies eventually set free like horses
         if ticker.is_none() && amount < 0 { // removing collateral from every position
             // first, we must sort positions by descending amount (without reallocating)
             self.balances.sort_by(|a, b| b.pledged.cmp(&a.pledged));
             // bigger they come, harder they fall and all
-            let mut deducting: u64 = amount.abs() as u64;
+            let mut deducting: u64 = amount.unsigned_abs();
             for i in 0..self.balances.len() {
-                if deducting == 0 { break; } 
+                if deducting == 0 { break; }
                 let pod = &mut self.balances[i];
-                let price = prices.as_ref().unwrap()[i];
+                let price = prices.as_ref()
+                                  .and_then(|p| p.get(i).copied())
+                                  .ok_or(PithyQuip::NoPrice)?;
+                // Use stored collar_bps (or default 10% if not set)
+                let collar_amt = if pod.collar_bps > 0 {
+                    pod.pledged.saturating_mul(pod.collar_bps as u64) / 10_000
+                } else {
+                    pod.pledged / 10
+                };
+
                 let max: u64 = if pod.exposure > 0 {
-                    (pod.pledged + pod.pledged / 10) - 
-                     pod.exposure as u64 * price 
-                } 
+                    let exposure_value = (pod.exposure as u64).saturating_mul(price);
+                    (pod.pledged.saturating_add(collar_amt)).saturating_sub(exposure_value)
+                }
                 else if pod.exposure < 0 {
-                // we don't have to worry about if 
-                // pledged - 10% will be worth more 
+                // we don't have to worry about if
+                // pledged - X% will be worth more
                 // than exposure, as (theoretically)
                 // by that point it's liquidated...
-                    (-pod.exposure as u64) * price - 
-                    (pod.pledged - pod.pledged / 10)
-                } 
+                    let exposure_value = (pod.exposure.unsigned_abs()).saturating_mul(price);
+                    let pledged_minus_collar = pod.pledged.saturating_sub(collar_amt);
+                    exposure_value.saturating_sub(pledged_minus_collar)
+                }
                 else { pod.pledged };
+
                 let deducted = max.min(deducting);
-        
-                pod.pledged -= deducted;
                 deducting -= deducted;
-            }
-            amount = deducting as i64; // < remainder (out & clutch)
-        } 
-        else { // remove or add dollars to one specific position...
+                pod.pledged = pod.pledged.saturating_sub(deducted);
+            }   amount = deducting as i64; // < remainder (out & clutch)
+        } else { // remove or add dollars to one specific position...
             let padded = Self::pad_ticker(ticker.unwrap());
             if let Some(pod) = self.balances.iter_mut().find(
                                  |pod| pod.ticker == padded) {
-                let price = prices
-                                .and_then(|p| p.first())
-                                .copied() // Convert &u64 to u64
-                                .unwrap_or(0);
+                let price = prices.and_then(|p| p.first())
+                                    .copied().unwrap_or(0);
+
                 if pod.exposure != 0 && price == 0 {
-                    return Err(PithyQuip::NoPrice.into());    
+                    return Err(PithyQuip::NoPrice.into());
                 }
-                let exposure = pod.exposure.abs() as u64 * price;
+                let exposure = (pod.exposure.unsigned_abs()).saturating_mul(price);
+                // Use stored collar_bps (or default 10% if not set)
+                let collar_amt = if pod.collar_bps > 0 {
+                    pod.pledged.saturating_mul(pod.collar_bps as u64) / 10_000
+                } else {
+                    pod.pledged / 10
+                };
                 // deducting...we check the max, same as we did above,
-                // with a slightly different approach (why not, right?) 
-                if amount < 0 { require!(pod.pledged >= -amount as u64, 
+                // with a slightly different approach (why not, right?)
+                if amount < 0 { require!(pod.pledged >= amount.unsigned_abs(),
                                             PithyQuip::InvalidAmount);
-                    if pod.exposure < 0 { 
+                    if pod.exposure < 0 {
                         // short position
-                        if exposure > pod.pledged {
-                            let max: i64 = (( // calculate most we can deduct
-                                (pod.pledged / 10) - (exposure - pod.pledged)
-                            ) as i64) * -1;
+                        if exposure > pod.pledged { // most we can deduct
+                            let max: i64 = -(collar_amt.saturating_sub(
+                                exposure.saturating_sub(pod.pledged)
+                            ) as i64);
                             amount = max.max(amount); // in absolute value
                             // terms this ^ actually returns smaller one...
                         }
@@ -556,24 +686,23 @@ impl Depositor {
                             // would diminish profitability
                             return Err(PithyQuip::TakeProfit.into());
                         }
-                    } else if pod.exposure > 0 { 
-                        let mut max: u64 = 0; 
+                    } else if pod.exposure > 0 {
+                        let mut max: u64 = 0;
                         // most we can deduct
                         if pod.pledged >= exposure {
-                            max = (pod.pledged / 10) - (pod.pledged - exposure);
+                             max = collar_amt.saturating_sub(pod.pledged.saturating_sub(exposure));
                         }
                         else if exposure > pod.pledged {
-                            max = (pod.pledged / 10) - (exposure - pod.pledged);
+                            max = collar_amt.saturating_sub(exposure.saturating_sub(pod.pledged));
                         }
-                        amount = (max.min(-amount as u64) as i64) * -1;
+                        amount = -((max.min(amount.unsigned_abs())) as i64);
                     }
-                    pod.pledged -= -amount as u64;
-                } 
-                else { // amount is > 0 
+                    pod.pledged = pod.pledged.saturating_sub(amount.unsigned_abs());
+                } else { // amount is > 0
                     if pod.exposure < 0 {
-                        if exposure > pod.pledged { // simple enough here, not 
+                        if exposure > pod.pledged { // simple enough here, not
                             // sure why anyone would do this, but it's doable...
-                            amount = amount.min((exposure - pod.pledged) as i64);
+                            amount = amount.min(exposure.saturating_sub(pod.pledged) as i64);
                         }
                         else if pod.pledged > exposure {
                             // short is in-the-money; throw as
@@ -584,29 +713,27 @@ impl Depositor {
                             return Err(PithyQuip::TakeProfit.into());
                         }
                     } else if pod.exposure > 0 {
-                        let mut max: u64 = 0; 
+                        let mut max: u64 = 0;
                         // most we can deduct
                         if pod.pledged >= exposure {
-                            max = (pod.pledged / 10) - (pod.pledged - exposure);
+                            max = collar_amt.saturating_sub(pod.pledged.saturating_sub(exposure));
                         }
                         else if exposure > pod.pledged {
-                            max = (exposure + exposure / 10) - pod.pledged;
+                            max = exposure.saturating_add(collar_amt).saturating_sub(pod.pledged);
                         }   amount = max.min(amount as u64) as i64;
-                    }       pod.pledged += amount as u64;
-                } 
-                amount = 0; 
-                self.last_updated = current_time; 
-             
-            } else { require!(amount > 0, 
-                PithyQuip::InvalidAmount);
+                    } pod.pledged = pod.pledged.saturating_add(amount as u64);
+                } amount = 0; self.last_updated = current_time;
+            } else { require!(amount > 0, PithyQuip::InvalidAmount);
                 if self.balances.len() >= MAX_LEN {
                     return Err(PithyQuip::MaxPositionsReached.into());
-                }   self.balances.push(Position { ticker: padded,
-                        pledged: amount as u64, exposure: 0, 
-                        updated : current_time }); amount = 0;
-            } // is in reposition, for maintenance purposes as is
-        } self.balances.retain(|pod| pod.pledged > 10000000); 
-        // if there is exposure it will automatically shrink (charging %) 
+                }   self.balances.push(Stock { ticker: padded,
+                    pledged: amount as u64, exposure: 0,
+                    updated: current_time, rate_bps: 0,
+                    collar_bps: 0 }); amount = 0;
+            }
+        } self.balances.retain(|pod| pod.pledged > 10_000_000 || pod.exposure != 0);
+        // keep positions that have over $10 pledged OR any exposure...
+        // (exposure will shrink via continuous funding until liquidated)
         Ok(amount) // < remainder must be returned if ticker was None...
-    }    
+    }
 }

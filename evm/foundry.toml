@@ -1,6 +1,8 @@
+
 [profile.default]
 src = "src"
 out = "out"
+# solc = "/Users/alex/solidity/build/solc/solc"
 
 libs = ["lib"]
 ffi = true
@@ -19,7 +21,7 @@ evm_version = "cancun"
 
 via_ir = false
 optimizer = true
-optimizer_runs = 1000000
+optimizer_runs = 200
 dynamic_test_linking = true
 
 bytecode_hash = "none"
@@ -27,6 +29,23 @@ deny_warnings = false
 cbor_metadata = false
 sparse_mode = false
 build_info = true
+
+[rpc_endpoints]
+# forge script scripts/DeployL1.s.sol:Deploy --rpc-url mainnet --broadcast --verify
+mainnet = "https://ethereum-rpc.publicnode.com"
+arbitrum = "https://arbitrum-one-rpc.publicnode.com"
+base = "https://base-rpc.publicnode.com"
+celo = "https://celo-rpc.publicnode.com"
+polygon = "https://polygon-bor-rpc.publicnode.com"
+unichain = "https://unichain-rpc.publicnode.com"
+
+[etherscan]
+mainnet = { key = "${ETHERSCAN_L1}" }
+arbitrum = { key = "${ETHERSCAN_L1}" }
+base = { key = "${ETHERSCAN_L1}" }
+celo = { key = "${ETHERSCAN_L1}" }
+polygon = { key = "${ETHERSCAN_L1}" }
+unichain = { key = "${ETHERSCAN_L1}" }
 
 [profile.dependencies]
 v4-core = { git = "https://github.com/uniswap/v4-core" }
