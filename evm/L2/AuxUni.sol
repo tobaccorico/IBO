@@ -173,7 +173,7 @@ contract AuxUni is // Auxiliary
             max = CORE.POOLED_USD();
         }
         else { max = CORE.POOLED_ETH();
-            zeroForOne = !V4.token1isETH();
+            zeroForOne = V4.token1isETH();
             amount = token == address(QUID) ?
                QUID.turn(msg.sender, amount):
                deposit(msg.sender, token, amount);
