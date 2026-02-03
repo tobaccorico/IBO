@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 library Types {
     struct SelfManaged {
+        uint created;
         address owner;
         int24 lower;
         int24 upper;

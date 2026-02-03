@@ -137,13 +137,12 @@ contract Vogue is
         uint128 liquidity;
         if (token == address(0)) { amount = _depositETH(
                                      msg.sender, amount);
-            if (token1isETH) {
-                require(newLowerTick > currentUpperTick);
+            if (token1isETH) { require(newLowerTick > currentUpperTick);
                 liquidity = LiquidityAmounts.getLiquidityForAmount1(
                              TickMath.getSqrtPriceAtTick(newLowerTick),
                              TickMath.getSqrtPriceAtTick(newUpperTick), amount);
-            } else {
-                require(newUpperTick < currentLowerTick);
+            }
+            else { require(newUpperTick < currentLowerTick);
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
                              TickMath.getSqrtPriceAtTick(newLowerTick),
                              TickMath.getSqrtPriceAtTick(newUpperTick), amount);
@@ -168,10 +167,11 @@ contract Vogue is
                           TickMath.getSqrtPriceAtTick(newLowerTick),
                           TickMath.getSqrtPriceAtTick(newUpperTick), amount);
             }
-        } Types.SelfManaged memory newPosition = Types.SelfManaged({ owner: msg.sender,
-                lower: newLowerTick, upper: newUpperTick, liq: int(uint(liquidity)) });
+        } Types.SelfManaged memory newPosition = Types.SelfManaged({
+              created: block.timestamp, owner: msg.sender,
+              lower: newLowerTick, upper: newUpperTick,
+              liq: int(uint(liquidity)) }); next = ++ID;
 
-        next = ++ID;
         selfManaged[next] = newPosition;
         positions[msg.sender].push(next);
         V4.outOfRange(msg.sender, int(uint(liquidity)),
@@ -188,8 +188,10 @@ contract Vogue is
         uint usdOwed = FullMath.mulDiv(LP.pooled_eth, USD_FEES, WAD);
 
         // Saturating subtraction to prevent underflow
-        ethReward = ethOwed > LP.fees_eth ? ethOwed - LP.fees_eth : 0;
-        usdReward = usdOwed > LP.fees_usd ? usdOwed - LP.fees_usd : 0;
+        ethReward = ethOwed > LP.fees_eth ?
+                    ethOwed - LP.fees_eth : 0;
+        usdReward = usdOwed > LP.fees_usd ?
+                    usdOwed - LP.fees_usd : 0;
     }
 
     // withdrawal by LP of ETH specifically, depositor may
@@ -206,11 +208,12 @@ contract Vogue is
             (fees_eth,
              fees_usd) = pendingRewards(msg.sender);
 
-        // Compound ETH
+        // Compound.vc ETH
         if (fees_eth > 0) { // rewards
             LP.pooled_eth += fees_eth;
             totalShares += fees_eth;
-        } // Handle USD rewards
+        } // Handle USD rewards by
+        // dilutive minting of QD
         fees_usd += LP.usd_owed;
         if (fees_usd > 0) {
             LP.usd_owed = 0;
@@ -260,10 +263,13 @@ contract Vogue is
                 LP.pooled_eth -= amount;
                 totalShares -= amount;
             }
-        } if (LP.pooled_eth == 0) delete autoManaged[msg.sender];
-        else {
-            LP.fees_eth = FullMath.mulDiv(LP.pooled_eth, ETH_FEES, WAD);
-            LP.fees_usd = FullMath.mulDiv(LP.pooled_eth, USD_FEES, WAD);
+        } if (LP.pooled_eth == 0)
+          delete autoManaged[msg.sender];
+
+        else { LP.fees_eth = FullMath.mulDiv(
+                LP.pooled_eth, ETH_FEES, WAD);
+               LP.fees_usd = FullMath.mulDiv(
+                LP.pooled_eth, USD_FEES, WAD);
         }
     }
 
@@ -335,12 +341,16 @@ contract Vogue is
         return (targetUSD / 1e12, deltaETH);
     }
 
-     // pull liquidity from self-managed
-    function pull(uint id, int percent,
-        address token) external nonReentrant {
+     // pull liquidity from
+    function pull(uint id, // existing self-managed position
+        int percent, address token) external nonReentrant {
         Types.SelfManaged storage position = selfManaged[id];
         require(position.owner == msg.sender, "403");
+
+        require(block.timestamp >=
+        position.createdAt + 10 minutes, "too soon");
         require(percent > 0 && percent < 101, "%");
+
         int liquidity = position.liq * percent / 100;
         int24 lower = position.lower;
         int24 upper = position.upper;
@@ -473,6 +483,7 @@ contract Vogue is
 
     function _repack() internal returns (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper, uint128 myLiquidity) {
+        _syncYield(); // capture vault yield before anything else
         int24 currentTick;
         tickUpper = UPPER_TICK; tickLower = LOWER_TICK;
         (sqrtPriceX96, currentTick, myLiquidity) = V4.poolStats(

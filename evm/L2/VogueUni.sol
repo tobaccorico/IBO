@@ -163,8 +163,10 @@ contract VogueUni is
                           TickMath.getSqrtPriceAtTick(newLowerTick),
                           TickMath.getSqrtPriceAtTick(newUpperTick), amount);
             }
-        } Types.SelfManaged memory newPosition = Types.SelfManaged({ owner: msg.sender,
-                lower: newLowerTick, upper: newUpperTick, liq: int(uint(liquidity)) });
+        } Types.SelfManaged memory newPosition = Types.SelfManaged({
+              created: block.timestamp, owner: msg.sender,
+              lower: newLowerTick, upper: newUpperTick,
+              liq: int(uint(liquidity)) });
 
         next = ++ID;
         selfManaged[next] = newPosition;
@@ -323,12 +325,16 @@ contract VogueUni is
         return (targetUSD / 1e12, deltaETH);
     }
 
-     // pull liquidity from self-managed position
-    function pull(uint id, int percent, address token)
-        external nonReentrant {
+    // pull liquidity from
+    function pull(uint id, // existing self-managed position
+        int percent, address token) external nonReentrant {
         Types.SelfManaged storage position = selfManaged[id];
         require(position.owner == msg.sender, "403");
+
+        require(block.timestamp >=
+        position.createdAt + 10 minutes, "too soon");
         require(percent > 0 && percent < 101, "%");
+
         int liquidity = position.liq * percent / 100;
         int24 lower = position.lower;
         int24 upper = position.upper;
@@ -364,16 +370,7 @@ contract VogueUni is
             (delta, deltaUSD) = (delta0, delta1);
             (fees, usd_fees) = (fees0, fees1);
         }
-        uint currentShares = wethVault.balanceOf(address(this));
-        uint currentAssetsPerShare = wethVault.convertToAssets(WAD);
-        if (lastShareBalance > 0
-            && currentAssetsPerShare > lastAssetsPerShare) {
-            uint vaultYield = FullMath.mulDiv(lastShareBalance,
-                currentAssetsPerShare - lastAssetsPerShare, WAD);
-            fees += vaultYield;
-        }
-        lastShareBalance = currentShares;
-        lastAssetsPerShare = currentAssetsPerShare;
+        // Vault yield already captured by _syncYield()
         if (totalShares > 0) {
             ETH_FEES += FullMath.mulDiv(fees, WAD, totalShares);
             USD_FEES += FullMath.mulDiv(usd_fees, WAD, totalShares);
@@ -404,9 +401,12 @@ contract VogueUni is
    /// @dev Called by Aux to attribute yield to LPs
     function depositYield(uint amount) external onlyAux {
         if (amount == 0) return;
+        _syncYield(); // Capture pending yield first
         WETH.transferFrom(msg.sender,
                 address(this), amount);
         wethVault.deposit(amount, address(this));
+        lastShareBalance = wethVault.balanceOf(address(this));
+        lastAssetsPerShare = wethVault.convertToAssets(WAD);
         // Attribute yield to all LPs pro rata
         if (totalShares > 0)
             ETH_FEES += FullMath.mulDiv(
@@ -463,8 +463,25 @@ contract VogueUni is
         // This is acceptable as it gets reused by next caller.
     }
 
+    /// @notice Sync ERC4626 vault yield into ETH_FEES unconditionally
+    /// @dev Called at top of _repack so yield is always current
+    /// before any deposit/withdraw snapshot is set
+    function _syncYield() internal {
+        uint currentShares = wethVault.balanceOf(address(this));
+        uint currentAPS = wethVault.convertToAssets(WAD);
+        if (lastShareBalance > 0 && currentAPS > lastAssetsPerShare) {
+            uint vaultYield = FullMath.mulDiv(lastShareBalance,
+                        currentAPS - lastAssetsPerShare, WAD);
+            if (totalShares > 0)
+                ETH_FEES += FullMath.mulDiv(vaultYield, WAD, totalShares);
+        }
+        lastShareBalance = currentShares;
+        lastAssetsPerShare = currentAPS;
+    }
+
     function _repack() internal returns (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper, uint128 myLiquidity) {
+        _syncYield(); // Always capture vault yield before anything else
         int24 currentTick;
         tickUpper = UPPER_TICK; tickLower = LOWER_TICK;
         (sqrtPriceX96, currentTick, myLiquidity) = V4.poolStats(
