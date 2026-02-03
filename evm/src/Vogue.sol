@@ -310,7 +310,7 @@ contract Vogue is
 
     function addLiquidityHelper(
         uint deltaETH, uint price) public
-        onlyAux returns (uint, uint) {
+        onlyAux returns (uint, uint) { //
         uint[13] memory deposits = AUX.get_deposits();
         uint liquidTotal = deposits[0] - deposits[11]
                             + AUX.getUSYCRedeemable();
