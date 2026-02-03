@@ -454,12 +454,29 @@ contract Vogue is
 
     function depositYield(uint amount)
         external onlyAux { if (amount == 0) return;
+        _syncYield(); // capture vault yield before anything else
         WETH.transferFrom(msg.sender, address(this), amount);
         AAVE.supply(address(WETH), amount, address(this), 0);
         // Attribute yield to all LPs proportionally
         if (totalShares > 0)
             ETH_FEES += FullMath.mulDiv(
                amount, WAD, totalShares);
+    }
+
+    /// @notice Sync AAVE yield into ETH_FEES unconditionally
+    /// @dev Called at top of _repack so yield is always current
+    /// before any deposit/withdraw snapshot is set
+    function _syncYield() internal {
+        uint currentScaled = IAToken(aWETH).scaledBalanceOf(address(this));
+        uint currentIndex = AAVE.getReserveNormalizedIncome(address(WETH));
+        if (lastScaledBalance > 0 && currentIndex > lastLiquidityIndex) {
+            uint aaveYield = FullMath.mulDiv(lastScaledBalance,
+                        currentIndex - lastLiquidityIndex, RAY);
+            if (totalShares > 0)
+                ETH_FEES += FullMath.mulDiv(aaveYield, WAD, totalShares);
+        }
+        lastScaledBalance = currentScaled;
+        lastLiquidityIndex = currentIndex;
     }
 
     function _sendETH(uint howMuch,
