@@ -30,10 +30,10 @@ import {Amp} from "../src/Amp.sol";
 import {Vogue} from "../src/Vogue.sol";
 import {Rover} from "../src/Rover.sol";
 import {Basket} from "../src/Basket.sol";
-import {BasketLib} from "../src/BasketLib.sol";
+
 import {VogueCore} from "../src/VogueCore.sol";
 import {AuxArb as Aux} from "../src/L2/AuxArb.sol";
-
+import {BasketLib} from "../src/imports/BasketLib.sol";
 import {MessageCodec} from "../src/imports/MessageCodec.sol";
 import {Types} from "../src/imports/Types.sol";
 import {Proof} from "../src/Proof.sol";

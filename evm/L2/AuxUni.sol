@@ -6,10 +6,10 @@ import {Jury} from "../Jury.sol";
 import {Rover} from "../Rover.sol";
 import {Basket} from "../Basket.sol";
 import {VogueCore} from "../VogueCore.sol";
-import {BasketLib} from "../BasketLib.sol";
 import {Types} from "../imports/Types.sol";
-
+import {BasketLib} from "../imports/BasketLib.sol";
 import {VogueUni as Vogue} from "./VogueUni.sol";
+
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";

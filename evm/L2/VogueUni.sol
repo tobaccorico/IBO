@@ -16,7 +16,7 @@ import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {stdMath} from "forge-std/StdMath.sol";
 
-import {BasketLib} from "../BasketLib.sol";
+import {BasketLib} from "../imports/BasketLib.sol";
 import {Types} from "../imports/Types.sol";
 import {VogueCore} from "../VogueCore.sol";
 import {Basket} from "../Basket.sol";

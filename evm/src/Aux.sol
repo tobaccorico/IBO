@@ -7,7 +7,7 @@ import {Vogue} from "./Vogue.sol";
 import {Rover} from "./Rover.sol";
 import {Basket} from "./Basket.sol";
 
-import {BasketLib} from "./BasketLib.sol";
+import {BasketLib} from "./imports/BasketLib.sol";
 import {Types} from "./imports/Types.sol";
 import {VogueCore} from "./VogueCore.sol";
 
