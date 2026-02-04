@@ -42,10 +42,10 @@ contract Basket is OFT, ERC6909, ReentrancyGuard {
     uint constant PoV = WAD * 500000;
     uint constant tranche = PoV / 5;
     address payable public court;
-    
+
     uint public seeded; // fundraised
     uint public multiplier; // <= 200%
-    address payable public V4; // hook
+    address payable public V4; // vogue
     address public jury; Aux public AUX;
 
     uint32 public constant SOL_MAINNET_EID = 30168;
@@ -76,13 +76,13 @@ contract Basket is OFT, ERC6909, ReentrancyGuard {
                       who == court || who == V4;
     }
 
-    constructor(address _rover, address _aux)
+    constructor(address _vogue, address _aux)
         OFT("QU!D", "QD", LZ, msg.sender)
         Ownable(msg.sender) {
         _deployer = msg.sender;
         _deployed = block.timestamp;
         AUX = Aux(payable(_aux));
-        V4 = payable(_rover);
+        V4 = payable(_vogue);
     } // ^ where it's at...
 
     mapping(address => SortedSetLib.Set) private perMonth;
@@ -355,13 +355,13 @@ contract Basket is OFT, ERC6909, ReentrancyGuard {
                     // coincidentally it's the lastHolder...
                     address lastHolder = holders[lastIndex];
                     holderIndex[lastHolder] = index;
-                    holders[index] = lastHolder;
+                    holders[index - 1] = lastHolder;
                 } holderIndex[from] = 0; holders.pop();
                 latest_holder = holders.length;
             }   amount = super.balanceOf(to);
             if (to != address(0) && holderIndex[to] == 0 &&
                 amount > tranche / 10000 && amount < tranche) {
-                holderIndex[to] = holders.length; holders.push(to);
+                holderIndex[to] = holders.length + 1; holders.push(to);
                 latest_holder = holders.length;
             }
         }

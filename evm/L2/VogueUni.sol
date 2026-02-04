@@ -164,11 +164,10 @@ contract VogueUni is
                           TickMath.getSqrtPriceAtTick(newUpperTick), amount);
             }
         } Types.SelfManaged memory newPosition = Types.SelfManaged({
-              created: block.timestamp, owner: msg.sender,
+              created: block.number, owner: msg.sender,
               lower: newLowerTick, upper: newUpperTick,
-              liq: int(uint(liquidity)) });
+              liq: int(uint(liquidity)) }); next = ++ID;
 
-        next = ++ID;
         selfManaged[next] = newPosition;
         positions[msg.sender].push(next);
         V4.outOfRange(msg.sender, int(uint(liquidity)),
@@ -331,8 +330,8 @@ contract VogueUni is
         Types.SelfManaged storage position = selfManaged[id];
         require(position.owner == msg.sender, "403");
 
-        require(block.timestamp >=
-        position.createdAt + 10 minutes, "too soon");
+        require(block.number >=
+        position.created + 47, "too soon");
         require(percent > 0 && percent < 101, "%");
 
         int liquidity = position.liq * percent / 100;

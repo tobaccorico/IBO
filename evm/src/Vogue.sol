@@ -168,7 +168,7 @@ contract Vogue is
                           TickMath.getSqrtPriceAtTick(newUpperTick), amount);
             }
         } Types.SelfManaged memory newPosition = Types.SelfManaged({
-              created: block.timestamp, owner: msg.sender,
+              created: block.number, owner: msg.sender,
               lower: newLowerTick, upper: newUpperTick,
               liq: int(uint(liquidity)) }); next = ++ID;
 
@@ -347,8 +347,8 @@ contract Vogue is
         Types.SelfManaged storage position = selfManaged[id];
         require(position.owner == msg.sender, "403");
 
-        require(block.timestamp >=
-        position.createdAt + 10 minutes, "too soon");
+        require(block.number >=
+        position.created + 47, "too soon");
         require(percent > 0 && percent < 101, "%");
 
         int liquidity = position.liq * percent / 100;
@@ -386,16 +386,6 @@ contract Vogue is
             (delta, deltaUSD) = (delta0, delta1);
             (fees, usd_fees) = (fees0, fees1);
         }
-        uint currentScaled = IAToken(aWETH).scaledBalanceOf(address(this));
-        uint currentIndex = AAVE.getReserveNormalizedIncome(address(WETH));
-        if (lastScaledBalance > 0 && currentIndex > lastLiquidityIndex) {
-            uint aaveYield = FullMath.mulDiv(lastScaledBalance,
-                        currentIndex - lastLiquidityIndex, RAY);
-
-            fees += aaveYield;
-        }
-        lastScaledBalance = currentScaled;
-        lastLiquidityIndex = currentIndex;
         if (totalShares > 0) {
             ETH_FEES += FullMath.mulDiv(fees, WAD, totalShares);
             USD_FEES += FullMath.mulDiv(usd_fees, WAD, totalShares);
@@ -457,6 +447,7 @@ contract Vogue is
         _syncYield(); // capture vault yield before anything else
         WETH.transferFrom(msg.sender, address(this), amount);
         AAVE.supply(address(WETH), amount, address(this), 0);
+        lastScaledBalance = IAToken(aWETH).scaledBalanceOf(address(this));
         // Attribute yield to all LPs proportionally
         if (totalShares > 0)
             ETH_FEES += FullMath.mulDiv(

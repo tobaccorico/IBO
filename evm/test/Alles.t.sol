@@ -385,6 +385,7 @@ contract Alles is Test, Fixtures {
                         stack / 100, "USDC should be deducted");
 
         // Pull and get USDC back
+        vm.roll(vm.getBlockNumber() + 1000);
         balanceBefore = USDC.balanceOf(User01);
         V4.pull(id, 100, address(USDC));
 
@@ -403,7 +404,7 @@ contract Alles is Test, Fixtures {
         uint id = V4.outOfRange{value: 2 ether}(0, address(0), -1000, 100);
         assertGt(id, 0, "Should create position");
 
-        vm.roll(vm.getBlockNumber() + 1);
+        vm.roll(vm.getBlockNumber() + 1000);
 
         // Position above price holds USD, so withdraw USDC
         uint balanceBefore = USDC.balanceOf(User01);
