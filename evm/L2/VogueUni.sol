@@ -405,7 +405,6 @@ contract VogueUni is
                 address(this), amount);
         wethVault.deposit(amount, address(this));
         lastShareBalance = wethVault.balanceOf(address(this));
-        lastAssetsPerShare = wethVault.convertToAssets(WAD);
         // Attribute yield to all LPs pro rata
         if (totalShares > 0)
             ETH_FEES += FullMath.mulDiv(

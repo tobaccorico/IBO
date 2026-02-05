@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
@@ -14,6 +15,7 @@ import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
@@ -66,6 +68,7 @@ contract Alles is Test, Fixtures {
     address public aaveData = 0x3F78BBD206e4D3c504Eb854232EdA7e47E9Fd8FC;
     address public aaveAddr = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
     address public stabilityPool = 0x5721cbbd64fc7Ae3Ef44A0A3F9a790A9264Cf9BF;
+    address public JAM = 0xbeb0b0623f66bE8cE162EbDfA2ec543A522F4ea6;
 
     IERC20 public GHO = IERC20(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
     IERC20 public USDT = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
@@ -78,7 +81,6 @@ contract Alles is Test, Fixtures {
     IERC20 public FRAX = IERC20(0xCAcd6fd266aF91b8AeD52aCCc382b4e165586E29);
     IERC20 public BOLD = IERC20(0x6440f144b7e50D6a8439336510312d2F54beB01D);
     IERC20 public USYC = IERC20(0x136471a34f6ef19fE571EFFC1CA711fdb8E49f2b);
-
 
     address public hashnote = 0xeE35F963BFC71b51eC95147f26c030D674ea30e6;
     IERC4626 public SDAI = IERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
@@ -97,6 +99,7 @@ contract Alles is Test, Fixtures {
     Jury public jury;
     Court public court;
     VogueCore public CORE;
+
     Basket public QUID;
     Vogue public V4;
     Rover public V3;
@@ -187,9 +190,8 @@ contract Alles is Test, Fixtures {
         proof.setCourt(address(court));
         proof.setJury(address(jury));
 
-        AUX.setQuid(address(QUID),
-                address(jury),
-                address(court));
+        AUX.setQuid(address(QUID), address(jury),
+                    address(court), JAM);
 
         V3.setAux(address(AUX));
 

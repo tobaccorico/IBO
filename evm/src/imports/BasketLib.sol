@@ -7,8 +7,8 @@ import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
-import {MessageCodec} from "./MessageCodec.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {MessageCodec} from "./MessageCodec.sol";
 import {Types} from "./Types.sol";
 
 interface IVogue {
@@ -521,15 +521,11 @@ library BasketLib {
 
     /// @notice Get combined deposits for a base token + its staked variant
     function getCombinedDeposits(uint base, uint[14] memory deps,
-        StakedPairs memory pairs) internal pure returns (uint) {
-        uint combined = deps[base + 2];
-        for (uint i = 0; i < 4; i++)
-            if (pairs.base[i] == base) {
-                combined += deps[pairs.staked[i] + 2];
-                break;
-            }
-
-        return combined;
+        StakedPairs memory pairs) internal pure returns
+        (uint) { uint combined = deps[base + 2];
+        for (uint i = 0; i < 4; i++) if (pairs.base[i] == base) {
+                combined += deps[pairs.staked[i] + 2]; break;
+        } return combined;
     }
 
     function isStakedToken(uint idx,

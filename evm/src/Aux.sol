@@ -7,30 +7,28 @@ import {Vogue} from "./Vogue.sol";
 import {Rover} from "./Rover.sol";
 import {Basket} from "./Basket.sol";
 
-import {BasketLib} from "./imports/BasketLib.sol";
 import {Types} from "./imports/Types.sol";
 import {VogueCore} from "./VogueCore.sol";
+import {BasketLib} from "./imports/BasketLib.sol";
+
+import {IPool} from "aave-v3/interfaces/IPool.sol";
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
+
+import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
+import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
+import {ReentrancyGuard} from "solmate/src/utils/ReentrancyGuard.sol";
 
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {DataTypes} from "aave-v3/protocol/libraries/types/DataTypes.sol";
 
-import {IPool} from "aave-v3/interfaces/IPool.sol";
-import {IERC20} from "forge-std/interfaces/IERC20.sol";
-import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
-import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
-import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
-import {ReentrancyGuard} from "solmate/src/utils/ReentrancyGuard.sol";
-
 interface IFlashBorrower {
-    function onFlashLoan(
-        address initiator,
-        address token,
-        uint256 amount,
-        uint16 shareBps,
-        bytes calldata data
-    ) external returns (bytes32);
+    function onFlashLoan(address initiator,
+        address token, uint256 amount,
+        uint shareBps, bytes calldata data)
+        external returns (bytes32);
 }
 
 contract Aux is // Auxiliary
@@ -45,15 +43,15 @@ contract Aux is // Auxiliary
     IUniswapV3Pool internal v3PoolWETH;
     BasketLib.Metrics internal metrics;
 
-    uint256 internal spValue;         // current BOLD principal in SP
-    uint256 internal spTotalYield;    // cumulative harvested USD value (WAD)
+    uint256 internal spValue; // current BOLD principal in SP
+    uint256 internal spTotalYield; // cumulative harvested USD value (WAD)
     uint256 internal spPrincipalTime; // cumulative (principal * seconds)
-    uint256 internal spLastUpdate;    // last update timestamp
+    uint256 internal spLastUpdate; // last update timestamp
 
+    mapping(address => uint) internal untouchables;
     mapping(address => address) internal vaults;
     mapping(address => address) internal tokens;
     mapping(address => uint) internal toIndex;
-    mapping(address => uint) internal untouchables;
 
     uint public untouchable;
     // ^ in vault shares, 1e18
@@ -63,6 +61,7 @@ contract Aux is // Auxiliary
     uint internal lastBlock;
 
     address internal jury;
+    address internal JAM;
     uint24 internal v3Fee;
     IPool internal AAVE;
     Amp internal AMP;
@@ -74,7 +73,8 @@ contract Aux is // Auxiliary
         if (msg.sender != address(V4)
          && msg.sender != address(CORE)
          && msg.sender != address(QUID)
-         && msg.sender != address(this)) revert Unauthorized(); _;
+         && msg.sender != address(this))
+            revert Unauthorized(); _;
     }
 
     bytes32 constant CALLBACK_SUCCESS = keccak256(
@@ -89,6 +89,7 @@ contract Aux is // Auxiliary
         address[] memory _stables,
         address[] memory _vaults)
         Ownable(msg.sender) {
+
         AAVE = IPool(_aave);
         v3Router = _v3router;
         lastBlock = block.number - 1;
@@ -141,8 +142,9 @@ contract Aux is // Auxiliary
     }
 
     function setQuid(address _quid, address _jury,
-        address _court) external onlyOwner {
-        renounceOwnership(); QUID = Basket(_quid);
+        address _court, address _jam) external
+        onlyOwner { renounceOwnership();
+        QUID = Basket(_quid); JAM = _jam;
         QUID.setup(_court, _jury); jury = _jury;
         USDC.approve(v3Router, type(uint).max);
         WETH.approve(v3Router, type(uint).max);
@@ -180,11 +182,11 @@ contract Aux is // Auxiliary
     /// @param forETH ^ for $ --> ETH, opposite for ETH --> $
     /// @param amount Amount to swap (either ETH, QD, or $)
     /// @param minOut Minimum output (slippage protection)
-    function swap(address token, bool forETH, uint amount, uint minOut)
-        public payable nonReentrant returns (uint max) {
+    function swap(address token, bool forETH, uint amount,
+        uint minOut) public payable nonReentrant returns
+        (uint max) { bool stable; bool zeroForOne;
         Types.AuxContext memory ctx = _buildContext();
         (uint160 sqrtPriceX96,,,) = V4.repack();
-        bool stable; bool zeroForOne;
         stable = toIndex[token] > 0;
         if (!forETH) {
             if (token != address(QUID)) require(stable);
@@ -236,7 +238,7 @@ contract Aux is // Auxiliary
         amount = _depositETH(msg.sender, amount);
         uint usdcNeeded = BasketLib.convert(amount, twapPrice, false);
         uint took = _take(address(this), usdcNeeded, address(USDC), false);
-        if (took <= usdcNeeded) { // TODO why use getTWAP(0) first then pass in getTWAP(1800)??
+        if (took <= usdcNeeded) {
             require(v3Fair(twapPrice));
             (uint more, uint used) = BasketLib.source(_buildContext(),
                 address(V4), address(V3), usdcNeeded - took, amount,
@@ -345,11 +347,9 @@ contract Aux is // Auxiliary
                 uint shares = IERC20(vault).balanceOf(address(this));
                 shares *= multiplier; shares -= Math.min(shares,
                                             untouchables[stable]);
-                                                                // TODO is currentLiquidityRate
-                                                                // already representative of token's precision
                 amounts[0] += shares; amounts[i + 1] = shares;
-                amounts[12] += FullMath.mulDiv(shares, // TODO check precision
-                            currentLiquidityRate, RAY); // all tokens except USDC/USDT are 1e8
+                amounts[12] += FullMath.mulDiv(shares,
+                            currentLiquidityRate, RAY);
             }
         } for (i = 4; i < 9; i++) {
             stable = stables[i]; vault = vaults[stable];
@@ -407,7 +407,6 @@ contract Aux is // Auxiliary
             uint needed = (fee > 0 && fee < WAD / 10) ?
                 FullMath.mulDiv(amount, WAD + fee, WAD) : amount;
 
-            // TODO will this withdraw the most we can?
             sent = _withdraw(who, index, needed);
             if (strict) { _tip(sent, token, -1);
                 return FullMath.mulDiv(sent,
@@ -546,24 +545,24 @@ contract Aux is // Auxiliary
         } require(sent > 0);
     }
 
-    /// @notice Atomic flash loan...
-    /// @dev tip compounds into basket
+    /// @param borrower Address to receive tokens and callback
     /// @param token Stable token to borrow
     /// @param amount Token amount (native decimals)
     /// @param shareBps LP Profit share signals
     /// higher priority to builders/sequencers
     /// commitment (100 = 1% min, 10000 = 100%)
-    /// @param data unused (passed to callback)
-    function flashLoan(address token,
-        uint256 amount, uint16 shareBps,
+    /// @param data passed to borrower callback
+    function flashLoan(address borrower,
+        address token, uint256 amount, uint shareBps,
         bytes calldata data) external nonReentrant
         returns (bool) { uint index; uint sent;
+        require(msg.sender == JAM);
         bool weth = token == address(WETH);
-        sent = weth ? V4.takeETH(amount, msg.sender):
-             _take(msg.sender, amount, token, false);
+        sent = weth ? V4.takeETH(amount, borrower):
+             _take(borrower, amount, token, false);
 
-        bytes32 result = IFlashBorrower(msg.sender).onFlashLoan(
-                        msg.sender, token, sent, shareBps, data);
+        bytes32 result = IFlashBorrower(borrower).onFlashLoan(
+                        borrower, token, sent, shareBps, data);
 
         uint returned = IERC20(token).balanceOf(address(this));
         require(result == CALLBACK_SUCCESS && returned >= sent);

@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
@@ -5,19 +6,19 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Types} from "./imports/Types.sol";
 
-/// @notice Bebop JAM settlement — actual on-chain interface
+/// @notice Bebop JAM settlement interface (settle path)
 interface IJamSettlement {
-    function settle(
-        Types.JamOrder calldata order,
-        bytes calldata signature,                // raw EIP-712 sig bytes
-        Types.Interaction[] calldata interactions,// solver's swap route
-        bytes memory hooksData,                  // ABI-encoded hooks (or "")
-        address balanceRecipient                 // where taker sell tokens go
+    function settle(Types.JamOrder calldata order,
+        bytes calldata signature, // raw EIP-712 sig bytes
+        Types.Interaction[] calldata interactions,
+        bytes memory hooksData, // ABI-encoded hooks (or "")
+        address balanceRecipient // where taker sell tokens go
     ) external payable;
 }
 
 interface IAux {
     function flashLoan(
+        address borrower,
         address token,
         uint256 amount,
         uint16 shareBps,
@@ -26,10 +27,39 @@ interface IAux {
 }
 
 /// @title JamSolver
-/// @notice Flash-loan arbitrage solver for Bebop JAM settlements.
-/// @dev Flow: borrow from Aux → receive taker's sell tokens as balanceRecipient
-///      → interactions swap them into buy tokens → settlement sends buy tokens
-///      to taker → we keep excess → repay Aux with principal + profit share.
+/// @notice Aux-capitalized solver for Bebop JAM settlements.
+///
+/// @dev Architecture: settle wraps flashLoan (not the reverse).
+///
+///   JamSettlement.settle() runs interactions via runInteractions,
+///   where msg.sender = JamSettlement. The flashLoan call lives inside
+///   that interaction list, so Aux can gate with a single require:
+///
+///     require(msg.sender == jamSettlement)
+///
+///   This is the inherent gate — no flags, no hooks, no coordination.
+///
+///   Token flow for a typical order (taker sells WETH, buys USDC):
+///
+///   1. solve() calls JamSettlement.settle()
+///   2. settle step 5: taker's WETH → Solver (balanceRecipient)
+///   3. settle step 6: runInteractions → Aux.flashLoan(Solver, USDC, ...)
+///        msg.sender = JamSettlement ✓
+///        Aux sends 2000 USDC → Solver
+///        Solver.onFlashLoan():
+///          a. callbackOps route buy tokens to JamSettlement
+///             (e.g. USDC.transfer(jamSettlement, 2000))
+///          b. callbackOps swap sell tokens for repayment
+///             (e.g. DEX swap WETH → 2050 USDC)
+///          c. profit split: tip to Aux, rest stays
+///          d. principal + tip → Aux
+///        Aux checks returned >= sent ✓
+///   4. settle step 7: USDC on JamSettlement → taker ✓
+///
+///   shareBps is the priority auction signal:
+///   higher share → more yield to basket LPs → better orchestrator score
+///   → more order flow.
+///
 contract JamSolver is Ownable {
     bytes32 constant CALLBACK_SUCCESS =
         keccak256("ERC3156FlashBorrower.onFlashLoan");
@@ -38,14 +68,15 @@ contract JamSolver is Ownable {
     address public jamSettlement;
 
     error Unauthorized();
-    error SettlementFailed();
-    error InsufficientProfit();
+    error Insolvent();
+    error CallFailed();
 
     event Settled(
+        address indexed solver,
         address indexed token,
         uint256 borrowed,
-        uint256 returned,
-        uint256 profit
+        uint256 profit,
+        uint256 auxShare
     );
 
     constructor(
@@ -57,85 +88,107 @@ contract JamSolver is Ownable {
     }
 
     /// @notice Execute a JAM settlement using Aux flash loan
-    /// @param token       Token to borrow from Aux
-    /// @param amount      Amount to borrow
-    /// @param shareBps    Profit share to Aux (5000 = 50%)
-    /// @param order       Bebop JAM order
-    /// @param signature   Raw EIP-712 taker signature
-    /// @param interactions Swap route for settlement
-    /// @param hooksData   ABI-encoded hooks (pass "" if none)
+    /// @param token        Token to borrow from Aux (typically the buy token)
+    /// @param amount       Amount to borrow
+    /// @param shareBps     Profit share to Aux LPs (5000 = 50%)
+    /// @param order        Bebop JAM order
+    /// @param signature    Raw EIP-712 taker signature
+    /// @param hooksData    ABI-encoded hooks (pass "" if none)
+    /// @param callbackOps  Operations executed inside the flash loan callback.
+    ///                     The operator constructs these off-chain to:
+    ///                       1. Route buy tokens to JamSettlement
+    ///                          (e.g. USDC.transfer(jamSettlement, buyAmt))
+    ///                       2. Swap sell tokens back to borrowed token
+    ///                          (e.g. DEX swap WETH → USDC)
+    ///                     Profit split + repayment are handled automatically.
     function solve(
         address token,
         uint256 amount,
         uint16 shareBps,
         Types.JamOrder calldata order,
         bytes calldata signature,
-        Types.Interaction[] calldata interactions,
-        bytes calldata hooksData
+        bytes calldata hooksData,
+        Types.Interaction[] calldata callbackOps
     ) external onlyOwner {
-        bytes memory data = abi.encode(
-            order, signature, interactions, hooksData
+        // Single interaction: the flash loan itself.
+        // JamSettlement.runInteractions calls to.call{value}(data),
+        // making msg.sender = jamSettlement at Aux.flashLoan. This
+        // is the structural gate — no other path satisfies it.
+        Types.Interaction[] memory ix = new Types.Interaction[](1);
+        ix[0] = Types.Interaction({
+            result: true, // flashLoan returns bool
+            to:     aux,
+            value:  0,
+            data:   abi.encodeWithSelector(
+                        IAux.flashLoan.selector,
+                        address(this), // borrower
+                        token,
+                        amount,
+                        shareBps,
+                        abi.encode(callbackOps)
+                    )
+        });
+
+        IJamSettlement(jamSettlement).settle(
+            order,
+            signature,
+            ix,
+            hooksData,
+            address(this) // balanceRecipient = this solver
         );
-        IAux(aux).flashLoan(token, amount, shareBps, data);
     }
 
-    /// @notice ERC-3156 callback — called by Aux during flashLoan
-    /// @dev Decodes settlement params, approves tokens, calls settle,
-    ///      verifies profit, returns everything to Aux.
+    /// @notice ERC-3156 flash loan callback
+    /// @dev Called by Aux during flashLoan (which itself runs inside
+    ///      JamSettlement.settle → runInteractions). At this point the
+    ///      Solver already holds sell tokens from settle step 5, and
+    ///      just received borrowed tokens from Aux. The callbackOps
+    ///      route buy tokens onto JamSettlement and convert sell tokens
+    ///      into the borrowed token for repayment.
     function onFlashLoan(
         address initiator,
         address token,
         uint256 amount,
-        uint16  /*shareBps*/,
+        uint16 shareBps,
         bytes calldata data
     ) external returns (bytes32) {
         if (msg.sender != aux) revert Unauthorized();
         if (initiator != address(this)) revert Unauthorized();
 
-        (
-            Types.JamOrder memory order,
-            bytes memory signature,
-            Types.Interaction[] memory interactions,
-            bytes memory hooksData
-        ) = abi.decode(
-            data,
-            (Types.JamOrder, bytes, Types.Interaction[], bytes)
+        Types.Interaction[] memory ops = abi.decode(
+            data, (Types.Interaction[])
         );
 
-        // Approve settlement to pull the borrowed tokens
-        IERC20(token).approve(jamSettlement, amount);
+        // Execute callback operations (operator-constructed):
+        //   - transfer buy tokens to JamSettlement
+        //   - DEX swaps to convert sell tokens → borrowed token
+        //   - any other routing the operator needs
+        for (uint i; i < ops.length; ++i) {
+            (bool ok,) = ops[i].to.call{
+                value: ops[i].value
+            }(ops[i].data);
+            if (!ok) revert CallFailed();
+        }
 
-        // Settle: sell tokens flow solver→settlement, buy tokens→receiver.
-        // We are the balanceRecipient, so taker's sell tokens come to us.
-        // The interactions route them into buy tokens for the taker.
-        // Any excess of the borrowed token remains in this contract.
-        IJamSettlement(jamSettlement).settle(
-            order,
-            signature,
-            interactions,
-            hooksData,
-            address(this)  // balanceRecipient = this solver
-        );
-
-        // Verify profit: we must have at least `amount` back
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        if (balance < amount) revert InsufficientProfit();
-
-        uint256 profit = balance - amount;
-
-        // Return everything to Aux (principal + profit)
-        IERC20(token).transfer(aux, balance);
-
-        emit Settled(token, amount, balance, profit);
+        // ── Profit split ──────────────────────────────────────
+        {
+            uint256 bal = IERC20(token).balanceOf(address(this));
+            if (bal < amount) revert Insolvent();
+            uint256 tip = ((bal - amount) * shareBps) / 10000;
+            IERC20(token).transfer(aux, amount + tip);
+            emit Settled(owner(), token, amount, bal - amount, tip);
+        }
         return CALLBACK_SUCCESS;
     }
 
+    // ── Admin ───────────────────────────────────────────────────
+
     /// @notice Update JAM settlement address
-    function setJamSettlement(address _jamSettlement) external onlyOwner {
-        jamSettlement = _jamSettlement;
+    function setJamSettlement(address _jam) external onlyOwner {
+        jamSettlement = _jam;
     }
 
-    /// @notice Rescue stuck ERC20 tokens
+    /// @notice Withdraw accumulated profits or stuck tokens
     function rescue(address token, uint256 amount) external onlyOwner {
         IERC20(token).transfer(owner(), amount);
     }

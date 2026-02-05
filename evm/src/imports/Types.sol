@@ -3,9 +3,8 @@
 pragma solidity ^0.8.26;
 
 library Types {
-
     /// @notice Vogue
-    /// self-managed LP position
+    /// self-managed LP
     struct SelfManaged {
         uint created;
         address owner;
@@ -33,7 +32,6 @@ library Types {
         uint fees_usd;
     }
 
-    /// @notice Aux internal swap routing context
     struct AuxContext {
         address v3Pool;
         address v3Router;
@@ -45,16 +43,14 @@ library Types {
         bool isAAVE;
     }
 
-    /// @notice Full Bebop JAM order.
     /// @dev Every field must be present for ABI compatibility with the
-    ///      on-chain JamSettlement contract, even if our solver doesn't
-    ///      use all of them.
-    ///
-    ///      For ERC20-only arb, pass:
-    ///        sellNFTIds:         new uint256[](0)
-    ///        buyNFTIds:          new uint256[](0)
-    ///        sellTokenTransfers: ""  (0x)
-    ///        buyTokenTransfers:  ""  (0x)
+    /// on-chain JamSettlement contract, even if our solver doesn't
+    /// use all of them.
+    /// For ERC20-only arb, pass:
+    ///  sellNFTIds: new uint256[](0)
+    ///  buyNFTIds: new uint256[](0)
+    ///  sellTokenTransfers: "" (0x)
+    ///  buyTokenTransfers: "" (0x)
     struct JamOrder {
         address   taker;              // order creator (EOA that signed)
         address   receiver;           // where buy tokens are sent
@@ -76,11 +72,13 @@ library Types {
     }
 
     /// @notice A single external call for JamSettlement to execute.
-    /// @dev Matches Bebop's JamInteraction.Data exactly: {to, value, data}.
-    ///      These are how the solver routes through DEXs, AMMs, etc.
+    /// @dev Matches Bebop's JamInteraction.Data exactly.
+    /// Used for settlement interactions (executed by JamSettlement)
+    /// and for repay swaps (executed directly by the Solver contract).
     struct Interaction {
-        address to;     // target contract to call
-        uint256 value;  // ETH value to forward
-        bytes   data;   // calldata for the external call
+        bool result; // if true, runInteractions checks call returns true
+        address to; // target contract to call
+        uint256 value; // ETH value to forward
+        bytes data; // calldata for the external call
     }
 }

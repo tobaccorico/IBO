@@ -15,10 +15,12 @@ import {Amp} from "../src/Amp.sol";
 import {Vogue} from "../src/Vogue.sol";
 import {Rover} from "../src/Rover.sol";
 import {Basket} from "../src/Basket.sol";
-import {BasketLib} from "../src/BasketLib.sol";
+
 import {VogueCore} from "../src/VogueCore.sol";
 import {Types} from "../src/imports/Types.sol";
+import {BasketLib} from "../src/imports/BasketLib.sol";
 import {MessageCodec} from "../src/imports/MessageCodec.sol";
+
 import {Proof} from "../src/Proof.sol";
 import {Jury} from "../src/Jury.sol";
 import {Court} from "../src/Court.sol";
@@ -32,22 +34,23 @@ import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 // forge script scripts/DeployL1.s.sol:Deploy --rpc-url mainnet --resume --verify
 
 contract Deploy is Script {
+    ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
+    IPoolManager public poolManager = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
+    IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
+    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
 
-    IERC20 public WETH = IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+    address public JAM = 0xbeb0b0623f66bE8cE162EbDfA2ec543A522F4ea6;
     address public aavePool = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address public aaveData = 0x56b7A1012765C285afAC8b8F25C69Bf10ccfE978;
     address public aaveAddr = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
     address public stabilityPool = 0x5721cbbd64fc7Ae3Ef44A0A3F9a790A9264Cf9BF;
 
-    IPoolManager public poolManager = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
-    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
-    ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
-    IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
-
+    IERC20 public WETH = IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
     IERC20 public GHO = IERC20(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
+    IERC20 public DAI = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     IERC20 public USDT = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
     IERC20 public USDC = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
-    IERC20 public DAI = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+
     IERC20 public PYUSD = IERC20(0x6c3ea9036406852006290770BEdFcAbA0e23A0e8);
     IERC20 public USDS = IERC20(0xdC035D45d973E3EC169d2276DDab16f1e407384F);
     IERC20 public USDE = IERC20(0x4c9EDD5852cd905f086C759E8383e09bff1E68B3);
@@ -57,8 +60,8 @@ contract Deploy is Script {
     IERC20 public USYC = IERC20(0x136471a34f6ef19fE571EFFC1CA711fdb8E49f2b);
 
     IERC4626 public hashnote = IERC4626(0xeE35F963BFC71b51eC95147f26c030D674ea30e6);
-    // https://etherscan.io/address/0x41a5be0fabda35e57838bf2aacfdfe58de8d59e9
-    // implementation contract adheres to the ERC4626 standard
+    // ^ https://etherscan.io/address/0x41a5be0fabda35e57838bf2aacfdfe58de8d59e9
+    // the implementation contract adheres (mostly) verbatim to ERC4626 standard
 
     IERC4626 public SDAI = IERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
     IERC4626 public SFRAX = IERC4626(0xcf62F905562626CfcDD2261162a51fd02Fc9c5b6);
@@ -93,7 +96,7 @@ contract Deploy is Script {
                 string(abi.encodePacked("0x",
                           privateKeyStr)));
         }
-        STABLECOINS = [ // hardhop basket
+        STABLECOINS = [// hardhop basket
             address(USDT), address(USDC),
             address(GHO), address(PYUSD),
             address(DAI), address(USDS),
@@ -101,7 +104,7 @@ contract Deploy is Script {
             address(CRVUSD), address(BOLD),
             address(USYC)  // < RWA has
         ]; // withdrawal / deposit limits
-        VAULTS = [ aavePool,
+        VAULTS = [aavePool,
             aavePool, aavePool, aavePool,
             address(SDAI), address(SUSDS),
             address(SFRAX), address(SUSDE),
@@ -139,10 +142,8 @@ contract Deploy is Script {
         proof.setCourt(address(court));
         proof.setJury(address(jury));
 
-        AUX.setQuid(address(QUID),
-                address(jury),
-                address(court));
-        V3.setAux(address(AUX));
+        AUX.setQuid(address(QUID), address(jury),
+        address(court), JAM); V3.setAux(address(AUX));
 
         console.log("=== Deployed Addresses ===");
         console.log("AMP:", address(AMP));
