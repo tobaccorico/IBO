@@ -23,7 +23,6 @@ import {ReentrancyGuard} from "solmate/src/utils/ReentrancyGuard.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {DataTypes} from "aave-v3/protocol/libraries/types/DataTypes.sol";
 
 interface IFlashBorrower {
     function onFlashLoan(address initiator,

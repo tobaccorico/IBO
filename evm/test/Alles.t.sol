@@ -1793,7 +1793,7 @@ contract Alles is Test, Fixtures {
         uint avgYield = AUX.getAverageYield();
         console.log("getAverageYield():", avgYield);
         console.log("getAverageYield() as %:", avgYield * 100 / WAD);
-
+        
         // With bug: avgYield = 0 (because amounts[12] < amounts[0])
         // With fix: avgYield > 0 (reflects actual AAVE APY)
 
