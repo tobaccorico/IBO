@@ -12,7 +12,6 @@ import {VogueCore} from "./VogueCore.sol";
 import {BasketLib} from "./imports/BasketLib.sol";
 
 import {IPool} from "aave-v3/interfaces/IPool.sol";
-import {IAToken} from "aave-v3/interfaces/IAToken.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
 
@@ -26,7 +25,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 interface IFlashBorrower {
     function onFlashLoan(address initiator,
-        address token, uint256 amount,
+             address token, uint256 amount,
         uint shareBps, bytes calldata data)
         external returns (bytes32);
 }
@@ -133,7 +132,7 @@ contract Aux is // Auxiliary
         if (force || elapsed > 10 minutes) {
             uint[13] memory amounts = get_deposits();
             metrics = BasketLib.computeMetrics(stats,
-                    elapsed, amounts[0], amounts[12]);
+                              elapsed, amounts[12]);
         } return (metrics.total, metrics.yield);
     }
 
@@ -339,44 +338,45 @@ contract Aux is // Auxiliary
         (uint[13] memory amounts) { uint i;
         address vault; address stable;
         for (i = 0; i < 4; i++) {
-            vault = AAVE.getReserveAToken(stables[i]);
-            uint balance = IERC20(vault).balanceOf(address(this));
-            if (balance > 0) {
-                uint multiplier = i < 2 ? 1e12 : 1; stable = stables[i];
-                uint scaled = IAToken(vault).scaledBalanceOf(address(this));
-                scaled *= multiplier; balance *= multiplier;
-                uint reserved = untouchables[stable];
-                scaled -= Math.min(scaled, reserved);
+          vault = AAVE.getReserveAToken(stables[i]);
+          uint balance = IERC20(vault).balanceOf(address(this));
+          if (balance > 0) {
+            uint multiplier = i < 3 ? 1e12 : 1; stable = stables[i];
+            balance *= multiplier;
+
+            // Subtract reserved (already in asset terms)
+            uint reserved = untouchables[stable];
+            if (reserved > 0)
                 balance -= Math.min(balance, reserved);
-                amounts[0] += scaled;
-                amounts[i + 1] = scaled;
-                amounts[12] += balance;
-            }
-        } for (i = 4; i < 9; i++) {
+
+            amounts[0] += balance;
+            amounts[i + 1] = balance;
+            amounts[12] += balance;
+          }
+        }
+        for (i = 4; i < 9; i++) {
             stable = stables[i]; vault = vaults[stable];
             uint shares = IERC4626(vault).balanceOf(address(this));
             shares -= IERC4626(vault).convertToShares(untouchables[stable]);
-            if (shares > 0) { amounts[i + 1] = shares; amounts[0] += shares;
+            if (shares > 0) {
                 uint assets = IERC4626(vault).convertToAssets(shares);
-                if (IERC4626(vault).totalSupply() > 0) {
-                    amounts[12] += FullMath.mulDiv(shares,
-                        IERC4626(vault).totalAssets(),
-                        IERC4626(vault).totalSupply());
-                }
+                amounts[i + 1] = assets;  // USD value for pro-rata
+                amounts[0]  += assets;
+                amounts[12] += assets;
             }
         } stable = stables[10]; vault = vaults[stable];
-        (uint usycValue, uint usycYield) = BasketLib.getUSYCValue(
+        (uint usycValue, ) = BasketLib.getUSYCValue(
                                              vault, address(this));
         if (usycValue > 0) {
             usycValue -= untouchables[stable]; amounts[0] += usycValue;
-            amounts[11] = usycValue; amounts[12] += usycYield;
+            amounts[11] = usycValue; amounts[12] += usycValue;
         }  stable = stables[9]; vault = vaults[stable];
 
-        (uint spTotal, uint spYieldContrib) = BasketLib.calcSPValue(
+        (uint spTotal, ) = BasketLib.calcSPValue(
             vault, address(this), untouchables[stable], BasketLib.SPState(
                     spValue, spTotalYield, spPrincipalTime, spLastUpdate));
 
-        if (spTotal > 0) { amounts[12] += spYieldContrib;
+        if (spTotal > 0) { amounts[12] += spTotal;
             amounts[10] = spTotal; amounts[0] += spTotal;
         }
     }

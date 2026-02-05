@@ -122,7 +122,7 @@ contract Alles is Test, Fixtures {
 
         STABLECOINS = [ // hardhop basket
             address(USDT), address(USDC),
-            address(GHO), address(PYUSD),
+            address(PYUSD), address(GHO), 
             address(DAI), address(USDS),
             address(FRAX), address(USDE),
             address(CRVUSD), address(BOLD),
@@ -1793,7 +1793,7 @@ contract Alles is Test, Fixtures {
         uint avgYield = AUX.getAverageYield();
         console.log("getAverageYield():", avgYield);
         console.log("getAverageYield() as %:", avgYield * 100 / WAD);
-        
+
         // With bug: avgYield = 0 (because amounts[12] < amounts[0])
         // With fix: avgYield > 0 (reflects actual AAVE APY)
 

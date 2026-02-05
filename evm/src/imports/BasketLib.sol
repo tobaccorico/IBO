@@ -124,17 +124,21 @@ library BasketLib {
     }
 
     function computeMetrics(Metrics memory stats,
-        uint elapsed, uint raw, uint total) internal
+        uint elapsed, uint total) internal
         view returns (Metrics memory) {
-        if (stats.trackingStart > 0 && stats.last > 0) {
-            stats.yieldAccum += stats.yield * elapsed;
-        } else if (stats.trackingStart == 0) {
+        if (stats.trackingStart == 0) {
             stats.trackingStart = block.timestamp;
+        }
+        // Periodic yield since last snapshot
+        stats.yield = (stats.total > 0 && total > stats.total)
+            ? FullMath.mulDiv(WAD, total - stats.total,
+                                          stats.total) : 0;
+        // Accumulate this period's yield immediately
+        if (stats.last > 0) {
+            stats.yieldAccum += stats.yield * elapsed;
         }
         stats.total = total;
         stats.last = block.timestamp;
-        stats.yield = (raw > 0 && total >= raw)
-            ? FullMath.mulDiv(WAD, total, raw) - WAD : 0;
 
         return stats;
     }

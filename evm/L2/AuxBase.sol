@@ -146,11 +146,10 @@ contract AuxBase is // Auxiliary
         if (force || elapsed > 10 minutes) {
             uint[14] memory amounts = get_deposits();
             stats = BasketLib.computeMetrics(stats,
-                    elapsed, amounts[0], amounts[1]);
-
+                              elapsed, amounts[1]);
             metrics = stats;
-        }
-        return (stats.total, stats.yield);
+        } return (stats.total,
+                  stats.yield);
     }
 
     function getAverageYield() external view returns (uint) {

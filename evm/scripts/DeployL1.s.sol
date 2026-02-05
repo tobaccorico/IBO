@@ -98,7 +98,7 @@ contract Deploy is Script {
         }
         STABLECOINS = [// hardhop basket
             address(USDT), address(USDC),
-            address(GHO), address(PYUSD),
+            address(PYUSD), address(GHO), 
             address(DAI), address(USDS),
             address(FRAX), address(USDE),
             address(CRVUSD), address(BOLD),
