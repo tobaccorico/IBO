@@ -312,7 +312,7 @@ contract Vogue is
         uint deltaETH, uint price) public
         onlyAux returns (uint, uint) { //
         uint[13] memory deposits = AUX.get_deposits();
-        uint liquidTotal = deposits[0] - deposits[11]
+        uint liquidTotal = deposits[12] - deposits[11]
                             + AUX.getUSYCRedeemable();
 
         uint committed = V4.POOLED_USD() * 1e12;

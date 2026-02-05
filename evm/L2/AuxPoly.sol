@@ -227,7 +227,7 @@ contract AuxPoly is // Auxiliary
         amount = _depositETH(msg.sender, amount);
         uint usdcNeeded = BasketLib.convert(amount, twapPrice, false);
         uint took = _take(address(this), usdcNeeded, address(USDC), false);
-        if (took <= usdcNeeded) { // TODO why use getTWAP(0) first then pass in getTWAP(1800)??
+        if (took <= usdcNeeded) { 
             require(!BasketLib.isV3Manipulated(address(v3PoolWETH),
                                          token1isWETH, twapPrice));
 

@@ -122,7 +122,7 @@ contract Alles is Test, Fixtures {
 
         STABLECOINS = [ // hardhop basket
             address(USDT), address(USDC),
-            address(PYUSD), address(GHO), 
+            address(PYUSD), address(GHO),
             address(DAI), address(USDS),
             address(FRAX), address(USDE),
             address(CRVUSD), address(BOLD),
@@ -603,7 +603,7 @@ contract Alles is Test, Fixtures {
         // Verify deposits were spread correctly
         (uint[13] memory deposits) = AUX.get_deposits();
 
-        uint totalDeposits = deposits[0];
+        uint totalDeposits = deposits[12];
         assertGt(totalDeposits, 0, "Should have total deposits");
 
         // Check individual vault balances
@@ -776,7 +776,7 @@ contract Alles is Test, Fixtures {
     function testVaultBalanceDistribution() public {
         (uint[13] memory deposits) = AUX.get_deposits();
 
-        uint total = deposits[0];
+        uint total = deposits[12];
         for (uint i = 1; i < 9; i++) {
             if (deposits[i] > 0) {
                 uint percentage = (deposits[i] * 100) / total;
@@ -1741,9 +1741,9 @@ contract Alles is Test, Fixtures {
         // Call actual contract
         (uint[13] memory deposits) = AUX.get_deposits();
 
-        console.log("amounts[0] (raw):", deposits[0]);
+        console.log("amounts[0] (raw):", deposits[12]);
         console.log("amounts[12] (total):", deposits[12]);
-        console.log("amounts[0] / 1e18:", deposits[0] / 1e18);
+        console.log("amounts[0] / 1e18:", deposits[12] / 1e18);
         console.log("amounts[12] / 1e18:", deposits[12] / 1e18);
 
         // Individual positions
@@ -1757,8 +1757,8 @@ contract Alles is Test, Fixtures {
         //   For 5% APY: amounts[12] ≈ balance * 0.05 (way less than balance)
         // With fixed code: amounts[12] = balance (same as raw or slightly higher)
 
-        if (deposits[0] > 0) {
-            uint ratio = deposits[12] * 100 / deposits[0];
+        if (deposits[12] > 0) {
+            uint ratio = deposits[12] * 100 / deposits[12];
             console.log("Ratio (total/raw * 100):", ratio);
 
             // BUG: ratio will be ~5 (i.e., 5%) instead of ~100
@@ -1799,7 +1799,7 @@ contract Alles is Test, Fixtures {
 
         // Get deposits to check if we have any
         (uint[13] memory deposits) = AUX.get_deposits();
-        if (deposits[0] > 0) {
+        if (deposits[12] > 0) {
             // If we have deposits, yield should be positive
             // AAVE pays interest, so after fix this should be > 0
             console.log("Have deposits, checking yield...");

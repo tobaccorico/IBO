@@ -253,7 +253,7 @@ contract AuxArb is // Auxiliary
         amount = _depositETH(msg.sender, amount);
         uint usdcNeeded = BasketLib.convert(amount, twapPrice, false);
         uint took = _take(address(this), usdcNeeded, address(USDC), false);
-        if (took <= usdcNeeded) { // TODO why use getTWAP(0) first then pass in getTWAP(1800)??
+        if (took <= usdcNeeded) {
             require(v3Fair(twapPrice));
             (uint more, uint used) = BasketLib.source(_buildContext(),
                 address(V4), address(V3), usdcNeeded - took, amount,

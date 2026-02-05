@@ -349,7 +349,6 @@ contract Aux is // Auxiliary
             if (reserved > 0)
                 balance -= Math.min(balance, reserved);
 
-            amounts[0] += balance;
             amounts[i + 1] = balance;
             amounts[12] += balance;
           }
@@ -361,14 +360,13 @@ contract Aux is // Auxiliary
             if (shares > 0) {
                 uint assets = IERC4626(vault).convertToAssets(shares);
                 amounts[i + 1] = assets;  // USD value for pro-rata
-                amounts[0]  += assets;
                 amounts[12] += assets;
             }
         } stable = stables[10]; vault = vaults[stable];
         (uint usycValue, ) = BasketLib.getUSYCValue(
                                vault, address(this));
         if (usycValue > 0) {
-            usycValue -= untouchables[stable]; amounts[0] += usycValue;
+            usycValue -= untouchables[stable];
             amounts[11] = usycValue; amounts[12] += usycValue;
         }  stable = stables[9]; vault = vaults[stable];
 
@@ -376,8 +374,9 @@ contract Aux is // Auxiliary
             vault, address(this), untouchables[stable], BasketLib.SPState(
                     spValue, spTotalYield, spPrincipalTime, spLastUpdate));
 
-        if (spTotal > 0) { amounts[12] += spTotal;
-            amounts[10] = spTotal; amounts[0] += spTotal;
+        if (spTotal > 0) {
+            amounts[12] += spTotal;
+            amounts[10] = spTotal;
         }
     }
 
@@ -398,7 +397,7 @@ contract Aux is // Auxiliary
     }
 
     // she let me into a conversation, conversation only kate could make
-    // breaking into my imagination: whatever's there, was hers to take
+    // breaking into my imagination; whatever's there: is yours to take
     function _take(address who, uint amount, address token, bool strict)
         internal returns (uint sent) { uint index = toIndex[token];
         address vault; address skip;
@@ -418,14 +417,14 @@ contract Aux is // Auxiliary
             amount = BasketLib.scaleTokenAmount(amount, token, true);
 
         } uint[13] memory amounts = get_deposits();
-        if (amounts[0] == 0 || amount == 0) return sent;
-        uint min = amounts[0]; amount = !strict ?
+        if (amounts[12] == 0 || amount == 0) return sent;
+        uint min = amounts[12]; amount = !strict ?
                  Math.min(min, amount) : amount;
 
         for (uint i = 1; i <= stables.length; i++) {
             token = stables[i - 1]; if (token == skip) continue;
             amounts[i] = FullMath.mulDiv(amount, FullMath.mulDiv(WAD,
-                                        amounts[i], amounts[0]), WAD);
+                                        amounts[i], amounts[12]), WAD);
             if (strict) { untouchable -= amounts[i];
                 untouchables[token] -= amounts[i];
             }
@@ -580,16 +579,17 @@ contract Aux is // Auxiliary
             (spValue, spPrincipalTime, spLastUpdate) = BasketLib.depositToSP(
                         vault, usd, BasketLib.SPState(spValue, spTotalYield,
                                             spPrincipalTime, spLastUpdate));
-        else if (index < 5) { // AAVE: USDT(1), USDC(2), PYUSD(3), GHO(4) 
+        else if (index < 5) { // AAVE: USDT(1), USDC(2), PYUSD(3), GHO(4)
             if (index == 2) // USDC also deposits to USYC
                 (amount, usd) = BasketLib.depositUSYC(
                     vaults[stables[10]], address(AAVE),
                     address(USDC), usd, CORE.POOLED_USD());
             if (usd > 0)
                 AAVE.supply(token, usd,
-                    address(this), 0);
+                     address(this), 0);
+
         } // DAI(5), USDS(6), FRAX(7), USDE(8), CRVUSD(9)
-        else if (index != 11)  // 4626 returns shares...
+        else if (index != 11) // 4626 returns shares...
             usd = IERC4626(vault).convertToAssets(
                     IERC4626(vault).deposit(usd,
                                 address(this)));

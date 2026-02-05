@@ -926,7 +926,7 @@ library BasketLib {
         MessageCodec.DepegStats memory stats = IJury(jury).getDepegStats(token);
         if (stats.timestamp == 0) return BASE;
 
-        uint totalDeposits = deps[0];
+        uint totalDeposits = deps[12];
         if (totalDeposits == 0) return BASE;
 
         uint concentration = (deps[idx + 1] * 10000) / totalDeposits;
@@ -970,7 +970,7 @@ library BasketLib {
     function getMostImbalanced(uint[13] memory deps,
         address[] memory stables, address jury) external
         view returns (uint idx, uint fee, uint excess) {
-        uint total = deps[0];
+        uint total = deps[12];
         if (total == 0) return (0, 0, 0);
         uint len = stables.length; uint high;
         for (uint i; i < len;) {
