@@ -12,6 +12,7 @@ import {VogueCore} from "./VogueCore.sol";
 import {BasketLib} from "./imports/BasketLib.sol";
 
 import {IPool} from "aave-v3/interfaces/IPool.sol";
+import {IAToken} from "aave-v3/interfaces/IAToken.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
 
@@ -340,16 +341,17 @@ contract Aux is // Auxiliary
         address vault; address stable;
         for (i = 0; i < 4; i++) {
             vault = AAVE.getReserveAToken(stables[i]);
-            if (IERC20(vault).balanceOf(address(this)) > 0) {
+            uint balance = IERC20(vault).balanceOf(address(this));
+            if (balance > 0) {
                 uint multiplier = i < 2 ? 1e12 : 1; stable = stables[i];
-                DataTypes.ReserveDataLegacy memory res = AAVE.getReserveData(stable);
-                uint128 currentLiquidityRate = res.currentLiquidityRate;
-                uint shares = IERC20(vault).balanceOf(address(this));
-                shares *= multiplier; shares -= Math.min(shares,
-                                            untouchables[stable]);
-                amounts[0] += shares; amounts[i + 1] = shares;
-                amounts[12] += FullMath.mulDiv(shares,
-                            currentLiquidityRate, RAY);
+                uint scaled = IAToken(vault).scaledBalanceOf(address(this));
+                scaled *= multiplier; balance *= multiplier;
+                uint reserved = untouchables[stable];
+                scaled -= Math.min(scaled, reserved);
+                balance -= Math.min(balance, reserved);
+                amounts[0] += scaled;
+                amounts[i + 1] = scaled;
+                amounts[12] += balance;
             }
         } for (i = 4; i < 9; i++) {
             stable = stables[i]; vault = vaults[stable];

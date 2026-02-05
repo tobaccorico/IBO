@@ -48,6 +48,7 @@ contract Alles is Test, Fixtures {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
 
+    uint constant RAY = 1e27;
     uint public constant WAD = 1e18;
     uint public constant USDC_PRECISION = 1e6;
     address public User01 = address(0x1001);
@@ -1726,6 +1727,88 @@ contract Alles is Test, Fixtures {
         assertEq(pooled3, 35 ether - 1, "Pooled should equal total deposited");
 
         vm.stopPrank();
+    }
+
+    function test_Bug11_AAVEYieldCalculation_RealValues() public {
+        // setUp already deposited:
+        // - 200k USDC -> AAVE (aUSDC)
+        // - 150k DAI -> AAVE (aDAI)
+        // - 50k USDC more
+        // Total ~400k in AAVE positions
+
+        console.log("=== Bug 11: AAVE Yield - Real Contract Values ===");
+
+        // Call actual contract
+        (uint[13] memory deposits) = AUX.get_deposits();
+
+        console.log("amounts[0] (raw):", deposits[0]);
+        console.log("amounts[12] (total):", deposits[12]);
+        console.log("amounts[0] / 1e18:", deposits[0] / 1e18);
+        console.log("amounts[12] / 1e18:", deposits[12] / 1e18);
+
+        // Individual positions
+        console.log("USDT (1):", deposits[1] / 1e18);
+        console.log("USDC (2):", deposits[2] / 1e18);
+        console.log("GHO (3):", deposits[3] / 1e18);
+        console.log("PYUSD (4):", deposits[4] / 1e18);
+
+        // THE BUG CHECK:
+        // With buggy code: amounts[12] = balance * liquidityRate / RAY
+        //   For 5% APY: amounts[12] ≈ balance * 0.05 (way less than balance)
+        // With fixed code: amounts[12] = balance (same as raw or slightly higher)
+
+        if (deposits[0] > 0) {
+            uint ratio = deposits[12] * 100 / deposits[0];
+            console.log("Ratio (total/raw * 100):", ratio);
+
+            // BUG: ratio will be ~5 (i.e., 5%) instead of ~100
+            // FIX: ratio should be >= 100
+
+            if (ratio < 50) {
+                console.log("BUG CONFIRMED: amounts[12] is ~", ratio, "% of amounts[0]");
+                console.log("This breaks yield calculation!");
+            } else {
+                console.log("FIXED: amounts[12] is properly ~100% of amounts[0]");
+            }
+
+            // This assertion fails with bug, passes with fix
+            assertGe(ratio, 95, "amounts[12] should be >= 95% of amounts[0]");
+        }
+    }
+
+    function test_Bug11_GetAverageYield_RealValues() public {
+        console.log("=== Bug 11: getAverageYield() - Real Values ===");
+
+        // Force metrics update
+        vm.warp(block.timestamp + 1 hours);
+        (uint total, uint yield_) = AUX.get_metrics(true);
+
+        console.log("get_metrics total:", total);
+        console.log("get_metrics yield:", yield_);
+
+        // Wait more time
+        vm.warp(block.timestamp + 1 days);
+        AUX.get_metrics(true);
+
+        uint avgYield = AUX.getAverageYield();
+        console.log("getAverageYield():", avgYield);
+        console.log("getAverageYield() as %:", avgYield * 100 / WAD);
+
+        // With bug: avgYield = 0 (because amounts[12] < amounts[0])
+        // With fix: avgYield > 0 (reflects actual AAVE APY)
+
+        // Get deposits to check if we have any
+        (uint[13] memory deposits) = AUX.get_deposits();
+        if (deposits[0] > 0) {
+            // If we have deposits, yield should be positive
+            // AAVE pays interest, so after fix this should be > 0
+            console.log("Have deposits, checking yield...");
+
+            // With bug this fails (avgYield = 0)
+            // With fix this passes (avgYield reflects AAVE rate)
+            // Note: We use a low threshold since yield accumulates slowly
+            assertGt(avgYield, 0, "avgYield should be > 0 with AAVE deposits");
+        }
     }
 
     function testRoverMultipleDeposits() public {
