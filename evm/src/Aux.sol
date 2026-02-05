@@ -366,7 +366,7 @@ contract Aux is // Auxiliary
             }
         } stable = stables[10]; vault = vaults[stable];
         (uint usycValue, ) = BasketLib.getUSYCValue(
-                                             vault, address(this));
+                               vault, address(this));
         if (usycValue > 0) {
             usycValue -= untouchables[stable]; amounts[0] += usycValue;
             amounts[11] = usycValue; amounts[12] += usycValue;
@@ -389,8 +389,8 @@ contract Aux is // Auxiliary
         token, get_deposits(), stables, jury);
     }
 
-    /// @notice Get USYC amount redeemable today (min of balance and daily limit)
-    /// @dev msg.sender in BasketLib will be Aux (this contract), which is correct
+    /// @notice Get USYC amount redeemable today
+    /// @dev msg.sender in BasketLib will be Aux
     /// @return Redeemable amount scaled to 1e18
     function getUSYCRedeemable() public view returns (uint) {
         address teller = vaults[stables[stables.length - 1]];
@@ -546,8 +546,8 @@ contract Aux is // Auxiliary
         } require(sent > 0);
     }
 
-    /// @param borrower Address to receive tokens and callback
-    /// @param token Stable token to borrow
+    /// @param borrower receive tokens & callback
+    /// @param token Stable token being borrowed...
     /// @param amount Token amount (native decimals)
     /// @param shareBps LP Profit share signals
     /// higher priority to builders/sequencers
@@ -580,7 +580,7 @@ contract Aux is // Auxiliary
             (spValue, spPrincipalTime, spLastUpdate) = BasketLib.depositToSP(
                         vault, usd, BasketLib.SPState(spValue, spTotalYield,
                                             spPrincipalTime, spLastUpdate));
-        else if (index < 5) { // AAVE: USDT(1), USDC(2), GHO(3), PYUSD(4)
+        else if (index < 5) { // AAVE: USDT(1), USDC(2), PYUSD(3), GHO(4) 
             if (index == 2) // USDC also deposits to USYC
                 (amount, usd) = BasketLib.depositUSYC(
                     vaults[stables[10]], address(AAVE),
