@@ -463,11 +463,11 @@ contract Aux is // Auxiliary
         } else if (index < 5) { vault = stables[index - 1];
             if (index == 2) { (sent,) = BasketLib.withdrawUSYC(
                                vaults[stables[10]], to, amount); amount -= sent;
-            } if (amount > 0) { amount = Math.min(amount, BasketLib.aaveAvailable(
-                                                            address(AAVE), vault));
-                sent += AAVE.withdraw(vault, amount, to);
-            }
-        } else if (index != 11) { vault = vaults[stables[index - 1]];
+            } amount = Math.min(amount, BasketLib.aaveAvailable(
+                                          address(AAVE), vault));
+            if (amount > 0) sent += AAVE.withdraw(vault, amount, to);
+        }
+        else if (index != 11) { vault = vaults[stables[index - 1]];
             (amount,) = BasketLib.calculateVaultWithdrawal(vault, amount);
             if (amount == 0) return 0; // Skip if no shares to redeem
             sent = IERC4626(vault).redeem(amount, to, address(this));

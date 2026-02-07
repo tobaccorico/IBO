@@ -402,8 +402,8 @@ contract AuxUni is // Auxiliary
             if (shares == 0) return 0;
             sent = IERC4626(vault).redeem(
                  shares, to, address(this));
-        } else {
-            sent = amount;
+        }
+        else if (amount > 0) { sent = amount;
             IERC20(stables[toIndex - 1]).transfer(to, amount);
         }
     }

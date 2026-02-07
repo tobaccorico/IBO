@@ -548,10 +548,10 @@ contract AuxArb is // Auxiliary
             if (shares == 0) return 0; // skip if no shares to redeem
             sent = IERC4626(vault).redeem(shares, to, address(this));
         }
-        else if (toIndex > 2 && toIndex < 6) {
+        else if (toIndex > 2 && toIndex < 6 && amount > 0) {
             sent = AAVE.withdraw(stables[toIndex - 1], amount, to);
         }
-        else { sent = amount;
+        else if (amount > 0) { sent = amount;
             IERC20(stables[toIndex - 1]).transfer(to, amount);
         }
     }

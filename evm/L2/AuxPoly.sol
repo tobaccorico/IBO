@@ -227,7 +227,7 @@ contract AuxPoly is // Auxiliary
         amount = _depositETH(msg.sender, amount);
         uint usdcNeeded = BasketLib.convert(amount, twapPrice, false);
         uint took = _take(address(this), usdcNeeded, address(USDC), false);
-        if (took <= usdcNeeded) { 
+        if (took <= usdcNeeded) {
             require(!BasketLib.isV3Manipulated(address(v3PoolWETH),
                                          token1isWETH, twapPrice));
 
@@ -505,11 +505,11 @@ contract AuxPoly is // Auxiliary
             sent = IERC4626(vault).redeem(
                 shares, to, address(this));
         }
-        else if (toIndex == 3) {
+        else if (toIndex == 3 && amount > 0) {
             sent = AAVE.withdraw(
             stables[2], amount, to);
         }
-        else { sent = amount;
+        else if (amount > 0) { sent = amount;
             IERC20(stables[toIndex - 1]).transfer(
                                         to, amount);
         }

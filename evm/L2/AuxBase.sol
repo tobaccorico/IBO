@@ -545,10 +545,10 @@ contract AuxBase is // Auxiliary
             if (shares == 0) return 0;  // Skip if no shares to redeem
             sent = IERC4626(vault).redeem(shares, to, address(this));
         }
-        else if (toIndex == 3) {
+        else if (toIndex == 3 && amount > 0) {
             sent = AAVE.withdraw(stables[2], amount, to);
         }
-        else { sent = amount;
+        else if (amount > 0) { sent = amount;
             IERC20(stables[toIndex - 1]).transfer(to, amount);
         }
     }
