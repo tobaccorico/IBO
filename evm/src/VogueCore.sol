@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+
 import {Aux} from "./Aux.sol";
-import {Vogue} from "./Vogue.sol";
 import {mock} from "./mock.sol";
+import {Vogue} from "./Vogue.sol";
 import {Types} from "./imports/Types.sol";
 import {BasketLib} from "./imports/BasketLib.sol";
 
@@ -215,23 +216,27 @@ contract VogueCore is SafeCallback {
 
         (uint delta0, uint delta1) = _handleDelta(delta, false, true,
                                             address(0), address(0));
+        BalanceDelta addDelta;
+        uint price = BasketLib.getPrice(
+              sqrtPriceX96, token1isETH);
 
-        uint price = BasketLib.getPrice(sqrtPriceX96, token1isETH);
         if (token1isETH) {
             (delta0, delta1) = VOGUE.addLiquidityHelper(delta1, price);
-            delta = _modLP(delta0, delta1, newTickLower, newTickUpper, sqrtPriceX96);
+            if (delta0 > 0 && delta1 > 0) {
+                addDelta = _modLP(delta0, delta1, newTickLower, newTickUpper, sqrtPriceX96);
+                _handleDelta(addDelta, true, false, address(0), address(0));
+            }
         } else {
             (delta1, delta0) = VOGUE.addLiquidityHelper(delta0, price);
-            delta = _modLP(delta1, delta0, newTickLower, newTickUpper, sqrtPriceX96);
-        }
-        _handleDelta(delta, true, false, address(0), address(0));
-
-        // Write observation after repack
-        (, int24 currentTick,,) = poolManager.getSlot0(VANILLA.toId());
-        _writeObservation(currentTick);
+            if (delta1 > 0 && delta0 > 0) {
+                addDelta = _modLP(delta1, delta0, newTickLower, newTickUpper, sqrtPriceX96);
+                _handleDelta(addDelta, true, false, address(0), address(0));
+            }
+        } (, int24 currentTick,,) = poolManager.getSlot0(VANILLA.toId());
+                                          _writeObservation(currentTick);
 
         return abi.encode(price, uint(int(fees.amount0())), uint(int(fees.amount1())),
-                                uint(int(delta.amount0())), uint(int(delta.amount1())));
+                        uint(int(addDelta.amount0())), uint(int(addDelta.amount1())));
     }
 
     function _handleOutsideRange(bytes calldata data)
@@ -334,9 +339,15 @@ contract VogueCore is SafeCallback {
 
         int flip = deltaUSD > 0 ? int(1) : int(-1);
         uint128 liquidity = token1isETH ? LiquidityAmounts.getLiquidityForAmount1(
-                            TickMath.getSqrtPriceAtTick(tickLower), sqrtPriceX96, deltaETH) :
+                   TickMath.getSqrtPriceAtTick(tickLower), sqrtPriceX96, deltaETH):
                             LiquidityAmounts.getLiquidityForAmount0(sqrtPriceX96,
                                 TickMath.getSqrtPriceAtTick(tickUpper), deltaETH);
+
+        if (flip < 0) {
+            (,, uint128 posLiquidity) = poolStats(tickLower, tickUpper);
+            if (posLiquidity == 0) return BalanceDeltaLibrary.ZERO_DELTA;
+            if (liquidity > posLiquidity) liquidity = posLiquidity;
+        }
 
         (BalanceDelta totalDelta, ) = _modifyLiquidity(
             flip * int(uint(liquidity)), tickLower, tickUpper);
@@ -390,7 +401,7 @@ contract VogueCore is SafeCallback {
         lastTick = tick;
     }
 
-    /// @notice Observe tick cumulatives at given seconds ago (V3-compatible interface)
+    /// @notice Observe tick cumulatives at given seconds ago
     /// @param secondsAgos Array of seconds ago to observe
     /// @return tickCumulatives Array of tick cumulatives at each time
     function observe(uint32[] calldata secondsAgos)
@@ -399,22 +410,21 @@ contract VogueCore is SafeCallback {
         uint32 time = uint32(block.timestamp);
         Observation memory latest = observations[observationIndex];
         Observation memory oldest = _getOldestObservation();
-
         for (uint i = 0; i < secondsAgos.length; i++) {
             uint32 target = time - secondsAgos[i];
-            if (secondsAgos[i] == 0) {
-                // Current: extrapolate forward from latest
-                uint32 delta = time - latest.blockTimestamp;
+            // Current: extrapolate forward from latest
+            if (secondsAgos[i] == 0) { uint32 delta = time - latest.blockTimestamp;
                 tickCumulatives[i] = latest.tickCumulative + int56(lastTick) * int56(uint56(delta));
-            } else if (target <= oldest.blockTimestamp) {
+            }
+            else if (target <= oldest.blockTimestamp) {
                 // Target is before or at oldest observation - extrapolate BACKWARDS
                 // This handles "not enough history" case
                 uint32 beforeDelta = oldest.blockTimestamp - target;
                 // Use initialTick for backward extrapolation (assume tick was constant before init)
-                tickCumulatives[i] = oldest.tickCumulative - int56(initialTick) * int56(uint56(beforeDelta));
-            } else if (target >= latest.blockTimestamp) {
-                // Target is at or after latest - extrapolate forward
-                uint32 delta = target - latest.blockTimestamp;
+                tickCumulatives[i] = oldest.tickCumulative -
+                int56(initialTick) * int56(uint56(beforeDelta));
+            } // Target is at or after latest - extrapolate forward
+            else if (target >= latest.blockTimestamp) { uint32 delta = target - latest.blockTimestamp;
                 tickCumulatives[i] = latest.tickCumulative + int56(lastTick) * int56(uint56(delta));
             } else {
                 // Target is between oldest and latest - interpolate
@@ -443,30 +453,49 @@ contract VogueCore is SafeCallback {
     /// @notice Interpolate between
     /// observations to find the
     /// tickCumulative at target time
-    function _interpolate(uint32 target,
-        Observation memory oldest,
-        Observation memory latest)
-        internal view returns (int56) {
+    function _interpolate(uint32 target, Observation memory oldest,
+        Observation memory latest) internal view returns (int56) {
         // If only 2 observations (oldest and latest), interpolate directly
         if (observationCardinality <= 2) {
-            uint32 totalDelta = latest.blockTimestamp - oldest.blockTimestamp;
-            uint32 targetDelta = target - oldest.blockTimestamp;
-            if (totalDelta == 0) return oldest.tickCumulative;
+          uint32 totalDelta = latest.blockTimestamp - oldest.blockTimestamp;
+          uint32 targetDelta = target - oldest.blockTimestamp;
+          if (totalDelta == 0) return oldest.tickCumulative;
 
-            int56 cumulativeDelta = latest.tickCumulative - oldest.tickCumulative;
-            // Linear interpolation
-            return oldest.tickCumulative + (cumulativeDelta *
-                int56(uint56(targetDelta))) / int56(uint56(totalDelta));
+          int56 cumulativeDelta = latest.tickCumulative - oldest.tickCumulative;
+          return oldest.tickCumulative + (cumulativeDelta *
+              int56(uint56(targetDelta))) / int56(uint56(totalDelta));
         }
-        // For more observations, find the bracketing pair
-        // linear interpolation between oldest and latest
-        uint32 totalDelta = latest.blockTimestamp - oldest.blockTimestamp;
-        uint32 targetDelta = target - oldest.blockTimestamp;
-        if (totalDelta == 0) return oldest.tickCumulative;
+        // Binary search for the bracketing pair of observations
+        // so that TWAP reflects actual price history, not just
+        // a straight line between oldest and latest
+        uint16 card = observationCardinality;
+        uint16 oldestIdx = (observationIndex + 1) % card;
+        if (!observations[oldestIdx].initialized) oldestIdx = 0;
+        // Search space: offsets [0, card-1] from oldestIdx
+        // Find largest offset where timestamp <= target
+        uint16 lo = 0;
+        uint16 hi = card - 1;
+        while (lo < hi) {
+            uint16 mid = lo + (hi - lo + 1) / 2;
+            uint16 idx = (oldestIdx + mid) % card;
+            if (observations[idx].blockTimestamp <= target) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        // lo is now the offset of the observation at or just before target
+        Observation memory before = observations[(oldestIdx + lo) % card];
+        Observation memory later  = observations[(oldestIdx + lo + 1) % card];
 
-        int56 cumulativeDelta = latest.tickCumulative - oldest.tickCumulative;
-        return oldest.tickCumulative + (cumulativeDelta *
-            int56(uint56(targetDelta))) / int56(uint56(totalDelta));
+        uint32 totalDelta = later.blockTimestamp - before.blockTimestamp;
+        if (totalDelta == 0) return before.tickCumulative;
+
+        uint32 targetDelta = target - before.blockTimestamp;
+        int56 cumulativeDelta = later.tickCumulative - before.tickCumulative;
+
+        return before.tickCumulative + (cumulativeDelta *
+         int56(uint56(targetDelta))) / int56(uint56(totalDelta));
     }
 
     function repack(uint128 myLiquidity,

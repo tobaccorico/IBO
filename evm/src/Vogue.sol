@@ -172,6 +172,7 @@ contract Vogue is
               lower: newLowerTick, upper: newUpperTick,
               liq: int(uint(liquidity)) }); next = ++ID;
 
+        require(liquidity > 0, "dust");
         selfManaged[next] = newPosition;
         positions[msg.sender].push(next);
         V4.outOfRange(msg.sender, int(uint(liquidity)),
@@ -207,8 +208,6 @@ contract Vogue is
         if (LP.pooled_eth > 0)
             (fees_eth,
              fees_usd) = pendingRewards(msg.sender);
-
-        // Compound.vc ETH
         if (fees_eth > 0) { // rewards
             LP.pooled_eth += fees_eth;
             totalShares += fees_eth;
@@ -228,9 +227,17 @@ contract Vogue is
             uint pulled = Math.min(
                 amount, pooled_eth);
             if (pulled > 0) {
-                sent = V4.modLP(sqrtPriceX96, pulled, 0,
-                        tickLower, tickUpper, msg.sender);
-            } // Arb flows naturally balance over time...
+                // Only pull from V4 pool if position actually exists at these ticks.
+                // After a depleted repack, ticks point to an empty position —
+                // calling modLP would revert (CannotUpdateEmptyPosition).
+                // Skip and let shortfall path (vault excess + arbETH) handle
+                (,, uint128 posLiquidity) = V4.poolStats(tickLower, tickUpper);
+                if (posLiquidity > 0) {
+                    sent = V4.modLP(sqrtPriceX96, pulled, 0,
+                            tickLower, tickUpper, msg.sender);
+                }
+            }
+            // Arb flows naturally balance over time...
             // The V4/V3 spread keeps the pool in equilibrium
             // Any temporary imbalance self-corrects before LP withdrawals,
             // arbETH is mainly emergency code that should never execute...
@@ -338,7 +345,9 @@ contract Vogue is
             targetUSD = FullMath.mulDiv(
                    deltaETH, price, WAD);
         }
-        return (targetUSD / 1e12, deltaETH);
+        uint usdOut = targetUSD / 1e12;
+        if (usdOut == 0) return (0, 0);
+        return (usdOut, deltaETH);
     }
 
      // pull liquidity from
@@ -352,6 +361,7 @@ contract Vogue is
         require(percent > 0 && percent < 101, "%");
 
         int liquidity = position.liq * percent / 100;
+        require(liquidity > 0, "dust");
         int24 lower = position.lower;
         int24 upper = position.upper;
 
@@ -392,10 +402,13 @@ contract Vogue is
         }
         if (last_repack > 0) {
             uint elapsed = block.timestamp - last_repack;
-            yield = FullMath.mulDiv((usd_fees * 1e12 +
-                FullMath.mulDiv(price, fees, WAD)) * 365 days,
-                  WAD, (deltaUSD * 1e12 + FullMath.mulDiv(
-                      price, delta, WAD)) * elapsed) / WAD;
+            uint denom = (deltaUSD * 1e12 + FullMath.mulDiv(
+                            price, delta, WAD)) * elapsed;
+            if (denom > 0) {
+                yield = FullMath.mulDiv((usd_fees * 1e12 +
+                    FullMath.mulDiv(price, fees, WAD)) * 365 days,
+                      WAD, denom) / WAD;
+            }
         }
         LAST_REPACK = block.timestamp;
     }

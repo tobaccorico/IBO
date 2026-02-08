@@ -570,7 +570,11 @@ contract Aux is // Auxiliary
                                  V4.depositFlashReturn();
         } else _supply(token, toIndex[token], returned);
         return true;
-    }
+    } // Block builders don't introspect contract logic
+    // they see priority fees and explicit bribes, not
+    // internal profit splits. Bebop's orchestrator
+    // could score solvers by committed shareBps,
+    // routing more  flow to generous solvers ?
 
     function _supply(address token, uint index,
         uint usd) internal returns (uint, uint) {
