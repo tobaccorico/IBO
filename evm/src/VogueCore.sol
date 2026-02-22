@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-
 import {Aux} from "./Aux.sol";
 import {mock} from "./mock.sol";
 import {Vogue} from "./Vogue.sol";
@@ -18,6 +17,7 @@ import {BasketLib} from "./imports/BasketLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IUniswapV3Pool} from "./imports/v3/IUniswapV3Pool.sol";
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
+
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/src/types/BalanceDelta.sol";
 import {TransientStateLibrary} from "v4-core/src/libraries/TransientStateLibrary.sol";
@@ -42,41 +42,36 @@ contract VogueCore is SafeCallback {
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
 
+    int24 public initialTick;
+    int24 public lastTick;
     struct Observation {
         uint32 blockTimestamp;
         int56 tickCumulative;
         bool initialized;
-    }
+    }   PoolKey VANILLA;
     Observation[65535] public observations;
     uint16 public observationCardinality;
     uint16 public observationIndex;
-    int24 public initialTick;
-    int24 public lastTick;
 
+    uint public MAX_POOLED_USD;
     uint public POOLED_ETH;
     uint public POOLED_USD;
-    uint public MAX_POOLED_USD;
     mock internal mockETH;
     mock internal mockUSD;
 
     uint constant WAD = 1e18;
     bool public token1isETH;
     Aux AUX; Vogue VOGUE;
-    PoolKey VANILLA;
-
     enum Action { Swap,
         Repack, ModLP,
-        OutsideRange
-    } // 4 actions...
-    modifier onlyAux { // two contracts
+        OutsideRange } // 4 actions...
+    modifier onlyUs { // 2 contracts...
         require(msg.sender == address(AUX)
              || msg.sender == address(VOGUE), "403"); _;
     } bytes internal constant ZERO_BYTES = bytes("");
 
-    constructor(IPoolManager _manager)
-        SafeCallback(_manager) {}
-
-    function setup(address _vogue, // vanilla pool
+    constructor(IPoolManager _manager) SafeCallback(_manager) {}
+    function setup(address _vogue, // vanilla pool (hookless)
         address _aux, address _poolETH) external {
         require(address(VOGUE) == address(0), "!");
         mockETH = new mock(address(this), 18);
@@ -116,7 +111,6 @@ contract VogueCore is SafeCallback {
 
         poolManager.initialize(VANILLA,
         TickMath.getSqrtPriceAtTick(tickETH));
-
         // Initialize the oracle observations...
         initialTick = tickETH; lastTick = tickETH;
         observations[0] = Observation({
@@ -125,9 +119,9 @@ contract VogueCore is SafeCallback {
                          observationCardinality = 1;
     }
 
-    function modLP(uint160 sqrtPriceX96, uint deltaETH, uint deltaUSD,
-        int24 tickLower, int24 tickUpper, address sender) public onlyAux
-        returns (uint ethSent) {
+    function modLP(uint160 sqrtPriceX96, uint deltaETH,
+        uint deltaUSD, int24 tickLower, int24 tickUpper,
+        address sender) public onlyUs returns (uint ethSent) {
         BalanceDelta delta = abi.decode(poolManager.unlock(abi.encode(
                 Action.ModLP, sqrtPriceX96, deltaETH, deltaUSD,
                 tickLower, tickUpper, sender)), (BalanceDelta));
@@ -137,7 +131,7 @@ contract VogueCore is SafeCallback {
 
     function outOfRange(address sender, int liquidity,
         int24 tickLower, int24 tickUpper, address token)
-        public onlyAux {
+        public onlyUs {
         abi.decode(poolManager.unlock(abi.encode(
             Action.OutsideRange, sender, liquidity,
             tickLower, tickUpper, token)), (BalanceDelta));
@@ -145,7 +139,7 @@ contract VogueCore is SafeCallback {
 
     function swap(uint160 sqrtPriceX96, address sender,
         bool forOne, address token, uint amount)
-        onlyAux public returns (uint out) {
+        onlyUs public returns (uint out) {
         BalanceDelta delta = abi.decode(poolManager.unlock(
           abi.encode(Action.Swap, sqrtPriceX96, sender,
             forOne, token, amount)), (BalanceDelta));
@@ -172,15 +166,15 @@ contract VogueCore is SafeCallback {
             firstByte := and(word, 0xFF)
         }
         Action discriminator = Action(firstByte);
-        if (discriminator == Action.Swap) {
+        if (discriminator == Action.Swap)
             return _handleSwap(data[32:]);
-        } else if (discriminator == Action.Repack) {
+        else if (discriminator == Action.Repack)
             return _handleRepack(data[32:]);
-        } else if (discriminator == Action.OutsideRange) {
+        else if (discriminator == Action.OutsideRange)
             return _handleOutsideRange(data[32:]);
-        } else if (discriminator == Action.ModLP) {
+        else if (discriminator == Action.ModLP)
             return _handleMod(data[32:]);
-        }
+
         return "";
     }
 
@@ -223,14 +217,20 @@ contract VogueCore is SafeCallback {
         if (token1isETH) {
             (delta0, delta1) = VOGUE.addLiquidityHelper(delta1, price);
             if (delta0 > 0 && delta1 > 0) {
-                addDelta = _modLP(delta0, delta1, newTickLower, newTickUpper, sqrtPriceX96);
-                _handleDelta(addDelta, true, false, address(0), address(0));
+                addDelta = _modLP(delta0, delta1, newTickLower,
+                                    newTickUpper, sqrtPriceX96);
+
+                _handleDelta(addDelta, true, false,
+                            address(0), address(0));
             }
         } else {
             (delta1, delta0) = VOGUE.addLiquidityHelper(delta0, price);
             if (delta1 > 0 && delta0 > 0) {
-                addDelta = _modLP(delta1, delta0, newTickLower, newTickUpper, sqrtPriceX96);
-                _handleDelta(addDelta, true, false, address(0), address(0));
+                addDelta = _modLP(delta1, delta0, newTickLower,
+                                    newTickUpper, sqrtPriceX96);
+
+                _handleDelta(addDelta, true, false,
+                            address(0), address(0));
             }
         } (, int24 currentTick,,) = poolManager.getSlot0(VANILLA.toId());
                                           _writeObservation(currentTick);
@@ -288,21 +288,18 @@ contract VogueCore is SafeCallback {
                           usdAmount, POOLED_USD);
 
             if (!keep && token != address(0))
-                AUX.take(who, usdAmount,
-                          token, false);
+            AUX.take(who, usdAmount, token, 0);
         }
         else if (usdDelta < 0) {
             usdAmount = uint(int(-usdDelta));
             mockUSD.mint(usdAmount);
             usdCurrency.settle(poolManager,
             address(this), usdAmount, false);
-            if (inRange) {
-                POOLED_USD += usdAmount;
+            if (inRange) { POOLED_USD += usdAmount;
                 if (POOLED_USD > MAX_POOLED_USD)
                     MAX_POOLED_USD = POOLED_USD;
             }
-        }
-        if (ethDelta > 0) {
+        } if (ethDelta > 0) {
             ethAmount = uint(int(ethDelta));
             ethCurrency.take(poolManager,
             address(this), ethAmount, false);
@@ -312,15 +309,13 @@ contract VogueCore is SafeCallback {
 
             if (who != address(0)) VOGUE.takeETH(
                                   ethAmount, who);
-        }
-        else if (ethDelta < 0) {
+        } else if (ethDelta < 0) {
             ethAmount = uint(int(-ethDelta));
             mockETH.mint(ethAmount);
             ethCurrency.settle(poolManager,
             address(this), ethAmount, false);
             if (inRange) POOLED_ETH += ethAmount;
-        }
-        if (token1isETH)
+        } if (token1isETH)
             return (usdAmount, ethAmount);
         else return (ethAmount, usdAmount);
     }
@@ -335,23 +330,19 @@ contract VogueCore is SafeCallback {
 
     function _modLP(uint deltaUSD, uint deltaETH,
         int24 tickLower, int24 tickUpper, uint160 sqrtPriceX96)
-        internal returns (BalanceDelta) {
-
+        internal returns (BalanceDelta totalDelta) {
         int flip = deltaUSD > 0 ? int(1) : int(-1);
         uint128 liquidity = token1isETH ? LiquidityAmounts.getLiquidityForAmount1(
                    TickMath.getSqrtPriceAtTick(tickLower), sqrtPriceX96, deltaETH):
                             LiquidityAmounts.getLiquidityForAmount0(sqrtPriceX96,
                                 TickMath.getSqrtPriceAtTick(tickUpper), deltaETH);
-
         if (flip < 0) {
             (,, uint128 posLiquidity) = poolStats(tickLower, tickUpper);
             if (posLiquidity == 0) return BalanceDeltaLibrary.ZERO_DELTA;
             if (liquidity > posLiquidity) liquidity = posLiquidity;
         }
-
-        (BalanceDelta totalDelta, ) = _modifyLiquidity(
-            flip * int(uint(liquidity)), tickLower, tickUpper);
-        return totalDelta;
+        (totalDelta, ) = _modifyLiquidity(flip *
+        int(uint(liquidity)), tickLower, tickUpper);
     }
 
     function poolStats(int24 tickLower, int24 tickUpper) public view returns
@@ -377,10 +368,9 @@ contract VogueCore is SafeCallback {
         Observation memory last = observations[observationIndex];
         // Only write if time has passed since last observation
         if (last.blockTimestamp == blockTimestamp) {
-            lastTick = tick;  // Update tick for next write
-            return;
+            lastTick = tick; return;
         }
-        // Calculate tick cumulative: accumulate lastTick over the elapsed time
+        // cumulative: accumulate lastTick over the elapsed time
         uint32 delta = blockTimestamp - last.blockTimestamp;
         int56 tickCumulative = last.tickCumulative
             + int56(lastTick) * int56(uint56(delta));
@@ -395,8 +385,8 @@ contract VogueCore is SafeCallback {
         observations[indexNext] = Observation({
             blockTimestamp: blockTimestamp,
             tickCumulative: tickCumulative,
-            initialized: true
-        });
+            initialized: true });
+
         observationIndex = indexNext;
         lastTick = tick;
     }
@@ -413,41 +403,44 @@ contract VogueCore is SafeCallback {
         for (uint i = 0; i < secondsAgos.length; i++) {
             uint32 target = time - secondsAgos[i];
             // Current: extrapolate forward from latest
-            if (secondsAgos[i] == 0) { uint32 delta = time - latest.blockTimestamp;
-                tickCumulatives[i] = latest.tickCumulative + int56(lastTick) * int56(uint56(delta));
+            if (secondsAgos[i] == 0) {
+                uint32 delta = time - latest.blockTimestamp;
+                tickCumulatives[i] = latest.tickCumulative
+                    + int56(lastTick) * int56(uint56(delta));
             }
             else if (target <= oldest.blockTimestamp) {
-                // Target is before or at oldest observation - extrapolate BACKWARDS
-                // This handles "not enough history" case
+                // before/at oldest observation - extrapolate BACKWARDS
+                // This handles "not enough history", case by the way
                 uint32 beforeDelta = oldest.blockTimestamp - target;
-                // Use initialTick for backward extrapolation (assume tick was constant before init)
+                // Use initialTick for backward extrapolation
+                // (assume tick was constant before init)...
                 tickCumulatives[i] = oldest.tickCumulative -
                 int56(initialTick) * int56(uint56(beforeDelta));
             } // Target is at or after latest - extrapolate forward
-            else if (target >= latest.blockTimestamp) { uint32 delta = target - latest.blockTimestamp;
-                tickCumulatives[i] = latest.tickCumulative + int56(lastTick) * int56(uint56(delta));
-            } else {
-                // Target is between oldest and latest - interpolate
+            else if (target >= latest.blockTimestamp) {
+                uint32 delta = target - latest.blockTimestamp;
+                tickCumulatives[i] = latest.tickCumulative
+                    + int56(lastTick) * int56(uint56(delta));
+            } else { // Target is between oldest and latest - interpolate
                 tickCumulatives[i] = _interpolate(target, oldest, latest);
             }
         }
     }
 
-    /// @notice Get the oldest observation
     function _getOldestObservation()
         internal view returns (Observation memory) {
-        // In a ring buffer, oldest is at (observationIndex + 1) % cardinality
+        // In a ring buffer, oldest is at
+        // (observationIndex + 1) % cardinality
         // But only if that slot is initialized
-        if (observationCardinality == 1) {
+        if (observationCardinality == 1)
             return observations[0];
-        }
+
         uint16 oldestIndex = (observationIndex + 1) % observationCardinality;
         Observation memory oldest = observations[oldestIndex];
-        // If not initialized (ring buffer not full yet), oldest is at 0
-        if (!oldest.initialized) {
+        // If not initialized (ring buffer not full), oldest 0
+        if (!oldest.initialized)
             return observations[0];
-        }
-        return oldest;
+            return oldest;
     }
 
     /// @notice Interpolate between
@@ -464,8 +457,7 @@ contract VogueCore is SafeCallback {
           int56 cumulativeDelta = latest.tickCumulative - oldest.tickCumulative;
           return oldest.tickCumulative + (cumulativeDelta *
               int56(uint56(targetDelta))) / int56(uint56(totalDelta));
-        }
-        // Binary search for the bracketing pair of observations
+        } // Binary search for the bracketing pair of observations...
         // so that TWAP reflects actual price history, not just
         // a straight line between oldest and latest
         uint16 card = observationCardinality;
@@ -473,34 +465,32 @@ contract VogueCore is SafeCallback {
         if (!observations[oldestIdx].initialized) oldestIdx = 0;
         // Search space: offsets [0, card-1] from oldestIdx
         // Find largest offset where timestamp <= target
-        uint16 lo = 0;
-        uint16 hi = card - 1;
+        uint16 lo = 0; uint16 hi = card - 1;
         while (lo < hi) {
             uint16 mid = lo + (hi - lo + 1) / 2;
             uint16 idx = (oldestIdx + mid) % card;
-            if (observations[idx].blockTimestamp <= target) {
+            if (observations[idx].blockTimestamp <= target)
                 lo = mid;
-            } else {
+            else
                 hi = mid - 1;
-            }
         }
         // lo is now the offset of the observation at or just before target
         Observation memory before = observations[(oldestIdx + lo) % card];
         Observation memory later  = observations[(oldestIdx + lo + 1) % card];
-
         uint32 totalDelta = later.blockTimestamp - before.blockTimestamp;
-        if (totalDelta == 0) return before.tickCumulative;
 
+        if (totalDelta == 0) return before.tickCumulative;
         uint32 targetDelta = target - before.blockTimestamp;
         int56 cumulativeDelta = later.tickCumulative - before.tickCumulative;
 
-        return before.tickCumulative + (cumulativeDelta *
-         int56(uint56(targetDelta))) / int56(uint56(totalDelta));
+        return before.tickCumulative +
+            (cumulativeDelta * int56(uint56(targetDelta))) /
+                                int56(uint56(totalDelta));
     }
 
     function repack(uint128 myLiquidity,
         uint160 sqrtPriceX96, int24 oldTickLower,
-        int24 oldTickUpper, int24 newTickLower, int24 newTickUpper) public onlyAux
+        int24 oldTickUpper, int24 newTickLower, int24 newTickUpper) public onlyUs
         returns (uint price, uint fees0, uint fees1, uint delta0, uint delta1) {
         (price, fees0, fees1, delta0, delta1) = abi.decode(poolManager.unlock(
             abi.encode(Action.Repack, myLiquidity, sqrtPriceX96, oldTickLower,

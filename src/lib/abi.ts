@@ -31,8 +31,11 @@ export const BASKET_ABI = [
   'function V4() view returns (address)',
   // ERC6909 functions (multi-token)
   'function balanceOf(address owner, uint256 id) view returns (uint256)',
-  // Mature balance helper (requires contract update)
-  // 'function totalMatureBalanceOf(address owner) view returns (uint256)',
+  // Weighted median haircut vote (drives deposit fee + seed multiplier)
+  'function vote(uint256 voteIndex)',
+  'function getHaircut() view returns (uint256)',
+  // Mature balance for redemption gating
+  'function totalMatureBalanceOf(address owner) view returns (uint256)',
 ];
 
 // Vogue (UniV4 Liquidity Manager) ABI - L1 Ethereum
@@ -103,7 +106,7 @@ export const AUX_ABI = [
   // Metrics - total deposits and yield
   'function get_metrics(bool force) returns (uint256 total, uint256 yield)',
   'function getAverageYield() view returns (uint256)',
-  'function get_deposits() view returns (uint256[11])',
+  'function get_deposits() view returns (uint256[13])',
   // Fee calculation - returns fee in basis points (e.g., 4 = 0.04%)
   'function getFee(address token) view returns (uint256)',
   // Deposit (used internally)
@@ -147,12 +150,51 @@ export const AUX_ARB_ABI = [
   'function WETH() view returns (address)',
 ];
 
+// Hook (Depeg Prediction Market) ABI
+export const HOOK_ABI = [
+  // Write functions
+  'function placeOrder(uint8 side, uint64 capital, bool autoRollover, bytes32 commitHash, address delegate)',
+  'function sellPosition(uint8 side, uint256 tokensToSell)',
+  'function batchReveal(address user, uint8 side, tuple(uint64 confidence, bytes32 salt)[] reveals)',
+  'function recommit(uint8 side, bytes32 newCommitHash)',
+  'function settleAssertion()',
+  'function calculateWeights(address[] users, uint8[] sides)',
+  'function pushPayouts(address[] users, uint8[] sides)',
+  'function burnAccumulatedFees()',
+  // View functions
+  'function getMarket() view returns (tuple(uint64 marketId, uint8 numSides, uint40 startTime, uint40 roundStartTime, int128 b, uint32 roundNumber, bool resolved, uint8 winningSide, uint40 resolutionTimestamp, uint64 totalCapital, uint32 positionsTotal, uint32 positionsRevealed, uint32 positionsPaidOut, uint64 totalWinnerCapital, uint64 totalLoserCapital, uint256 totalWinnerWeight, uint256 totalLoserWeight, bool weightsComplete, bool payoutsComplete, bool assertionPending, int128[12] q, uint64[12] capitalPerSide))',
+  'function getPosition(address user, uint8 side) view returns (tuple(address user, uint8 side, uint64 totalCapital, uint64 totalTokens, bytes32 commitmentHash, uint40 entryTimestamp, uint32 lastRound, bool revealed, uint16 revealedConfidence, uint256 weight, bool paidOut, bool autoRollover, address delegate))',
+  'function getPositionEntries(address user, uint8 side) view returns (tuple(uint64 capital, uint64 tokens, bytes32 commitmentHash, uint40 timestamp, uint16 revealedConfidence)[])',
+  'function getAllPrices() view returns (uint256[])',
+  'function getCapitalPerSide() view returns (uint64[12])',
+  'function getLMSRPrice(uint8 side) view returns (uint256)',
+  'function getLMSRCost(uint8 side, int128 delta) view returns (uint256)',
+  'function getDepegStats(address stablecoin) view returns (tuple(uint8 side, uint64 capOnSide, uint64 capNone, uint64 capTotal, bool depegged, uint16 avgConf))',
+  'function getRoundStartTime() view returns (uint40)',
+  'function getMarketCapital() view returns (uint64)',
+  'function stablecoinToSide(address) view returns (uint8)',
+  'function accumulatedFees() view returns (uint256)',
+  'function disputeFrozen() view returns (bool)',
+  // Events
+  'event MarketCreated(uint8 numSides)',
+  'event OrderPlaced(address indexed user, uint8 side, uint64 capital, uint64 tokens)',
+  'event PositionSold(address indexed user, uint8 side, uint64 tokens, uint64 returned)',
+  'event ConfidenceRevealed(address indexed user, uint8 side, uint64 confidence)',
+  'event WeightsCalculated()',
+  'event PayoutPushed(address indexed user, uint8 side, uint256 amount)',
+  'event Recommitted(address indexed user, uint8 side, uint64 tokens)',
+  'event StaleWithdrawn(address indexed user, uint8 side, uint64 capital)',
+];
+
 // Combined ABI for convenience (includes all functions)
 export const COMBINED_ABI = [
   ...ERC20_ABI,
   // Basket
   'function mint(address pledge, uint256 amount, address token, uint256 when) returns (uint256)',
   'function currentMonth() view returns (uint256)',
+  'function vote(uint256 voteIndex)',
+  'function getHaircut() view returns (uint256)',
+  'function totalMatureBalanceOf(address owner) view returns (uint256)',
   // Vogue/VogueArb
   'function deposit(uint256 amount) payable',
   'function withdraw(uint256 amount)',

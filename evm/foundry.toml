@@ -2,7 +2,6 @@
 [profile.default]
 src = "src"
 out = "out"
-# solc = "/Users/alex/solidity/build/solc/solc"
 
 libs = ["lib"]
 ffi = true
@@ -51,4 +50,4 @@ unichain = { key = "${ETHERSCAN_L1}" }
 v4-core = { git = "https://github.com/uniswap/v4-core" }
 v4-periphery = { git = "https://github.com/uniswap/v4-periphery" }
 aave-v3-origin = { git = "https://github.com/aave-dao/aave-v3-origin" }
-solady = { git = "https://github.com/Vectorized/solady" }
+solidity-math-utils = { git = "https://github.com/barakman/solidity-math-utils/" }

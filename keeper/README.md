@@ -2,13 +2,60 @@
 
 Automated keeper bot for the QU!D Protocol that:
 1. Monitors leveraged positions and calls `unwind` when price moves ±2.5%
-2. Monitors pending batch swaps and calls `clearSwaps` when needed
 
 ## Setup
 
 ```bash
-cd keeper
-npm install
+# CRE CLI
+curl -sSL https://docs.chain.link/cre/install | sh
+cre login
+
+# Go (wasip1 target must be supported)
+go version  # >= 1.23
+```
+
+# Resolve dependencies (creates go.sum)
+go mod tidy
+
+```
+### 3. Generate UMA Bindings (Recommended)
+```bash
+# This creates type-safe Go bindings from UMA.sol ABI
+# which gives you WriteReportFromOnReport() instead of raw WriteReport()
+
+cre generate-bindings --abi ../out/UMA.sol/UMA.json --pkg uma --out my-workflow/uma/
+```
+
+### 4. Configure
+```bash
+# Copy .env template
+cp .env.example .env
+# Edit with your keys:
+#   CRE_ETH_PRIVATE_KEY=0x... (any funded Sepolia key)
+#   GEMINI_API_KEY_VAR=...    (optional, falls back to deterministic)
+#   CMC_API_KEY_VAR=...       (optional)
+
+# Update contract addresses in config files:
+#   my-workflow/config.staging.json  → umaContractAddress, auxContractAddress
+#   my-workflow/config.production.json → same
+```
+
+### 5. Test
+```bash
+# Dry-run simulation (no broadcast)
+cd safta-cre
+cre workflow simulate my-workflow --target staging-settings
+
+# With HTTP trigger (like forge vm.ffi does):
+cre workflow simulate my-workflow \
+  --non-interactive \
+  --trigger-index 2 \
+  --http-payload '{"assertionId":"0xabc...","claimedSide":2,"bond":"1000000000000000000","mode":"watchdog"}' \
+  --target staging-settings
+
+# Forge integration test:
+cd ..  # back to repo root
+forge test --match-test test_CRE -vvv --ffi
 ```
 
 ## Configuration
@@ -59,36 +106,8 @@ The keeper tracks `LeveragedPositionOpened` events from the Amp contract and mai
    - `unwindZeroForOne()` for long positions
    - `unwindOneForZero()` for short positions
 
-### Swap Clearing
-
-The keeper also monitors the `lastBlock` state in Aux and:
-
-1. Compares `lastBlock` to current block number
-2. Checks `Vogue.getSwapsETH()` for blocks between `lastBlock + 1` and `currentBlock - 1`
-3. If pending swaps exist, calls `Aux.clearSwaps()`
-
-## Contract Addresses
-
-### Base (Chain ID: 8453)
-- Aux: `0xB3Ab6732580D9b75E8f6eb3ea8204500E9872D75`
-- Amp: `0x48AE204e2e2dd73C6ab6B20A040902511E48f552`
-- Vogue: `0x64830Cc6682C36dE6EAA1Afc771FBfc16322D092`
-
-### Arbitrum (Chain ID: 42161)
-- Aux: `0xBb7BB6C91BDeA9502f2591B4AA71dBa3A70FF851`
-- Amp: `0x24896a2e1BA25903af0bBA86bE4752aDEC09bDC1`
-- Vogue: `0x09a0519D00fc98A1a055B5FB38d35C7668d1789F`
-
-### Unichain (Chain ID: 130)
-- **No Amp contract** - leverage not available on this chain
-
-### Ethereum L1 & Polygon (Currently Disabled)
-- Contracts exist but not yet deployed with latest version
-
-## Gas Considerations
 
 The keeper needs ETH/MATIC to pay for transactions:
 - `unwindZeroForOne` / `unwindOneForZero`: ~200k-500k gas per batch
-- `clearSwaps`: ~100k-300k gas
 
 Ensure your keeper wallet is funded on all active chains.

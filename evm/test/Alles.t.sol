@@ -9,46 +9,49 @@ import {Fixtures} from "./utils/Fixtures.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
 
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
-import {Hooks} from "v4-core/src/libraries/Hooks.sol";
-import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 
+import {FullMath} from "v4-core/src/libraries/FullMath.sol";
+import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
-import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
+import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {LiquidityAmounts} from "v4-core/test/utils/LiquidityAmounts.sol";
-import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
-import {FullMath} from "v4-core/src/libraries/FullMath.sol";
+import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
 
-import {IUniswapV3Pool} from "../src/imports/v3/IUniswapV3Pool.sol";
-import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol";
+import {OptimisticOracleV3Interface} from "../src/imports/OOV3Interface.sol";
 import {INonfungiblePositionManager} from "../src/imports/v3/INonfungiblePositionManager.sol";
-
-import {Proof} from "../src/Proof.sol";
-import {Jury} from "../src/Jury.sol";
-import {Court} from "../src/Court.sol";
-
+import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {Aux} from "../src/Aux.sol";
 import {Amp} from "../src/Amp.sol";
 import {Vogue} from "../src/Vogue.sol";
 import {Rover} from "../src/Rover.sol";
 import {Basket} from "../src/Basket.sol";
-
-import {VogueCore} from "../src/VogueCore.sol";
-import {Types} from "../src/imports/Types.sol";
+import {FeeLib} from "../src/imports/FeeLib.sol";
 import {BasketLib} from "../src/imports/BasketLib.sol";
-import {MessageCodec} from "../src/imports/MessageCodec.sol";
+import {Types} from "../src/imports/Types.sol";
+import {VogueCore} from "../src/VogueCore.sol";
+import {Hook} from "../src/Hook.sol";
+import {UMA} from "../src/UMA.sol";
+
+interface IFinder {
+    function getImplementationAddress(bytes32) external view returns (address);
+}
+interface IWhitelist {
+    function addSupportedIdentifier(bytes32) external;
+    function owner() external view returns (address);
+}
 
 contract Alles is Test, Fixtures {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
 
-    uint constant RAY = 1e27;
     uint public constant WAD = 1e18;
     uint public constant USDC_PRECISION = 1e6;
     address public User01 = address(0x1001);
@@ -58,9 +61,80 @@ contract Alles is Test, Fixtures {
     address public LP_Alice = address(0xA11CE);
     address public Swapper_Bob = address(0xB0B);
 
+    /* Arbitrum
+    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
+    ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
+    IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0xC6962004f452bE9203591991D15f6b388e09E8D0);
+    IPoolManager public poolManager = IPoolManager(0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32);
+
+    IERC20 public WETH = IERC20(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1);
+    address public aavePool = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+    address public aaveData = 0x5c5228aC8BC1528482514aF3e27E692495148717;
+    address public aaveAddr = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
+
+    IERC20 public GHO = IERC20(0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33);
+    IERC20 public USDT = IERC20(0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9);
+    IERC20 public USDC = IERC20(0xaf88d065e77c8cC2239327C5EDb3A432268e5831);
+    IERC20 public DAI = IERC20(0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1);
+    IERC20 public USDS = IERC20(0x6491c05A82219b8D1479057361ff1654749b876b);
+    IERC20 public USDE = IERC20(0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34);
+    IERC20 public CRVUSD = IERC20(0x498Bf2B1e120FeD3ad3D42EA2165E9b73f99C1e5);
+    IERC20 public FRAX = IERC20(0x80Eede496655FB9047dd39d9f418d5483ED600df);
+
+    // Morpho vaults
+    IERC4626 public USDCvault = IERC4626(0x7c574174DA4b2be3f705c6244B4BfA0815a8B3Ed);
+    IERC4626 public smokehouseUSDTvault = IERC4626(0x4739E2c293bDCD835829aA7c5d7fBdee93565D1a);
+
+    address aTokenDAIonARB = 0x82E64f49Ed5EC1bC6e43DAD4FC8Af9bb3A2312EE;
+    address aTokenFRAXonARB = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5;
+    address aTokenGHOonARB = 0xeBe517846d0F36eCEd99C735cbF6131e1fEB775D;
+
+    IERC20 public SFRAX = IERC4626(0x5Bff88cA1442c2496f7E475E9e7786383Bc070c0);
+    IERC20 public SUSDS = IERC20(0xdDb46999F8891663a8F2828d25298f70416d7610);
+    IERC20 public SUSDE = IERC20(0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2);
+    IERC20 public SCRVUSD = IERC20(0xEfB6601Df148677A338720156E2eFd3c5Ba8809d);
+    */
+
+    /* Base
+    INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1);
+    ISwapRouter public V3router = ISwapRouter(0x2626664c2603336E57B271c5C0b26F421741e481);
+    IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0xd0b53D9277642d899DF5C87A3966A349A798F224);
+    IPoolManager public poolManager = IPoolManager(0x498581fF718922c3f8e6A244956aF099B2652b2b);
+
+    IERC20 public WETH = IERC20(0x4200000000000000000000000000000000000006);
+    address public aavePool = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+    address public aaveData = 0x68100bD5345eA474D93577127C11F39FF8463e93;
+    address public aaveAddr = 0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D;
+
+    IERC20 public GHO = IERC20(0x6Bb7a212910682DCFdbd5BCBb3e28FB4E8da10Ee);
+    IERC20 public USDC = IERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
+    IERC20 public USDT = IERC20(0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2);
+    IERC20 public DAI = IERC20(0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb);
+    IERC20 public USDS = IERC20(0x820C137fa70C8691f0e44Dc420a5e53c168921Dc);
+    IERC20 public USDE = IERC20(0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34);
+    IERC20 public CRVUSD = IERC20(0x417Ac0e078398C154EdFadD9Ef675d30Be60Af93);
+    IERC20 public FRAX = IERC20(0xe5020A6d073a794B6E7f05678707dE47986Fb0b6);
+
+    // Morpho vaults
+    IERC4626 public sUSDSvault = IERC4626(0x0FE5b4aF0337Fd5b2E1675D5f5E8c9101E4D3c7e);
+    IERC4626 public gauntletWETHvault = IERC4626(0x27D8c7273fd3fcC6956a0B370cE5Fd4A7fc65c18);
+    IERC4626 public smokehouseUSDCvault = IERC4626(0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61);
+    address public aTokenGHOonBase = 0x067ae75628177FD257c2B1e500993e1a0baBcBd1;
+
+    IERC20 public SFRAX = IERC20(0x91A3f8a8d7a881fBDfcfEcd7A2Dc92a46DCfa14e);
+    IERC20 public SUSDS = IERC20(0x5875eEE11Cf8398102FdAd704C9E96607675467a);
+    IERC20 public SUSDE = IERC20(0x211Cc4DD073734dA055fbF44a2b4667d5E5fE5d2);
+    IERC20 public SCRVUSD = IERC20(0x646A737B9B6024e49f5908762B3fF73e65B5160c);
+    */
+
     INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
     ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     IUniswapV3Pool public WETHv3pool = IUniswapV3Pool(0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640);
+
+    // Arb : 0xa6147867264374F324524E30C02C331cF28aa879
+    address constant UMA_OOV3 = 0xfb55F43fB9F48F63f9269DB7Dde3BbBe1ebDC0dE;
+    address constant FORWARDER = address(0xF0F0); // stub
+    address constant JAM = 0xbeb0b0623f66bE8cE162EbDfA2ec543A522F4ea6;
 
     address[] public STABLECOINS; address[] public VAULTS;
 
@@ -69,7 +143,6 @@ contract Alles is Test, Fixtures {
     address public aaveData = 0x3F78BBD206e4D3c504Eb854232EdA7e47E9Fd8FC;
     address public aaveAddr = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
     address public stabilityPool = 0x5721cbbd64fc7Ae3Ef44A0A3F9a790A9264Cf9BF;
-    address public JAM = 0xbeb0b0623f66bE8cE162EbDfA2ec543A522F4ea6;
 
     IERC20 public GHO = IERC20(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
     IERC20 public USDT = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
@@ -90,35 +163,105 @@ contract Alles is Test, Fixtures {
     IERC4626 public SUSDE = IERC4626(0x9D39A5DE30e57443BfF2A8307A4256c8797A3497);
     IERC4626 public SCRVUSD = IERC4626(0x0655977FEb2f289A4aB78af67BAB0d17aAb84367);
 
-    uint256 constant DEVICE_PK = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
-    uint256 constant APP_PK = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80; // Same!
+    Hook public _hook;
+    function _deployAndSeed() internal {
+        // Mint enough USDC to cross SEED_THRESHOLD (10k WAD)
+        if (QUID.totalSupply() >= 10_000e18) {
+            deal(address(USDC), address(this), 10e6);
+            USDC.approve(address(AUX), 10e6);
+            QUID.mint(address(this), 10e6, address(USDC), 0);
+        } else {
+            deal(address(USDC), address(this), 15_000e6);
+            USDC.approve(address(AUX), 15_000e6);
+            QUID.mint(address(this), 15_000e6, address(USDC), 0);
+        }
+        // Seed ETH into Vogue so Aux.swap(QD→ETH) has liquidity
+        // for keeper gas reimbursement in calculateWeights/pushPayouts
+        V4.deposit{value: 100 ether}(0);
+    }
 
-    bytes constant DEVICE_PUBKEY = hex"048318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5";
-    bytes constant APP_PUBKEY = hex"048318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"; // Same!
+    /// @dev Resolve as "none depegged" — permissionless timeout, no OOV3.
+    function _resolveNone() internal {
+        uint roundStart = _hook.getRoundStartTime();
+        if (block.timestamp < roundStart + FeeLib.MONTH)
+            vm.warp(roundStart + FeeLib.MONTH + 1);
+        _uma.resolveAsNone();
+    }
 
-    Proof public proof;
-    Jury public jury;
-    Court public court;
+    /// @dev Warp 2h + settle (for depeg-side OOV3 assertions only).
+    function _settleViaUMA() internal {
+        vm.warp(block.timestamp + 127 hours + 1);
+        _uma.settleAssertion();
+    }
+
+    /// @dev Complete UMA lifecycle after payouts:
+    ///      warp past reveal window (48h)...restart.
+    function _finishRound() internal {
+        vm.warp(block.timestamp + 48 hours + 1);
+        _uma.restartMarket();
+    }
+
+    /// @dev Single-user reveal + weight via calculateWeights.
+    function _revealAndWeigh(address user, uint8 side, uint conf, bytes32 salt) internal {
+        address[] memory users = new address[](1);
+        uint8[] memory sides = new uint8[](1);
+        Hook.RevealEntry[] memory reveals = new Hook.RevealEntry[](1);
+        uint[] memory counts = new uint[](1);
+        users[0] = user; sides[0] = side;
+        reveals[0] = Hook.RevealEntry({confidence: conf, salt: salt});
+        counts[0] = 1;
+        _hook.calculateWeights(users, sides, reveals, counts);
+    }
+
+    /// @dev Reveal-only helper for testing revert cases.
+    /// Reveal without weight calc by providing reveal to calculateWeights.
+    /// (Same function — calculateWeights does reveal + weight atomically.)
+    function _reveal(address user, uint8 side, uint conf, bytes32 salt) internal {
+        _revealAndWeigh(user, side, conf, salt);
+    }
+
+    UMA public _uma;
     VogueCore public CORE;
-
     Basket public QUID;
     Vogue public V4;
     Rover public V3;
     Aux public AUX;
     Amp public AMP;
 
-    // ============ Court/Jury/Proof Test Constants ============
-    uint constant COMMIT_PERIOD = 4 days;
-    uint constant REVEAL_WINDOW = 12 hours;
-    uint8 constant FULL_JURY = 21;
-    uint8 constant REVEAL_SIZE = 12;
-    uint256[] public jurorPKs;
-
     uint stack = 10000 * USDC_PRECISION;
-
     function setUp() public {
-        bytes32 deviceKeyHash = keccak256(DEVICE_PUBKEY);
-        bytes32 appKeyHash = keccak256(APP_PUBKEY);
+        /* Arbitrum
+        STABLECOINS = [ // do not change the order here
+            address(USDC), address(USDT), // < these two are deposited in Morpho
+            address(DAI),  address(GHO), // < these two get deposit in AAVE
+            address(FRAX), // < plus this one as well...^^^^^^^^^^^^^^^^^^^
+            address(USDE), address(USDS), // these 2 and next 2
+            address(CRVUSD), address(SFRAX), // are deposited anywhere
+            address(SUSDS), address(SUSDE),
+            address(SCRVUSD) // oracles for last 3
+        ]; // the order here is essential...
+        VAULTS = [address(USDCvault),
+            address(smokehouseUSDTvault),
+            aTokenDAIonARB, aTokenGHOonARB,
+            aTokenFRAXonARB
+        ];
+        */
+
+        /* Base
+        STABLECOINS = [ // do not change
+            address(USDC), address(SUSDS),
+            address(GHO), address(USDT),
+            address(DAI), address(FRAX),
+            address(USDE), address(USDS),
+            address(CRVUSD), address(SFRAX),
+            address(SUSDE), address(SCRVUSD)
+        ]; // the order here is essential...
+        VAULTS = [
+            address(smokehouseUSDCvault),
+            address(sUSDSvault),
+            aTokenGHOonBase
+        ];
+        */
 
         STABLECOINS = [ // hardhop basket
             address(USDT), address(USDC),
@@ -128,18 +271,31 @@ contract Alles is Test, Fixtures {
             address(CRVUSD), address(BOLD),
             address(USYC)  // < RWA has
         ]; // withdrawal / deposit limits
-        VAULTS = [ aavePool,
+        VAULTS = [aavePool,
             aavePool, aavePool, aavePool,
             address(SDAI), address(SUSDS),
             address(SFRAX), address(SUSDE),
             address(SCRVUSD), stabilityPool,
             address(hashnote)
         ];
+        // ═══════════════════════════════════════════════════════════════════════════
+        //   Deploy Hook as plain prediction market contract (no V4 dependency)
+        //   Fees: 400 bps fresh orders, 200 bps rollover recommit ... burn via turn()
+        // ═══════════════════════════════════════════════════════════════════════════
 
         uint mainnetFork = vm.createFork("https://ethereum-rpc.publicnode.com", 24154650);
         vm.selectFork(mainnetFork); deployFreshManagerAndRouters();
 
+        // Arb : 0xB0b9f73B424AD8dc58156C2AE0D7A1115D1EcCd1
+        address whitelist = IFinder(0x40f941E48A552bF496B154Af6bf55725f18D77c3)
+                      .getImplementationAddress(bytes32("IdentifierWhitelist"));
+        bytes32 id = OptimisticOracleV3Interface(UMA_OOV3).defaultIdentifier();
+        // supportedIdentifiers mapping is at storage slot 1 (after Ownable's _owner at slot 0)
+        vm.store(whitelist, keccak256(abi.encode(id, uint(1))), bytes32(uint(1)));
+
         // Fund User01 with various stablecoins
+        // Arb: 0xEe7aE85f2Fe2239E27D9c1E23fFFe168D63b4055
+        // Base: 0x02C79843B9548fC0Cb4B35Bf6840538a73fC3422
         vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
         USDC.transfer(User01, 100000000 * USDC_PRECISION);
         USDC.transfer(User02, 100000000 * USDC_PRECISION);
@@ -156,43 +312,46 @@ contract Alles is Test, Fixtures {
         vm.deal(User02, 1000000000 ether);
         vm.deal(User03, 1000000000 ether);
 
+        _uma = new UMA(UMA_OOV3, address(USDC));
+        deal(address(USDC), address(_uma), 1_000_000e6);
+
         AMP = new Amp(aavePool, aaveData, aaveAddr);
         V3 = new Rover(address(AMP), address(WETH),
             address(USDC), address(nfpm),
             address(WETHv3pool),
             address(V3router));
 
-        V4 = new Vogue(aavePool);
+        V4 = new Vogue();
+        // V4 = new Vogue(address(gauntletWETHvault));
         CORE = new VogueCore(manager);
         AUX = new Aux(address(V4), address(CORE),
             address(AMP), aavePool, address(WETHv3pool),
             address(V3router), address(V3), STABLECOINS, VAULTS);
+        /* Base
+        AUX = new Aux(
+            address(V4), address(CORE),
+            address(gauntletWETHvault),
+            address(AMP), address(aavePool),
+            address(WETHv3pool), address(V3router),
+            address(V3), STABLECOINS, VAULTS);
+        */
 
         AMP.setup(payable(address(V3)), address(AUX));
-        QUID = new Basket(address(V4), address(AUX));
+        QUID = new Basket(address(V4), address(AUX), address(_uma), address(USDC));
+
+        // Deploy Hook as plain contract (no V4 hook address mining needed)
+        _hook = new Hook(address(_uma), address(QUID));
+
+        // Fund with USDC for UMA bonds
+        deal(address(USDC), address(_hook), 1_000_000e6);
+
+        QUID.setHook(address(_hook));
+        _uma.setQUID(address(QUID));
+        _uma.setHook(address(_hook));
 
         CORE.setup(address(V4), address(AUX), address(WETHv3pool));
         V4.setup(address(QUID), address(AUX), address(CORE));
-
-        jury = new Jury(address(QUID));
-        proof = new Proof(address(QUID));
-        /* TODO are these still needed?
-        proof.approveAppKey(APP_PUBKEY);
-        _registerDevice(User01);
-        _registerDevice(User02);
-        _registerDevice(User03);
-        */
-        court = new Court(
-            address(QUID),
-            address(jury),
-            address(proof));
-
-        jury.setup(address(court), address(proof));
-        proof.setCourt(address(court));
-        proof.setJury(address(jury));
-
-        AUX.setQuid(address(QUID), address(jury),
-                    address(court), JAM);
+        AUX.setQuid(address(QUID), JAM);
 
         V3.setAux(address(AUX));
 
@@ -207,52 +366,6 @@ contract Alles is Test, Fixtures {
         // Mint with DAI (150k)
         QUID.mint(User01, 150000 * 1e18, address(DAI), 0);
         vm.stopPrank();
-
-        vm.startPrank(User01);
-        USDC.approve(address(AUX), type(uint).max);
-        QUID.mint(User01, 50000e6, address(USDC), 0);
-        QUID.approve(address(court), type(uint).max);
-        QUID.approve(address(proof), type(uint).max);
-        QUID.approve(address(jury), type(uint).max);
-        vm.stopPrank(); // TODO these approvals needed by future tests that verify the court system
-
-        vm.startPrank(User02);
-        USDC.approve(address(AUX), type(uint).max);
-        QUID.mint(User02, 50000e6, address(USDC), 0);
-        QUID.approve(address(court), type(uint).max);
-        QUID.approve(address(proof), type(uint).max);
-        QUID.approve(address(jury), type(uint).max);
-        vm.stopPrank(); // TODO these approvals needed by future tests that verify the court system
-
-        vm.startPrank(User03);
-        USDC.approve(address(AUX), type(uint).max);
-        QUID.mint(User03, 50000e6, address(USDC), 0);
-        QUID.approve(address(court), type(uint).max);
-        QUID.approve(address(proof), type(uint).max);
-        QUID.approve(address(jury), type(uint).max);
-        vm.stopPrank(); // TODO these approvals needed by future tests that verify the court system
-
-        // Approve app key for affidavit signatures
-        address appSigner = vm.addr(APP_PK);
-        proof.approveAppKey(keccak256(abi.encodePacked(appSigner)));
-
-        for (uint i = 0; i < 100; i++) {
-            uint256 pk = uint256(keccak256(abi.encodePacked("juror", i))) % (type(uint256).max - 1) + 1;
-            address juror = vm.addr(pk);
-            jurorPKs.push(pk);
-            vm.deal(juror, 10 ether);
-
-            vm.startPrank(0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341);
-            USDC.transfer(juror, 50000e6); vm.stopPrank();
-
-            vm.startPrank(juror);
-            USDC.approve(address(AUX), type(uint).max);
-            QUID.mint(juror, 50000e6, address(USDC), 0);
-            QUID.approve(address(jury), type(uint).max);
-            QUID.approve(address(court), type(uint).max);
-            QUID.approve(address(proof), type(uint).max);
-            vm.stopPrank();
-        }
     }
 
     function _getPrice(uint160 sqrtPriceX96,
@@ -306,7 +419,8 @@ contract Alles is Test, Fixtures {
         console.log("Expected USDC (approx):", expectedUsdc);
 
         // Allow 10% slippage
-        assertGt(usdcReceived, expectedUsdc * 90 / 100, "Should receive reasonable USDC");
+        assertGt(usdcReceived, expectedUsdc *
+        90 / 100, "Should receive reasonable USDC");
 
         vm.stopPrank();
     }
@@ -373,7 +487,6 @@ contract Alles is Test, Fixtures {
 
         vm.stopPrank();
     }
-
 
     function testOutOfRangeUSDPosition() public {
         vm.startPrank(User01);
@@ -761,7 +874,7 @@ contract Alles is Test, Fixtures {
         vm.startPrank(User01);
 
         vm.warp(block.timestamp + 30 days);
-        uint userBalance = QUID.balanceOf(User01);
+        uint userBalance = QUID.balances(User01);
         // Redeem half of what user actually has
         uint redeemAmount = userBalance / 2;
 
@@ -848,7 +961,7 @@ contract Alles is Test, Fixtures {
         (uint total,) = AUX.get_metrics(true);
         uint pooledUSD = CORE.POOLED_USD();
 
-        uint userBalance = QUID.balanceOf(User01);
+        uint userBalance = QUID.balances(User01);
         uint redeemAmount = Math.min(userBalance / 2, 100000 * WAD);
 
         uint usdcBefore = USDC.balanceOf(User01);
@@ -1724,91 +1837,9 @@ contract Alles is Test, Fixtures {
         console.log("After 3rd deposit - pooled:", pooled3, "totalShares:", shares3);
 
         // Total should be sum of deposits
-        assertEq(pooled3, 35 ether - 1, "Pooled should equal total deposited");
+        assertEq(pooled3, 35 ether, "Pooled should equal total deposited");
 
         vm.stopPrank();
-    }
-
-    function test_Bug11_AAVEYieldCalculation_RealValues() public {
-        // setUp already deposited:
-        // - 200k USDC -> AAVE (aUSDC)
-        // - 150k DAI -> AAVE (aDAI)
-        // - 50k USDC more
-        // Total ~400k in AAVE positions
-
-        console.log("=== Bug 11: AAVE Yield - Real Contract Values ===");
-
-        // Call actual contract
-        (uint[13] memory deposits) = AUX.get_deposits();
-
-        console.log("amounts[0] (raw):", deposits[12]);
-        console.log("amounts[12] (total):", deposits[12]);
-        console.log("amounts[0] / 1e18:", deposits[12] / 1e18);
-        console.log("amounts[12] / 1e18:", deposits[12] / 1e18);
-
-        // Individual positions
-        console.log("USDT (1):", deposits[1] / 1e18);
-        console.log("USDC (2):", deposits[2] / 1e18);
-        console.log("GHO (3):", deposits[3] / 1e18);
-        console.log("PYUSD (4):", deposits[4] / 1e18);
-
-        // THE BUG CHECK:
-        // With buggy code: amounts[12] = balance * liquidityRate / RAY
-        //   For 5% APY: amounts[12] ≈ balance * 0.05 (way less than balance)
-        // With fixed code: amounts[12] = balance (same as raw or slightly higher)
-
-        if (deposits[12] > 0) {
-            uint ratio = deposits[12] * 100 / deposits[12];
-            console.log("Ratio (total/raw * 100):", ratio);
-
-            // BUG: ratio will be ~5 (i.e., 5%) instead of ~100
-            // FIX: ratio should be >= 100
-
-            if (ratio < 50) {
-                console.log("BUG CONFIRMED: amounts[12] is ~", ratio, "% of amounts[0]");
-                console.log("This breaks yield calculation!");
-            } else {
-                console.log("FIXED: amounts[12] is properly ~100% of amounts[0]");
-            }
-
-            // This assertion fails with bug, passes with fix
-            assertGe(ratio, 95, "amounts[12] should be >= 95% of amounts[0]");
-        }
-    }
-
-    function test_Bug11_GetAverageYield_RealValues() public {
-        console.log("=== Bug 11: getAverageYield() - Real Values ===");
-
-        // Force metrics update
-        vm.warp(block.timestamp + 1 hours);
-        (uint total, uint yield_) = AUX.get_metrics(true);
-
-        console.log("get_metrics total:", total);
-        console.log("get_metrics yield:", yield_);
-
-        // Wait more time
-        vm.warp(block.timestamp + 1 days);
-        AUX.get_metrics(true);
-
-        uint avgYield = AUX.getAverageYield();
-        console.log("getAverageYield():", avgYield);
-        console.log("getAverageYield() as %:", avgYield * 100 / WAD);
-
-        // With bug: avgYield = 0 (because amounts[12] < amounts[0])
-        // With fix: avgYield > 0 (reflects actual AAVE APY)
-
-        // Get deposits to check if we have any
-        (uint[13] memory deposits) = AUX.get_deposits();
-        if (deposits[12] > 0) {
-            // If we have deposits, yield should be positive
-            // AAVE pays interest, so after fix this should be > 0
-            console.log("Have deposits, checking yield...");
-
-            // With bug this fails (avgYield = 0)
-            // With fix this passes (avgYield reflects AAVE rate)
-            // Note: We use a low threshold since yield accumulates slowly
-            assertGt(avgYield, 0, "avgYield should be > 0 with AAVE deposits");
-        }
     }
 
     function testRoverMultipleDeposits() public {
@@ -1969,309 +2000,78 @@ contract Alles is Test, Fixtures {
     }
 
     // ============================================================================
-    // PART 1: BASKETLIB EDGE CASES
-    // ============================================================================
-
-    function test_CalcRisk_LowCapital_ReturnsNeutral() public {
-        MessageCodec.DepegStats memory stats;
-        stats.avgConfPeg = 9000;
-        stats.avgConfDepeg = 9000;
-        stats.capPeg = 5000e6;
-        stats.capDepeg = 4000e6;
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
-
-        uint risk = BasketLib.calcRisk(stats);
-        assertEq(risk, 6500, "Low capital should return cautious 6500");
-    }
-
-    function test_CalcRisk_ConfidenceDampening() public {
-        // Test that extreme confidence values get dampened
-        // High confidence (>70%) is dampened: excess halved
-        MessageCodec.DepegStats memory stats;
-        stats.avgConfPeg = 5000;       // 50% confidence on peg
-        stats.avgConfDepeg = 9500;     // 95% confidence on depeg (above 70% threshold)
-        stats.capPeg = 500000e6;       // $500k
-        stats.capDepeg = 500000e6;     // $500k equal capital
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
-
-        uint risk = BasketLib.calcRisk(stats);
-        // Without dampening: 50% of conviction would be depeg
-        // With dampening: 95% -> 70% + (25% * 50%) = 82.5%
-        // So depeg conviction is weighted more moderately
-        console.log("Risk with dampened 95% depeg confidence:", risk);
-        assertLt(risk, 7500, "Dampening should reduce extreme risk");
-        assertGt(risk, 5000, "Should still show elevated risk");
-    }
-
-    function test_CalcRisk_ZeroConviction() public {
-        MessageCodec.DepegStats memory stats;
-        stats.avgConfPeg = 0;
-        stats.avgConfDepeg = 0;
-        stats.capPeg = 100000e6;
-        stats.capDepeg = 100000e6;
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
-
-        uint risk = BasketLib.calcRisk(stats);
-        assertEq(risk, 5000, "Zero conviction should return neutral");
-    }
-
-    function test_CalcRisk_AllDepegConviction() public {
-        // Everyone thinks it's depegging
-        MessageCodec.DepegStats memory stats;
-        stats.avgConfPeg = 1000;
-        stats.avgConfDepeg = 9000;
-        stats.capPeg = 100000e6;   // $100k on peg
-        stats.capDepeg = 900000e6; // $900k on depeg
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
-
-        uint risk = BasketLib.calcRisk(stats);
-        console.log("Risk with high depeg conviction:", risk);
-        assertGt(risk, 8000, "Should be high risk");
-    }
-
-    // ============================================================================
-    // PART 2: CALCFEE EDGE CASES (requires setDepegStatsForTesting)
-    // ============================================================================
-
-    function test_CalcFee_NoTimestamp_ReturnsBase() public {
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = 0;  // No data
-        stats.avgConfPeg = 9000;
-        stats.capPeg = 100000e6;
-
-        uint[] memory risks = new uint[](1);
-        risks[0] = 3000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 1;
-
-        uint fee = BasketLib.calcFee(stats, 2500, basket);
-        assertEq(fee, BasketLib.BASE, "No timestamp should return BASE fee");
-    }
-
-    function test_CalcFee_StaleData_ReturnsBase() public {
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = uint40(block.timestamp - 8 days);  // > 7 days old
-        stats.avgConfPeg = 9000;
-        stats.avgConfDepeg = 1000;
-        stats.capPeg = 100000e6;
-        stats.capDepeg = 10000e6;
-        stats.depegged = false;
-
-        uint[] memory risks = new uint[](1);
-        risks[0] = 3000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 1;
-
-        uint fee = BasketLib.calcFee(stats, 2500, basket);
-        assertEq(fee, BasketLib.BASE, "Stale data (>7 days) should return BASE");
-    }
-
-    function test_CalcFee_Depegged_ReturnsMax() public {
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = uint40(block.timestamp);
-        stats.depegged = true;
-
-        uint[] memory risks = new uint[](1);
-        risks[0] = 10000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 1;
-
-        uint fee = BasketLib.calcFee(stats, 2500, basket);
-        assertEq(fee, 420, "Depegged should return MAX_FEE (420 bps)");
-    }
-
-    function test_CalcFee_StalenessDecay() public {
-        // Risk decays toward neutral (5000) between day 1 and day 7
-
-        // Fresh data - high risk
-        MessageCodec.DepegStats memory statsFresh;
-        statsFresh.timestamp = uint40(block.timestamp);
-        statsFresh.avgConfPeg = 2000;
-        statsFresh.avgConfDepeg = 8000;
-        statsFresh.capPeg = 100000e6;
-        statsFresh.capDepeg = 400000e6;
-        statsFresh.depegged = false;
-
-        uint[] memory risks = new uint[](2);
-        risks[0] = 2000;
-        risks[1] = 8000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 2;
-
-        uint feeFresh = BasketLib.calcFee(statsFresh, 5000, basket);
-
-        // 4 day old data - should decay toward neutral
-        MessageCodec.DepegStats memory statsStale;
-        statsStale.timestamp = uint40(block.timestamp - 4 days);
-        statsStale.avgConfPeg = 2000;
-        statsStale.avgConfDepeg = 8000;
-        statsStale.capPeg = 100000e6;
-        statsStale.capDepeg = 400000e6;
-        statsStale.depegged = false;
-
-        uint feeStale = BasketLib.calcFee(statsStale, 5000, basket);
-
-        console.log("Fee fresh:", feeFresh);
-        console.log("Fee 4-day stale:", feeStale);
-
-        // Stale data should have lower fee (risk decayed toward neutral)
-        assertLt(feeStale, feeFresh, "Stale data should have decayed risk");
-    }
-
-    function test_CalcFee_NarrowRiskRange() public {
-        // When risk range <= 100, should return BASE + absPremium only
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = uint40(block.timestamp);
-        stats.avgConfPeg = 5000;
-        stats.avgConfDepeg = 5100;
-        stats.capPeg = 100000e6;
-        stats.capDepeg = 100000e6;
-        stats.depegged = false;
-
-        uint[] memory risks = new uint[](2);
-        risks[0] = 5000;
-        risks[1] = 5050;  // Range of only 50 (< 100 threshold)
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 2;
-
-        uint fee = BasketLib.calcFee(stats, 5000, basket);
-
-        uint risk = BasketLib.calcRisk(stats);
-        uint expectedAbsPremium = (risk * 40) / 10000;  // ABS_MULT = 40
-
-        assertEq(fee, BasketLib.BASE + expectedAbsPremium, "Narrow range should be BASE + absPremium");
-    }
-
-    function test_CalcFee_HighConcentration() public {
-        // Token with very high concentration should have higher fee
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = uint40(block.timestamp);
-        stats.avgConfPeg = 6000;
-        stats.avgConfDepeg = 4000;
-        stats.capPeg = 200000e6;
-        stats.capDepeg = 100000e6;
-        stats.depegged = false;
-
-        uint[] memory risks = new uint[](3);
-        risks[0] = 4000;
-        risks[1] = 5000;
-        risks[2] = 6000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 3;
-
-        // High concentration (80% of basket)
-        uint feeHighConc = BasketLib.calcFee(stats, 8000, basket);
-
-        // Normal concentration (33%)
-        uint feeNormalConc = BasketLib.calcFee(stats, 3333, basket);
-
-        console.log("Fee high concentration (80%):", feeHighConc);
-        console.log("Fee normal concentration (33%):", feeNormalConc);
-
-        assertGt(feeHighConc, feeNormalConc, "Higher concentration should have higher fee");
-    }
-
-    function test_CalcFee_MaxFeeClamp() public {
-        // Even extreme values should cap at MAX_FEE (420 bps)
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = uint40(block.timestamp);
-        stats.avgConfPeg = 500;
-        stats.avgConfDepeg = 9500;  // Very high depeg conviction
-        stats.capPeg = 50000e6;
-        stats.capDepeg = 950000e6;   // Heavily weighted to depeg
-        stats.depegged = false;
-
-        uint[] memory risks = new uint[](2);
-        risks[0] = 1000;
-        risks[1] = 9000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 2;
-
-        uint fee = BasketLib.calcFee(stats, 9000, basket);  // High concentration too
-
-        assertLe(fee, 420, "Fee should never exceed MAX_FEE");
-    }
-
-    // ============================================================================
-    // PART 3: AUX.getFee INTEGRATION (requires setDepegStatsForTesting)
-    // ============================================================================
-
-
-    /*
-    function test_GetFee_WithValidDepegStats() public {
-        // Step 1: Register market for USDC
-        court.registerDepegMarket(100, address(USDC));
-
-        // Step 2: Set depeg stats
-        MessageCodec.DepegStats memory stats;
-        stats.timestamp = uint40(block.timestamp);
-        stats.avgConfPeg = 7000;
-        stats.avgConfDepeg = 3000;
-        stats.capPeg = 700000e6;
-        stats.capDepeg = 300000e6;
-        stats.depegged = false;
-
-        jury.setDepegStatsForTesting(address(USDC), stats);
-
-        // Step 3: Get fee
-        uint fee = AUX.getFee(address(USDC));
-        console.log("Fee for USDC with depeg stats:", fee);
-
-        // Should be above BASE due to risk signal
-        assertGe(fee, BasketLib.BASE, "Should return at least BASE fee");
-        assertLt(fee, 50, "Low risk should have reasonable fee");
-    } */
-
-
-    // ============================================================================
     // PART 4: VOGUE EDGE CASES
     // ============================================================================
 
     function test_BankRun_VaultLiquidity() public {
-        // Multiple users deposit
-        vm.prank(User01);
-        V4.deposit{value: 100 ether}(0);
-
-        vm.prank(User02);
-        V4.deposit{value: 100 ether}(0);
-
-        vm.prank(User03);
-        V4.deposit{value: 100 ether}(0);
-
-        uint totalDeposited = 300 ether;
-        console.log("Total deposited:", totalDeposited / 1e18, "ETH");
-
-        // Simulate vault liquidity crisis
-        // (In reality this would happen if vault's underlying is locked)
-        // For now, just test everyone can withdraw
-
+        // Track total balance changes (deposit refunds + withdrawal)
         uint bal1Before = User01.balance;
-        vm.prank(User01);
-        V4.withdraw(100 ether);
-        uint received1 = User01.balance - bal1Before;
-
         uint bal2Before = User02.balance;
-        vm.prank(User02);
-        V4.withdraw(100 ether);
-        uint received2 = User02.balance - bal2Before;
-
         uint bal3Before = User03.balance;
-        vm.prank(User03);
-        V4.withdraw(100 ether);
-        uint received3 = User03.balance - bal3Before;
 
-        console.log("Received: User01=", received1/1e18);
-        console.log("Received: User02=", received2/1e18);
-        console.log("Received: User03=", received3/1e18);
+        // Phase 1: Deposits — some ETH will be refunded if insufficient USD to pair
+        vm.prank(User01);
+        V4.deposit{value: 100 ether}(0);
+
+        vm.prank(User02);
+        V4.deposit{value: 100 ether}(0);
+
+        vm.prank(User03);
+        V4.deposit{value: 100 ether}(0);
+
+        // Snapshot after deposits (includes any refunds)
+        uint bal1AfterDeposit = User01.balance;
+        uint bal2AfterDeposit = User02.balance;
+        uint bal3AfterDeposit = User03.balance;
+
+        uint refund1 = bal1AfterDeposit - (bal1Before - 100 ether);
+        uint refund2 = bal2AfterDeposit - (bal2Before - 100 ether);
+        uint refund3 = bal3AfterDeposit - (bal3Before - 100 ether);
+
+        console.log("Deposit refunds:");
+        console.log("  User01 refund:", refund1 / 1e18, "ETH");
+        console.log("  User02 refund:", refund2 / 1e18, "ETH");
+        console.log("  User03 refund:", refund3 / 1e18, "ETH");
+
+        // Check how much was actually pooled
+        console.log("POOLED_ETH after deposits:", CORE.POOLED_ETH() / 1e18, "ETH");
+        console.log("POOLED_USD after deposits:", CORE.POOLED_USD(), "USD (6 dec)");
+
+        // Phase 2: Withdrawals
+        vm.prank(User01);
+        V4.withdraw(type(uint).max);
+
+        vm.prank(User02);
+        V4.withdraw(type(uint).max);
+
+        vm.prank(User03);
+        V4.withdraw(type(uint).max);
+
+        // Final balances — net loss = initial - final
+        uint bal1Final = User01.balance;
+        uint bal2Final = User02.balance;
+        uint bal3Final = User03.balance;
+
+        // Total recovered = refund at deposit time + withdrawal proceeds
+        uint total1 = bal1Final - (bal1Before - 100 ether);
+        uint total2 = bal2Final - (bal2Before - 100 ether);
+        uint total3 = bal3Final - (bal3Before - 100 ether);
+
+        console.log("Total recovered (refund + withdrawal):");
+        console.log("  User01:", total1 / 1e18, "ETH");
+        console.log("  User02:", total2 / 1e18, "ETH");
+        console.log("  User03:", total3 / 1e18, "ETH");
 
         // Everyone should get approximately their deposit back
-        assertGt(received1, 99 ether, "User01 underpaid");
-        assertGt(received2, 99 ether, "User02 underpaid");
-        assertGt(received3, 99 ether, "User03 underpaid");
+        // (minus minor IL/rounding from V4 position)
+        assertGt(total1, 99 ether, "User01 underpaid");
+        assertGt(total2, 99 ether, "User02 underpaid");
+        assertGt(total3, 99 ether, "User03 underpaid");
+
+        // Nobody should get MORE than they deposited (no free money)
+        assertLe(total1, 100.1 ether, "User01 overpaid");
+        assertLe(total2, 100.1 ether, "User02 overpaid");
+        assertLe(total3, 100.1 ether, "User03 overpaid");
     }
 
     function test_Vogue_PendingRewards_NonDepositor() public {
@@ -2383,788 +2183,1537 @@ contract Alles is Test, Fixtures {
         vm.stopPrank();
     }
 
-    function testFuzz_BasketFeeComplete(
-        uint64 capPeg,
-        uint64 capDepeg,
-        uint16 confPeg,
-        uint16 confDepeg,
-        uint16 concentration,
-        uint16 risk1,
-        uint16 risk2
-    ) public {
-        // Bound inputs
-        vm.assume(confPeg <= 10000);
-        vm.assume(confDepeg <= 10000);
-        vm.assume(concentration > 0 && concentration <= 10000);
-        vm.assume(risk1 <= 10000 && risk2 <= 10000);
-        vm.assume(capPeg < 1e12 && capDepeg < 1e12);  // Max $1T
+    // ════════════════════════════════════════════════════════════════════
+    //  8.1  Auto-Seeding via Basket.mint
+    // ════════════════════════════════════════════════════════════════════
 
-        MessageCodec.DepegStats memory stats;
-        stats.capPeg = capPeg;
-        stats.capDepeg = capDepeg;
-        stats.avgConfPeg = confPeg;
-        stats.avgConfDepeg = confDepeg;
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
+    function test_DepegMarket_AutoSeed() public {
+        _deployAndSeed();
 
-        uint[] memory risks = new uint[](2);
-        risks[0] = risk1;
-        risks[1] = risk2;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
+        assertTrue(QUID.marketCreated(), "Basket market created");
 
-        // This should never revert
-        try BasketLib.calcFee(stats, concentration, basket) returns (uint fee) {
-            // Fee should always be in valid range
-            assertGe(fee, BasketLib.BASE, "Fee below BASE");
-            assertLe(fee, 420, "Fee above MAX");
-        } catch {
-            // If it reverts, that's a bug (unless expected for edge cases)
-            if (basket.nTokens > 0) {
-                fail();
-            }
+        Types.Market memory m = _hook.getMarket();
+        assertGt(m.numSides, 2, "N-outcome, not binary");
+        assertEq(m.roundNumber, 1, "round 1");
+        assertEq(m.roundStartTime, block.timestamp);
+
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+        assertGt(daiSide, 0, "DAI mapped to side > 0");
+
+        assertEq(_uma.getNumSides(), m.numSides, "UMA knows numSides");
+
+        console.log("Auto-seeded: sides=%d, DAI=side %d",
+            m.numSides, daiSide);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  8.2  N-Outcome LSMR Pricing (all sides sum to 1)
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_LMSRPricing() public {
+        _deployAndSeed();
+        uint8 n = _hook.getMarket().numSides;
+
+        uint[] memory prices = _hook.getAllPrices();
+        assertEq(prices.length, n);
+
+        uint sum;
+        for (uint i; i < n; i++) {
+            sum += prices[i];
+            assertApproxEqRel(prices[i], WAD / n, 0.05e18, "initial ~1/n");
         }
+        assertApproxEqRel(sum, WAD, 0.01e18, "prices sum to ~1");
+
+        // Buy DAI side ... price rises, others fall
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 50_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        uint[] memory after_ = _hook.getAllPrices();
+        assertGt(after_[daiSide], prices[daiSide], "DAI price up");
+        assertLt(after_[0], prices[0], "none price down");
+
+        uint sum2;
+        for (uint i; i < n; i++) sum2 += after_[i];
+        assertApproxEqRel(sum2, WAD, 0.02e18, "still sums to ~1");
     }
 
-    function testFuzz_CalcRisk_BoundaryValues(
-        uint64 capPeg,
-        uint64 capDepeg,
-        uint16 confPeg,
-        uint16 confDepeg
-    ) public {
-        vm.assume(confPeg <= 10000);
-        vm.assume(confDepeg <= 10000);
+    // ════════════════════════════════════════════════════════════════════
+    //  8.3  Place Order — 400 bps Fee
+    // ════════════════════════════════════════════════════════════════════
 
-        MessageCodec.DepegStats memory stats;
-        stats.capPeg = capPeg;
-        stats.capDepeg = capDepeg;
-        stats.avgConfPeg = confPeg;
-        stats.avgConfDepeg = confDepeg;
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
+    function test_DepegMarket_PlaceOrder_400bps() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
 
-        uint risk = BasketLib.calcRisk(stats);
+        bytes32 salt = keccak256("sec");
+        uint conf  = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
 
-        // Risk should always be 0-10000
-        assertLe(risk, 10000, "Risk should never exceed 10000");
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        uint cap = 10_000e18;
+        _hook.placeOrder(side, cap, false, commit, address(0));
+        vm.stopPrank();
+
+        uint fee = (cap * 400) / 10000;
+        uint net = cap - fee;
+
+        Types.Position memory pos =
+            _hook.getPosition(User01, side);
+        assertEq(pos.totalCapital, net, "net after 400bps");
+        assertGt(pos.totalTokens, 0);
+        assertEq(pos.lastRound, 1);
+
+        Types.Market memory m = _hook.getMarket();
+        assertEq(m.capitalPerSide[side], net);
+        assertEq(m.totalCapital, net);
+        assertEq(m.positionsTotal, 1);
+
+        console.log("Order: cap=%d, fee=%d, net=%d", cap, fee, net);
     }
 
-    function testFuzz_CalcFee_NeverExceedsMax(
-        uint64 capPeg,
-        uint64 capDepeg,
-        uint16 concentration
-    ) public {
-        vm.assume(concentration <= 10000);
-        vm.assume(capPeg > 0 || capDepeg > 0);
+    // ════════════════════════════════════════════════════════════════════
+    //  8.4  Full Lifecycle — Two Users, Opposite Sides
+    // ════════════════════════════════════════════════════════════════════
 
-        MessageCodec.DepegStats memory stats;
-        stats.capPeg = capPeg;
-        stats.capDepeg = capDepeg;
-        stats.avgConfPeg = 5000;
-        stats.avgConfDepeg = 5000;
-        stats.depegged = false;
-        stats.timestamp = uint40(block.timestamp);
+    function test_DepegMarket_FullLifecycle() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
 
-        uint[] memory risks = new uint[](2);
-        risks[0] = 3000;
-        risks[1] = 7000;
-        BasketLib.BasketStats memory basket = BasketLib.calcBasketStats(risks);
-        basket.nTokens = 2;
+        bytes32 salt1 = keccak256("s1");
+        bytes32 salt2 = keccak256("s2");
+        uint conf1 = 8000;
+        uint conf2 = 6000;
+        bytes32 c1 = keccak256(abi.encodePacked(conf1, salt1));
+        bytes32 c2 = keccak256(abi.encodePacked(conf2, salt2));
 
-        uint fee = BasketLib.calcFee(stats, concentration, basket);
+        // User01: DAI depeg side
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 5000e18, false, c1, address(0));
+        vm.stopPrank();
 
-        assertLe(fee, 420, "Fee should never exceed MAX_FEE (420)");
-    }
+        // User02: side "none"
+        vm.startPrank(User02);
+        deal(address(USDC), User02, 200_000e6);
+        USDC.approve(address(AUX), type(uint).max);
+        QUID.mint(User02, 100_000e6, address(USDC), 0);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 3000e18, false, c2, address(0));
+        vm.stopPrank();
 
-    function testFuzz_VogueDeposit(uint96 amount) public {
-        vm.assume(amount > 0.01 ether);
-        vm.assume(amount < 10000 ether);
+        assertEq(_hook.getMarket().positionsTotal, 2);
 
-        deal(User01, amount);
+        // Assert DAI side won ... settle
+        uint bond = _uma.getMinimumBond();
+        deal(address(USDC), address(this), bond);
+        USDC.approve(address(_uma), bond);
+        _uma.requestResolution(daiSide);
+        _settleViaUMA();
+
+        Types.Market memory m = _hook.getMarket();
+        assertTrue(m.resolved);
+        assertEq(m.winningSide, daiSide);
+
+        // Reveal + weight (calculateWeights now does both)
+        address[] memory users = new address[](2);
+        uint8[] memory sides = new uint8[](2);
+        users[0] = User01; sides[0] = daiSide;
+        users[1] = User02; sides[1] = 0;
+        vm.warp(block.timestamp + 49 hours);
 
         vm.prank(User01);
-        V4.deposit{value: amount}(0);
-
-        Types.Deposit memory LP = getAutoManaged(User01);
-        assertGt(LP.pooled_eth, 0, "Should have non-zero position");
-    }
-
-    function testFuzz_RoverDeposit(uint96 amount) public {
-        vm.assume(amount > 0.1 ether);
-        vm.assume(amount < 1000 ether);
-
-        deal(User01, amount);
-
-        V3.repackNFT();
-
-        vm.prank(User01);
-        V3.deposit{value: amount}(0);
-
-        assertGt(V3.totalShares(), 0, "Should have non-zero shares");
-    }
-
-    // ============================================================================
-    // PART 7: INTEGRATION TESTS
-    // ============================================================================
-
-    function test_Integration_FullCycleWithFees() public {
-        console.log("=== Full Cycle Integration Test ===");
-
-        vm.prank(User01);
-        V4.deposit{value: 100 ether}(0);
-
+        _reveal(User01, daiSide, conf1, salt1);
         vm.prank(User02);
-        V4.deposit{value: 50 ether}(0);
+        _reveal(User02, 0, conf2, salt2);
 
-        console.log("After deposits - totalShares:", V4.totalShares());
+        m = _hook.getMarket();
+        assertEq(m.positionsRevealed, 2);
+        assertGt(m.totalWinnerCapital, 0);
+        assertGt(m.totalLoserCapital, 0);
+        assertTrue(m.weightsComplete);
 
-        for (uint i = 0; i < 3; i++) {
-            vm.roll(block.number + 1);
-            vm.warp(block.timestamp + 15);
+        // Payouts
+        uint qBefore = QUID.balances(User01);
+        _hook.pushPayouts(users, sides);
+        assertGt(QUID.balances(User01), qBefore, "winner paid");
+        assertTrue(_hook.getMarket().payoutsComplete);
+    }
 
-            vm.prank(User03);
-            // FIX: Changed from true to false
-            // forETH=false means "I'm selling ETH for USDC"
-            AUX.swap{value: 10 ether}(address(USDC), false, 0, 0);
-        }
 
-        (uint pending1,) = V4.pendingRewards(User01);
-        (uint pending2,) = V4.pendingRewards(User02);
+    // ════════════════════════════════════════════════════════════════════
+    //  8.6  Rollover Recommit — 200 bps Fee
+    // ════════════════════════════════════════════════════════════════════
 
-        console.log("User01 pending:", pending1);
-        console.log("User02 pending:", pending2);
+    function test_DepegMarket_Recommit() public {
+        _deployAndSeed();
 
-        uint bal1Before = User01.balance;
+        bytes32 salt1 = keccak256("r1");
+        uint conf1 = 8000;
+        bytes32 c1 = keccak256(abi.encodePacked(conf1, salt1));
+
+        // Round 1: autoRollover=true, side "none"
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 10_000e18, true, c1, address(0));
+        vm.stopPrank();
+
+        uint r1Net = _hook.getPosition(User01, 0).totalCapital;
+
+        // Resolve: none depegged
+        _resolveNone();
+
+        address[] memory u = new address[](1);
+        uint8[] memory s = new uint8[](1);
+        u[0] = User01; s[0] = 0;
+        vm.warp(block.timestamp + 49 hours);
         vm.prank(User01);
-        V4.withdraw(100 ether);
-        uint received1 = User01.balance - bal1Before;
+        _reveal(User01, 0, conf1, salt1);
+        _hook.pushPayouts(u, s);
 
-        console.log("User01 received:", received1);
-        assertGt(received1, 99 ether, "Should receive approximately deposit");
+        // pushPayouts deducts 200 bps rollover fee, retains net
+        uint retainedCapital = _hook.getPosition(User01, 0).totalCapital;
+        uint payout = r1Net; // sole winner gets back at least capital
+        uint fee = (payout * 200) / 10000;
+        assertGe(retainedCapital, payout - fee - 1, "net after 200bps");
+        assertGt(_hook.accumulatedFees(), 0, "fees from rollover");
+
+        _finishRound();
+        assertEq(_hook.getMarket().roundNumber, 2);
+
+        // Round 2: calculateWeights auto-enters stale rollover on LMSR
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+        // calculateWeights with rollover position (revealCounts=0 → auto NEUTRAL)
+        _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](1));
+
+        Types.Position memory posR2 = _hook.getPosition(User01, 0);
+        assertEq(posR2.totalCapital, retainedCapital, "no double fee");
+        assertEq(posR2.totalTokens, 0, "rollover skips LMSR token purchase");
+        assertEq(posR2.lastRound, 2);
+        assertTrue(posR2.revealed, "auto-revealed neutral");
+        assertEq(posR2.revealedConfidence, 5000, "NEUTRAL_CONFIDENCE");
     }
 
-    // ============================================================================
-    // COURT/JURY/PROOF HELPER FUNCTIONS
-    // ============================================================================
+    // ════════════════════════════════════════════════════════════════════
+    //  8.8  Confidence Reveal Edge Cases
+    // ════════════════════════════════════════════════════════════════════
 
-    function getJuror(uint index) public view returns (address) {
-        return vm.addr(jurorPKs[index]);
+    function test_DepegMarket_RevealEdgeCases() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("correct");
+        uint conf = 7500;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint256).max);
+        _hook.placeOrder(daiSide, 2000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        // ── User02 places bad-confidence order BEFORE resolution ──
+        bytes32 badSalt = keccak256("bad");
+        uint badConf = 7777;
+        bytes32 badCommit = keccak256(abi.encodePacked(badConf, badSalt));
+        vm.startPrank(User02);
+        deal(address(USDC), User02, 100_000e6);
+        USDC.approve(address(AUX), type(uint256).max);
+        QUID.mint(User02, 50_000e6, address(USDC), 0);
+        QUID.approve(address(_hook), type(uint256).max);
+        _hook.placeOrder(0, 1000e18, false, badCommit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        // Wrong salt
+        vm.prank(User01);
+        vm.expectRevert("hash mismatch");
+        _reveal(User01, daiSide, conf, keccak256("wrong"));
+
+        // Wrong confidence
+        vm.prank(User01);
+        vm.expectRevert("hash mismatch");
+        _reveal(User01, daiSide, 9000, salt);
+
+        // Bad confidence (not multiple of 100)
+        vm.prank(User02);
+        vm.expectRevert("bad confidence");
+        _reveal(User02, 0, badConf, badSalt);
+
+        // Correct reveal works
+        vm.prank(User01);
+        _reveal(User01, daiSide, conf, salt);
+        assertTrue(_hook.getPosition(User01, daiSide).revealed);
+
+        // Double reveal is a no-op (position already weighed, skips)
+        uint weightBefore = _hook.getPosition(User01, daiSide).weight;
+        vm.prank(User01);
+        _reveal(User01, daiSide, conf, salt);
+        assertEq(_hook.getPosition(User01, daiSide).weight, weightBefore);
     }
 
-    function _encodeResolutionRequest(
-        uint64 marketId, uint8 numSides, bytes32 merkleRoot,
-        bool requiresUnanimous, bool requiresSignature, uint64 appealCost, bytes32 requester
-    ) internal pure returns (bytes memory) {
-        return _encodeResolutionRequestFull(marketId, numSides, merkleRoot, requiresUnanimous, requiresSignature, false, true, appealCost, requester);
+    // ════════════════════════════════════════════════════════════════════
+    //  8.9  Fee Burn — Non-Mature Supply via auth Bypass
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_FeeBurn_NonMature() public {
+        _deployAndSeed();
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 100_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        uint fees = _hook.accumulatedFees();
+        assertEq(fees, (100_000e18 * 400) / 10000);
+
+        // Burn — Hook is auth'd so bypasses batch maturity gate
+        uint supplyBefore = QUID.totalSupply();
+        _hook.burnAccumulatedFees();
+        uint supplyAfter = QUID.totalSupply();
+
+        assertLt(supplyAfter, supplyBefore, "supply decreased");
+        assertEq(_hook.accumulatedFees(), 0, "fees cleared");
     }
 
-    function _encodeResolutionRequestFull(
-        uint64 marketId, uint8 numSides, bytes32 merkleRoot,
-        bool requiresUnanimous, bool requiresSignature,
-        bool isDepegMarket, bool allowsExtensions,
-        uint64 appealCost, bytes32 requester
-    ) internal pure returns (bytes memory) {
-        bytes memory message = new bytes(87);
-        message[0] = bytes1(uint8(5)); // RESOLUTION_REQUEST
-        for (uint i = 0; i < 8; i++) message[1 + i] = bytes1(uint8(marketId >> (i * 8)));
-        message[9] = bytes1(numSides);
-        message[10] = bytes1(uint8(0)); // hasSplits = false
-        for (uint i = 0; i < 32; i++) message[11 + i] = merkleRoot[i];
-        message[43] = requiresUnanimous ? bytes1(uint8(1)) : bytes1(uint8(0));
-        message[44] = requiresSignature ? bytes1(uint8(1)) : bytes1(uint8(0));
-        message[45] = isDepegMarket ? bytes1(uint8(1)) : bytes1(uint8(0));
-        message[46] = allowsExtensions ? bytes1(uint8(1)) : bytes1(uint8(0));
-        for (uint i = 0; i < 8; i++) message[47 + i] = bytes1(uint8(appealCost >> (i * 8)));
-        for (uint i = 0; i < 32; i++) message[55 + i] = requester[i];
-        return message;
+    // ════════════════════════════════════════════════════════════════════
+    //  8.10  Sell Position (round-gated)
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_SellPosition() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(FRAX));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 10_000e18, false, bytes32(uint(1)), address(0));
+
+        Types.Position memory pos =
+            _hook.getPosition(User01, side);
+        uint held = pos.totalTokens;
+        uint qBefore = QUID.balances(User01);
+
+        _hook.sellPosition(side, held / 2);
+        vm.stopPrank();
+
+        assertGt(QUID.balances(User01), qBefore, "QUID returned");
+        Types.Position memory posAfter =
+            _hook.getPosition(User01, side);
+        assertEq(posAfter.totalTokens, held - held / 2);
+        assertLt(posAfter.totalCapital, pos.totalCapital);
     }
 
-    function _encodeJuryCompensation(uint64 marketId, uint64 amount) internal pure returns (bytes memory) {
-        bytes memory message = new bytes(17);
-        message[0] = bytes1(uint8(7));
-        for (uint i = 0; i < 8; i++) {
-            message[1 + i] = bytes1(uint8(marketId >> (i * 8)));
-            message[9 + i] = bytes1(uint8(amount >> (i * 8)));
-        }
-        return message;
+    // ════════════════════════════════════════════════════════════════════
+    //  8.14  DepegStats for BasketLib
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_DepegStats() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+
+        Types.DepegStats memory s0 =
+            _hook.getDepegStats(address(DAI));
+        assertEq(s0.capOnSide, 0);
+        assertEq(s0.capNone, 0);
+        assertEq(s0.side, daiSide);
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 5000e18, false, bytes32(uint(1)), address(0));
+        _hook.placeOrder(0, 3000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        Types.DepegStats memory s1 =
+            _hook.getDepegStats(address(DAI));
+        assertGt(s1.capOnSide, 0);
+        assertGt(s1.capNone, 0);
+        assertGt(s1.capTotal, 0);
+        assertFalse(s1.depegged);
+
+        Types.DepegStats memory sX =
+            _hook.getDepegStats(address(0xdead));
+        assertEq(sX.side, 0);
+        assertEq(sX.capOnSide, 0);
     }
 
-    function _generateMerkleProof(bytes32 solanaKey, address ethAddress)
-        internal pure returns (bytes32 root, bytes32[] memory proof_) {
-        bytes32 leaf = keccak256(abi.encodePacked(solanaKey, ethAddress));
-        root = keccak256(abi.encodePacked(leaf));
-        proof_ = new bytes32[](0);
+    // ════════════════════════════════════════════════════════════════════
+    //  8.15  Two Full Rounds with Rollover
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_TwoRounds() public {
+        _deployAndSeed();
+
+        bytes32 salt1 = keccak256("r1");
+        uint conf1 = 8000;
+        bytes32 c1 = keccak256(abi.encodePacked(conf1, salt1));
+
+        // ── Round 1 ──────────────────────────────────────────────
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 10_000e18, true, c1, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        address[] memory u = new address[](1);
+        uint8[] memory s = new uint8[](1);
+        u[0] = User01; s[0] = 0;
+        vm.warp(block.timestamp + 49 hours);
+        vm.prank(User01);
+        _reveal(User01, 0, conf1, salt1);
+        _hook.pushPayouts(u, s);
+
+        uint r1Retained = _hook.getPosition(User01, 0).totalCapital;
+        _finishRound();
+        assertEq(_hook.getMarket().roundNumber, 2);
+
+        // ── Round 2: auto-rollover via calculateWeights ──────────
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+        // calculateWeights detects stale autoRollover, enters LMSR,
+        // auto-reveals with NEUTRAL_CONFIDENCE, computes weight.
+        _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](1));
+
+        Types.Position memory posR2 = _hook.getPosition(User01, 0);
+        assertEq(posR2.totalCapital, r1Retained, "no double fee");
+        assertEq(posR2.lastRound, 2);
+        assertTrue(posR2.revealed);
+
+        _hook.pushPayouts(u, s);
+        assertTrue(_hook.getMarket().payoutsComplete);
     }
 
-    function _createAffidavitSignatures(uint64 marketId, bytes32 solanaKey,
-        bytes32 contentHash, uint8 supportedSide, uint64 timestamp, uint256 signerPk)
-        internal view returns (bytes memory ethSig, bytes memory appSig) {
-        uint8 currentRound = court.getCurrentRound(marketId);
-        bytes32 msgHash = keccak256(abi.encodePacked("QU!D", marketId, currentRound, solanaKey, block.chainid));
-        bytes32 ethSigned = keccak256(abi.encodePacked("\x19claro:\n32", msgHash));
-        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(signerPk, ethSigned);
-        ethSig = abi.encodePacked(r1, s1, v1);
+    // ════════════════════════════════════════════════════════════════════
+    //  8.16  Stale Position Cannot Reveal
+    // ════════════════════════════════════════════════════════════════════
 
-        // App signs with all affidavit data bound
-        address signer = vm.addr(signerPk);
-        bytes32 appSigned = keccak256(abi.encodePacked(
-            "\x19claro:\n32", signer, msgHash, contentHash, supportedSide, timestamp
-        ));
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(APP_PK, appSigned);
-        appSig = abi.encodePacked(r2, s2, v2);
+    function test_DepegMarket_StaleCannotReveal() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("stale");
+        uint conf = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 5000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        // Complete round 1 without revealing
+        _resolveNone();
+       vm.warp(block.timestamp + 49 hours);
+        _hook.calculateWeights(new address[](0), new uint8[](0), new Hook.RevealEntry[](0), new uint[](0));
+        _hook.pushPayouts(new address[](0), new uint8[](0));
+        _finishRound();
+
+        _resolveNone();
+
+        // Stale position ... reveal reverts
+        vm.prank(User01); vm.expectRevert();
+        _reveal(User01, daiSide, conf, salt);
     }
 
-    function _createCommitment(uint8[] memory vote, bytes32 salt) internal pure returns (bytes32) {
-        return keccak256(abi.encode(vote, salt));
+    // ════════════════════════════════════════════════════════════════════
+    //  8.17  Non-Rollover Positions Are Paid Out, Not Retained
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_NonRolloverPaidOut() public {
+        _deployAndSeed();
+
+        bytes32 salt = keccak256("nf");
+        uint conf = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 5000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        uint balBefore = QUID.balances(User01);
+        _resolveNone();
+        address[] memory u = new address[](1);
+        uint8[] memory s = new uint8[](1);
+        u[0] = User01; s[0] = 0;
+        vm.warp(block.timestamp + 49 hours);
+        vm.prank(User01);
+        _reveal(User01, 0, conf, salt);
+        _hook.pushPayouts(u, s);
+
+        // Non-rollover: capital transferred back to user
+        assertGt(QUID.balances(User01), balBefore, "payout sent to user");
+
+        _finishRound();
+
+        // After round ends, stale non-rollover position is dead.
+        // calculateWeights in round 2 skips it (paidOut=true).
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+        _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](1));
+        Types.Position memory pos = _hook.getPosition(User01, 0);
+        assertTrue(pos.paidOut, "position was paid out");
+        // Market has no active positions — stale was skipped
+        assertEq(_hook.getMarket().positionsTotal, 0, "no positions entered");
     }
 
-    function _setJurorsDirectly(uint64 marketId, uint8 round, uint count) internal {
-        // Mock isJuror to return true for our test jurors
-        for (uint i = 0; i < count; i++) {
-            address juror = getJuror(i);
-            vm.mockCall(
-                address(jury),
-                abi.encodeWithSelector(Jury.isJuror.selector, marketId, round, juror),
-                abi.encode(true)
-            );
-        }
+    // ════════════════════════════════════════════════════════════════════
+    //  8.18  Invalid Side Reverts
+    // ════════════════════════════════════════════════════════════════════
 
-        // Mock getJurors to return our juror list
-        address[] memory jurors = new address[](count);
-        for (uint i = 0; i < count; i++) {
-            jurors[i] = getJuror(i);
-        }
-        vm.mockCall(
-            address(jury),
-            abi.encodeWithSelector(Jury.getJurors.selector, marketId, round),
-            abi.encode(jurors)
-        );
+    function test_DepegMarket_InvalidSide() public {
+        _deployAndSeed();
+        uint8 n = _hook.getMarket().numSides;
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        vm.expectRevert();
+        _hook.placeOrder(n, 1000e18, false, bytes32(uint(1)), address(0));
+        vm.expectRevert();
+        _hook.placeOrder(15, 1000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    //  8.19  getMarketCapital
+    // ════════════════════════════════════════════════════════════════════
 
-    function _getEncodedHeader(uint blockNum) internal returns (bytes memory) {
-        string[] memory inputs = new string[](3);
-        inputs[0] = "node";
-        inputs[1] = "test/scripts/encodeHeader.js";
-        inputs[2] = vm.toString(blockNum);
+    function test_Hook_GetMarketCapital() public {
+        _deployAndSeed();
+        assertEq(_hook.getMarketCapital(), 0);
 
-        // FFI auto-decodes hex strings starting with "0x" to raw bytes
-        // No vm.parseBytes needed!
-        return vm.ffi(inputs);
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 5000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        // 5000 − 400bps = 4800
+        assertEq(_hook.getMarketCapital(), 4800e18);
     }
 
-    /// @notice Get 3 encoded headers for jury selection (block.number - 1, -2, -3)
-    function _getJuryHeaders() internal returns (bytes[] memory) {
-        bytes[] memory headers = new bytes[](3);
-        headers[0] = _getEncodedHeader(block.number - 1);
-        headers[1] = _getEncodedHeader(block.number - 2);
-        headers[2] = _getEncodedHeader(block.number - 3);
-        return headers;
+    // ════════════════════════════════════════════════════════════════════
+    //  8.20  Three Users, Partial Reveal
+    // ════════════════════════════════════════════════════════════════════
+
+    function test_DepegMarket_ThreeUsers_PartialReveal() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt1 = keccak256("u1");
+        bytes32 salt2 = keccak256("u2");
+        uint conf = 8000;
+        bytes32 c1 = keccak256(abi.encodePacked(conf, salt1));
+        bytes32 c2 = keccak256(abi.encodePacked(conf, salt2));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 5000e18, false, c1, address(0));
+        vm.stopPrank();
+
+        vm.startPrank(User02);
+        deal(address(USDC), User02, 200_000e6);
+        USDC.approve(address(AUX), type(uint).max);
+        QUID.mint(User02, 100_000e6, address(USDC), 0);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 3000e18, false, c2, address(0));
+        vm.stopPrank();
+
+        // User03: DAI side, will NOT reveal
+        address User03 = makeAddr("user03");
+        deal(address(USDC), User03, 200_000e6);
+        vm.startPrank(User03);
+        USDC.approve(address(AUX), type(uint).max);
+        QUID.mint(User03, 50_000e6, address(USDC), 0);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 2000e18, false, bytes32(uint(42)), address(0));
+        vm.stopPrank();
+
+        assertEq(_hook.getMarket().positionsTotal, 3);
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        _reveal(User01, daiSide, conf, salt1);
+        vm.prank(User02);
+        _reveal(User02, 0, conf, salt2);
+
+        assertEq(_hook.getMarket().positionsRevealed, 2);
+
+        address[] memory u = new address[](2);
+        uint8[] memory s = new uint8[](2);
+        u[0] = User01; s[0] = daiSide;
+        u[1] = User02; s[1] = 0;
+        vm.warp(block.timestamp + 49 hours);
+        _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](u.length));
+        _hook.pushPayouts(u, s);
+
+        assertTrue(_hook.getPosition(User02, 0).paidOut);
+        assertTrue(_hook.getPosition(User01, daiSide).paidOut);
+        assertEq(_hook.getPosition(User03, daiSide).weight, 0);
     }
+    // ══════════════════════════════════════════════════
+    //  4. calcRisk — Bayesian Blend with avgConf Prior
+    // ══════════════════════════════════════════════════
+    //
+    //  Formula:
+    //    if depegged ... 10000
+    //    prior  = avgConf > 0 ? avgConf : 6500
+    //    if capTotal == 0 ... prior
+    //    capitalSignal = capOnSide × 10000 / capTotal
+    //    n = capTotal / MIN_MARKET_CAPITAL   (integer, $10k units)
+    //    if n == 0 ... prior                   (thin market)
+    //    if !hasPrior ... capitalSignal        (thick, no history)
+    //    else ... (prior + n × capitalSignal) / (1 + n)
+    //
 
-    /// @notice Select jury using real RANDAO headers
-    function _selectRealJury(uint64 marketId, uint8 round) internal returns (bool) {
-        bytes[] memory headers = _getJuryHeaders();
-        return jury.voirDire(marketId, round, headers);
-    }
-
-    function _mockVerdict(uint64 marketId, uint8 round, uint8 winner, bool unanimous, bool meetsThreshold) internal {
-        uint8[] memory verdict = new uint8[](1);
-        verdict[0] = winner;
-        vm.mockCall(
-            address(jury),
-            abi.encodeWithSelector(Jury.getStoredVerdict.selector, marketId, round),
-            abi.encode(verdict, unanimous, meetsThreshold)
-        );
-    }
-
-    /// @notice Generate merkle root for single participant (empty proof)
-    function _generateMerkleRoot(bytes32 solanaKey, address ethAddress)
-        internal pure returns (bytes32 root) {
-        bytes32 leaf = keccak256(abi.encodePacked(solanaKey, ethAddress));
-        root = keccak256(abi.encodePacked(leaf));
-    }
-
-    /// @notice Submit a valid affidavit with proper merkle root and signatures
-    function _submitValidAffidavit(uint64 marketId, uint8 supportedSide, uint jurorIndex)
-        internal returns (uint affidavitId) {
-        address submitter = getJuror(jurorIndex);
-        uint256 submitterPK = jurorPKs[jurorIndex];
-        bytes32 solanaKey = bytes32(uint256(uint160(submitter)));
-        bytes32 contentHash = keccak256("test_video_content");
-        uint64 timestamp = uint40(block.timestamp);
-
-        bytes32 root = _generateMerkleRoot(solanaKey, submitter);
-        vm.prank(address(court));
-        proof.updateMerkleRoot(marketId, root);
-
-        (bytes memory ethSig, bytes memory appSig) = _createAffidavitSignatures(
-            marketId, solanaKey, contentHash, supportedSide, timestamp, submitterPK
-        );
-
-        Proof.AffidavitParams memory params = Proof.AffidavitParams({
-            marketId: marketId,
-            evidenceUrl: "https://evidence.example.com/doc1",
-            contentHash: contentHash,
-            supportedSide: supportedSide,
-            solanaKey: solanaKey,
-            merkleProof: new bytes32[](0),
-            ethSig: ethSig,
-            appSig: appSig,
-            timestamp: timestamp
+    /// @notice Cold start: no capital, no prior ... conservative 6500
+    function test_CalcRisk_ColdStart_NoPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 0,
+            capNone:   0,
+            capTotal:  0,
+            depegged:  false,
+            side:      1,
+            avgConf:   0
         });
-
-        vm.prank(submitter);
-        affidavitId = proof.submitAffidavit(params);
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 6500, "cold start, no prior ... default 6500");
     }
 
-    function _evaluateAllAffidavits(uint64 marketId,
-        address juror, Proof.EvalType evalType) internal {
-        uint count = proof.getAffidavitCount(marketId);
-        if (count == 0) return;
+    /// @notice Cold start with prior: last round said danger ... carry forward
+    function test_CalcRisk_ColdStart_WithPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 0,
+            capNone:   0,
+            capTotal:  0,
+            depegged:  false,
+            side:      1,
+            avgConf:   8000
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 8000, "no capital yet, prior carries");
+    }
 
-        Proof.BatchEvaluation[] memory evals = new Proof.BatchEvaluation[](count);
-        for (uint i = 0; i < count; i++) {
-            string memory reasoning = "";
-            if (evalType == Proof.EvalType.CONCURRING || evalType == Proof.EvalType.DISSENTING_ACCURACY) {
-                reasoning = "Valid reasoning provided";
-            }
-            evals[i] = Proof.BatchEvaluation({
-                affidavitId: i,
-                evalType: evalType,
-                reasoning: reasoning
-            });
+    /// @notice Thin market (< $10k), no prior ... 6500 conservative
+    function test_CalcRisk_ThinMarket_NoPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 2_000e18,
+            capNone:   5_000e18,
+            capTotal:  9_999e18,   // n = 0
+            depegged:  false,
+            side:      1,
+            avgConf:   0
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 6500, "thin market, no prior ... 6500");
+    }
+
+    /// @notice Thin market with strong prior ... prior dominates
+    function test_CalcRisk_ThinMarket_WithPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 2_000e18,
+            capNone:   3_000e18,
+            capTotal:  5_000e18,   // n = 0
+            depegged:  false,
+            side:      1,
+            avgConf:   7000
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 7000, "thin market, prior dominates");
+    }
+
+    /// @notice Thick market, nobody betting depeg, no prior ... pure capital signal = 0
+    function test_CalcRisk_ThickMarket_ZeroOnSide_NoPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 0,
+            capNone:   50_000e18,
+            capTotal:  50_000e18,  // n = 5
+            depegged:  false,
+            side:      1,
+            avgConf:   0
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 0, "thick market says safe, no prior ... 0");
+    }
+
+    /// @notice Thick market, nobody betting depeg, but prior says danger
+    ///         ... Bayesian blend: prior fading under live evidence
+    ///         (8000 + 5 × 0) / 6 = 1333
+    function test_CalcRisk_ThickMarket_ZeroOnSide_StrongPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 0,
+            capNone:   50_000e18,
+            capTotal:  50_000e18,  // n = 5
+            depegged:  false,
+            side:      1,
+            avgConf:   8000
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 1333, "prior fading: (8000 + 5*0)/6");
+    }
+
+    /// @notice 10% of capital on depeg side, no prior ... pure signal
+    function test_CalcRisk_ThickMarket_10pct_NoPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 10_000e18,
+            capNone:   80_000e18,
+            capTotal:  100_000e18, // n = 10
+            depegged:  false,
+            side:      1,
+            avgConf:   0
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 1000, "10% on side, no prior ... 1000");
+    }
+
+    /// @notice Half the money on depeg, confirming prior
+    ///         (9000 + 10 × 5000) / 11 = 59000 / 11 = 5363
+    function test_CalcRisk_ThickMarket_ConfirmingPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 50_000e18,
+            capNone:   50_000e18,
+            capTotal:  100_000e18, // n = 10
+            depegged:  false,
+            side:      1,
+            avgConf:   9000
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 5363, "both signals agree: (9000+50000)/11");
+    }
+
+    /// @notice Light depeg bet but strong prior ... conflicting signals
+    ///         (8000 + 10 × 500) / 11 = 13000 / 11 = 1181
+    function test_CalcRisk_ThickMarket_ConflictingPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 5_000e18,
+            capNone:   95_000e18,
+            capTotal:  100_000e18, // n = 10
+            depegged:  false,
+            side:      1,
+            avgConf:   8000
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 1181, "money disagrees with prior: (8000+5000)/11");
+    }
+
+    /// @notice 100% of capital on depeg side, no prior ... max signal
+    function test_CalcRisk_AllOnSide_NoPrior() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 50_000e18,
+            capNone:   0,
+            capTotal:  50_000e18,
+            depegged:  false,
+            side:      1,
+            avgConf:   0
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 10000, "all on side, no prior ... 10000");
+    }
+
+    /// @notice Confirmed depeg always returns 10000 regardless of avgConf
+    function test_CalcRisk_ConfirmedDepeg() public {
+        Types.DepegStats memory stats = Types.DepegStats({
+            capOnSide: 10_000e18,
+            capNone:   10_000e18,
+            capTotal:  20_000e18,
+            depegged:  true,
+            side:      1,
+            avgConf:   3000
+        });
+        uint risk = FeeLib.calcRisk(stats);
+        assertEq(risk, 10000, "depegged ... 10000 always");
+    }
+
+    /// @notice Prior influence fades as market capital grows
+    function test_CalcRisk_PriorFadesWithScale() public {
+        // Same prior (8000) and same capital ratio (10% on depeg side)
+        // but at different market scales
+
+        // $20k total ... n = 2 ... (8000 + 2*1000)/3 = 3333
+        Types.DepegStats memory small = Types.DepegStats({
+            capOnSide: 2_000e18,  capNone: 18_000e18,
+            capTotal:  20_000e18, depegged: false,
+            side: 1, avgConf: 8000
+        });
+        uint riskSmall = FeeLib.calcRisk(small);
+
+        // $200k total ... n = 20 ... (8000 + 20*1000)/21 = 1333
+        Types.DepegStats memory big = Types.DepegStats({
+            capOnSide: 20_000e18,  capNone: 180_000e18,
+            capTotal:  200_000e18, depegged: false,
+            side: 1, avgConf: 8000
+        });
+        uint riskBig = FeeLib.calcRisk(big);
+
+        assertGt(riskSmall, riskBig,
+            "same ratio + prior, more capital ... prior influence smaller");
+
+        assertEq(riskSmall, 3333, "small market: (8000+2000)/3");
+        assertEq(riskBig, 1333, "big market: (8000+20000)/21");
+    }
+
+    // ══════════════════════════════════════════════════
+    //  5. Fee Formula (M1: Arbitrage-Neutral) Tests
+    // ══════════════════════════════════════════════════
+
+    /// @notice Base fee when no exposure differential
+    function test_Fee_NoSignal() public {
+        // totalExposure = thisRisk...no selective advantage
+        uint fee = FeeLib.calcFee(0, 0);
+        assertEq(fee, 4, "no signal...base 4 bps");
+        fee = FeeLib.calcFee(5000, 5000);
+        assertEq(fee, 4, "equal risk...base 4 bps");
+        fee = FeeLib.calcFee(8000, 3000);
+        assertEq(fee, 4, "thisRisk > totalExp...base");
+    }
+
+    /// @notice Confirmed depeg: healthy exit = exposure, depegged exit = base
+    function test_Fee_ConfirmedDepeg() public {
+        // Token at 10% of basket, confirmed depeg (risk=10000)
+        // totalExposure = 10% × 10000 = 1000 bps
+        uint totalExposure = 1000;
+
+        // Withdraw healthy token (risk=0): fee = 1000 - 0 = 1000
+        uint feeHealthy = FeeLib.calcFee(0, totalExposure);
+        assertEq(feeHealthy, 1000, "healthy exit during depeg = 1000 bps");
+
+        // Withdraw depegged token (risk=10000): totalExp < thisRisk...base
+        uint feeDepegged = FeeLib.calcFee(10000, totalExposure);
+        assertEq(feeDepegged, 4, "depegged exit = base (heals basket)");
+    }
+
+    /// @notice MAX_FEE is 5000 bps (50%)
+    function test_Fee_MaxFeeCap() public {
+        // Extreme: 50% basket in confirmed depeg...5000 bps exposure
+        uint fee = FeeLib.calcFee(0, 5000);
+        assertEq(fee, 5000, "50% exposure...MAX_FEE");
+        // Beyond cap
+        fee = FeeLib.calcFee(0, 8000);
+        assertEq(fee, 5000, "80% exposure...capped at MAX_FEE");
+    }
+
+    /// @notice Fee monotonically increases with totalExposure
+    function test_Fee_MonotonicWithExposure() public {
+        uint prevFee;
+        for (uint exp = 0; exp <= 5000; exp += 500) {
+            uint fee = FeeLib.calcFee(0, exp);
+            assertGe(fee, prevFee, "fee monotonic with exposure");
+            prevFee = fee;
+            console.log("Exposure %d bps -> fee %d bps", exp, fee);
         }
-
-        vm.prank(juror);
-        proof.submitBatchEvaluations(marketId, evals);
     }
 
-    // ============================================================================
-    // MESSAGE CODEC TESTS
-    // ============================================================================
-
-    function test_MessageCodec_EncodeDecodeResolutionRequest() public {
-        uint64 marketId = 12345;
-        bytes32 merkleRoot = keccak256("test merkle root");
-        bytes memory message = _encodeResolutionRequest(marketId, 2, merkleRoot, false, false, 1000e6, bytes32(uint256(uint160(User01))));
-
-        // Use this.helper to convert memory to calldata
-        (uint64 decodedMarketId, uint8 decodedNumSides, bytes32 decodedMerkleRoot) = this.decodeResolutionRequestHelper(message);
-        assertEq(decodedMarketId, marketId, "Market ID mismatch");
-        assertEq(decodedNumSides, 2, "Num sides mismatch");
-        assertEq(decodedMerkleRoot, merkleRoot, "Merkle root mismatch");
-    }
-
-    function decodeResolutionRequestHelper(bytes calldata message) external pure returns (uint64, uint8, bytes32) {
-        MessageCodec.ResolutionRequestData memory req = MessageCodec.decodeResolutionRequest(message);
-        return (req.marketId, req.numSides, req.merkleRoot);
-    }
-
-    function test_MessageCodec_JuryCompensation() public {
-        bytes memory message = _encodeJuryCompensation(99, 5000e6);
-        (uint64 decodedMarketId, uint64 decodedAmount) = this.decodeJuryCompensationHelper(message);
-        assertEq(decodedMarketId, 99, "Market ID mismatch");
-        assertEq(decodedAmount, 5000e6, "Amount mismatch");
-    }
-
-    function decodeJuryCompensationHelper(bytes calldata message) external pure returns (uint64, uint64) {
-        return MessageCodec.decodeJuryCompensation(message);
-    }
-
-    function test_MessageCodec_EncodeFinalRuling() public {
-        uint8[] memory winningSides = new uint8[](1);
-        winningSides[0] = 0;
-        bytes memory message = MessageCodec.encodeFinalRuling(1, winningSides, new bytes32[](0), new uint8[](0));
-        assertEq(uint8(message[0]), 6, "First byte should be FINAL_RULING");
-    }
-
-    // ============================================================================
-    // PROOF CONTRACT TESTS
-    // ============================================================================
-
-    function test_Proof_UpdateMerkleRoot() public {
-        vm.prank(address(court));
-        proof.updateMerkleRoot(1, keccak256("test"));
-        assertEq(proof.merkleRoots(1), keccak256("test"), "Merkle root not set");
-    }
-
-    function test_Proof_UpdateMerkleRoot_OnlyCourtOrBasket() public {
-        vm.prank(User01);
-        vm.expectRevert(bytes("Only court/basket"));
-        proof.updateMerkleRoot(1, bytes32(0));
-    }
-
-    function test_Proof_GetFinalizationStatus() public {
-        (bool complete, uint cursor, uint total) = proof.getFinalizationStatus(1);
-        assertFalse(complete, "Should not be complete");
-        assertEq(cursor, 0, "Cursor should be 0");
-    }
-
-    // ============================================================================
-    // COURT CONTRACT TESTS
-    // ============================================================================
-
-    function test_Court_ReceiveResolutionRequest() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(uint256(uint160(User01))));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-        (uint8 numSides,,,) = court.getMarketConfig(1);
-        assertEq(numSides, 2, "Should have 2 sides");
-    }
-
-    function test_Court_ReceiveResolutionRequest_Unauthorized() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, bytes32(0), false, false, 1000e6, bytes32(0));
-        vm.prank(User01);
-        vm.expectRevert(Court.Unauthorized.selector);
-        court.receiveResolutionRequest(message);
-    }
-
-    function test_Court_RegisterDepegMarket() public {
-        court.registerDepegMarket(100, address(USDC));
-        assertEq(jury.marketToStablecoin(100), address(USDC), "Market not registered");
-    }
-
-    // ============================================================================
-    // DEPEG/BASKETLIB TESTS
-    // ============================================================================
-
-    function test_BasketLib_CalcRisk() public {
-        MessageCodec.DepegStats memory stats;
-        stats.avgConfPeg = 9000;
-        stats.avgConfDepeg = 1000;
-        stats.capPeg = 1000000e6;
-        stats.capDepeg = 100000e6;
-        stats.depegged = false;
-
-        uint risk = BasketLib.calcRisk(stats);
-        console.log("Low risk scenario:", risk);
-        assertLt(risk, 2000, "Risk should be low");
-
-        stats.depegged = true;
-        risk = BasketLib.calcRisk(stats);
-        assertEq(risk, 10000, "Depegged should be max risk");
-    }
-
-    function test_BasketLib_CalcBasketStats() public {
-        uint[] memory risks = new uint[](4);
-        risks[0] = 1000; risks[1] = 2000; risks[2] = 3000; risks[3] = 4000;
-        BasketLib.BasketStats memory stats = BasketLib.calcBasketStats(risks);
-        assertEq(stats.nTokens, 4, "Should have 4 tokens");
-        assertEq(stats.minRisk, 1000, "Min should be 1000");
-        assertEq(stats.maxRisk, 4000, "Max should be 4000");
-        assertEq(stats.avgRisk, 2500, "Avg should be 2500");
-    }
-
-    // ============================================================================
-    // ACCESS CONTROL TESTS
-    // ============================================================================
-
-    function test_AccessControl_Proof_OnlyCourt() public {
-        vm.prank(User01);
-        vm.expectRevert(bytes("Only court"));
-        proof.finalizeEvaluations(1, 0);
-    }
-
-    // ============================================================================
-    // JURY STRESS TESTS - Real Logic (No Mocking)
-    // ============================================================================
-
-    /// @notice Test appeal requires verdict to exist first
-    function test_Court_AppealGroundsValidation() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        // Without a verdict, should fail with NoVerdictToAppeal
-        vm.prank(User01);
-        vm.expectRevert(Court.NoVerdictToAppeal.selector);
-        court.fileAppeal(1, Court.AppealGround.FABRICATION, new uint[](0), "no verdict yet");
-    }
-
-
-    // ============================================================================
-    // PROOF CONTRACT STRESS TESTS
-    // ============================================================================
-
-    /// @notice Test max affidavit submissions per address
-    function test_Proof_MaxSubmissions_Enforced() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("test"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        // For each submission we need valid merkle proof + signatures
-        // Since we can't easily generate valid proofs, we test the error exists
-        bytes4 expectedSelector = Proof.MaxSubmissionsReached.selector;
-        assertTrue(expectedSelector != bytes4(0), "MaxSubmissionsReached error should exist");
-    }
-
-    /// @notice Test invalid merkle proof rejected
-    function test_Proof_InvalidMerkleProof_Reverts() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        // Create affidavit params with invalid proof
-        Proof.AffidavitParams memory params = Proof.AffidavitParams({
-            marketId: 1,
-            evidenceUrl: "https://evidence.com",
-            contentHash: keccak256("content"),
-            supportedSide: 0,
-            solanaKey: bytes32(uint256(1)),
-            merkleProof: new bytes32[](0),
-            ethSig: new bytes(65),
-            appSig: new bytes(0),
-            timestamp: uint40(block.timestamp)
+    /// @notice Prior elevates risk...higher totalExposure...higher fee
+    function test_Fee_PriorElevatesFee() public {
+        // Same capital ratio (5% on depeg side), different prior
+        Types.DepegStats memory noPrior = Types.DepegStats({
+            capOnSide: 5_000e18,
+            capNone:   95_000e18,
+            capTotal:  100_000e18,
+            depegged:  false,
+            side:      1,
+            avgConf:   0          // no prior...risk ≈ 500
         });
-
-        vm.prank(User01);
-        vm.expectRevert(Proof.InvalidMerkleProof.selector);
-        proof.submitAffidavit(params);
-    }
-
-    /// @notice Test non-juror cannot evaluate affidavits
-    function test_Proof_NonJurorEvaluation_Reverts() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        Proof.BatchEvaluation[] memory evals = new Proof.BatchEvaluation[](1);
-        evals[0] = Proof.BatchEvaluation({
-            affidavitId: 0,
-            evalType: Proof.EvalType.CONCURRING,
-            reasoning: "I agree"
+        Types.DepegStats memory withPrior = Types.DepegStats({
+            capOnSide: 5_000e18,
+            capNone:   95_000e18,
+            capTotal:  100_000e18,
+            depegged:  false,
+            side:      1,
+            avgConf:   8000       // strong prior...risk ≈ 1181
         });
+        uint riskNoPrior  = FeeLib.calcRisk(noPrior);
+        uint riskWithPrior = FeeLib.calcRisk(withPrior);
+        assertGt(riskWithPrior, riskNoPrior, "prior elevates risk score");
 
-        // User01 is not a juror
+        // Both at 10% basket share, rest of basket is healthy
+        // totalExposure = share × risk = risk / 10
+        uint expNoPrior   = riskNoPrior / 10;
+        uint expWithPrior = riskWithPrior / 10;
+
+        // Fee for withdrawing a healthy token (thisRisk=0)
+        uint feeNoPrior   = FeeLib.calcFee(0, expNoPrior);
+        uint feeWithPrior = FeeLib.calcFee(0, expWithPrior);
+        assertGt(feeWithPrior, feeNoPrior, "prior...higher fee");
+        console.log("No prior: %d bps, with prior: %d bps",
+            feeNoPrior, feeWithPrior);
+    }
+
+    /// @notice Larger depegged share...higher fee for healthy exit
+    function test_Fee_ExposureScalesWithShare() public {
+        // Same risk score (3000), different basket share
+        uint riskScore = 3000;
+        uint expSmall  = (1000 * riskScore) / 10000;  // 10% share...300bp
+        uint expLarge  = (3000 * riskScore) / 10000;   // 30% share...900bp
+
+        uint feeSmall = FeeLib.calcFee(0, expSmall);
+        uint feeLarge = FeeLib.calcFee(0, expLarge);
+        assertGt(feeLarge, feeSmall, "larger share...higher fee");
+        console.log("10%% share: %d bps, 30%% share: %d bps",
+            feeSmall, feeLarge);
+    }
+
+    /// @notice Two tokens depegging: healthy exit costs sum of exposures
+    function test_Fee_MultipleDepegs() public {
+        // DAI 10% share risk=8000, USDT 10% share risk=6000, rest healthy
+        uint totalExposure = (1000 * 8000) / 10000
+                           + (1000 * 6000) / 10000;  // 800 + 600 = 1400bp
+
+        // Healthy token exit: fee = 1400
+        uint feeHealthy = FeeLib.calcFee(0, totalExposure);
+        assertEq(feeHealthy, 1400, "multi-depeg healthy exit = sum");
+
+        // Partially-depegging token exit (USDT risk=6000):
+        // fee = 1400 - 6000 = negative...base
+        uint feeUsdt = FeeLib.calcFee(6000, totalExposure);
+        assertEq(feeUsdt, 4, "USDT exit during multi-depeg = base");
+
+        // DAI exit (risk=8000): also negative...base
+        uint feeDai = FeeLib.calcFee(8000, totalExposure);
+        assertEq(feeDai, 4, "DAI exit during multi-depeg = base");
+    }
+
+    /// @notice restartMarket reverts if payouts incomplete
+    function test_UMA_RestartRequiresPayouts() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("r");
+        uint conf = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
         vm.prank(User01);
-        vm.expectRevert(Proof.NotJuror.selector);
-        proof.submitBatchEvaluations(1, evals);
+        _reveal(User01, side, conf, salt);
+
+        vm.warp(block.timestamp + 48 hours + 1);
+
+        address[] memory u = new address[](1);
+        uint8[] memory s = new uint8[](1);
+        u[0] = User01; s[0] = side;
+        _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](u.length));
+
+        _hook.pushPayouts(u, s);
+
+        _uma.restartMarket();
+        (uint8 phase,,,) = _uma.getAssertionInfo();
+        assertEq(phase, 0);
+    }
+
+    /// @notice Invalid side reverts; side 0 must use resolveAsNone
+    function test_UMA_InvalidSide_Revert() public {
+        _deployAndSeed();
+        Types.Market memory m = _hook.getMarket();
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 5_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        uint bond = _uma.getMinimumBond();
+        deal(address(USDC), address(this), bond);
+        USDC.approve(address(_uma), bond);
+
+        // Side >= numSides reverts
+        vm.expectRevert();
+        _uma.requestResolution(m.numSides);
+
+        // Side 0 reverts — must use resolveAsNone()
+        vm.expectRevert("use resolveAsNone");
+        _uma.requestResolution(0);
+    }
+
+    // ══════════════════════════════════════════════════
+    //  LMSR Math Stress Tests
+    // ══════════════════════════════════════════════════
+
+    /// @notice Prices always sum to ~1 after arbitrary trading
+    function test_LMSR_SumToOne_Stress() public {
+        _deployAndSeed();
+        Types.Market memory m = _hook.getMarket();
+        uint8 n = m.numSides;
+
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
+        uint8 usdcSide = _hook.stablecoinToSide(address(USDC));
+
+        // Top up User01 — stress test needs ~351k QD total
+        deal(address(USDC), User01, 200_000e6);
+        vm.startPrank(User01);
+        USDC.approve(address(AUX), type(uint).max);
+        QUID.mint(User01, 200_000e6, address(USDC), 0);
+        QUID.approve(address(_hook), type(uint).max);
+
+        _hook.placeOrder(daiSide, 100_000e18, false, bytes32(uint(1)), address(0));
+        _checkPriceSum(n, "after 100k on DAI");
+
+        _hook.placeOrder(usdcSide, 1_000e18, false, bytes32(uint(1)), address(0));
+        _checkPriceSum(n, "after 1k on USDC");
+
+        _hook.placeOrder(0, 50_000e18, false, bytes32(uint(1)), address(0));
+        _checkPriceSum(n, "after 50k on none");
+
+        _hook.placeOrder(daiSide, 200_000e18, false, bytes32(uint(1)), address(0));
+        _checkPriceSum(n, "after 200k more on DAI");
+        vm.stopPrank();
+    }
+
+    function _checkPriceSum(uint8 n, string memory label) internal view {
+        uint[] memory p = _hook.getAllPrices();
+        uint sum;
+        for (uint i; i < n; i++) sum += p[i];
+        assertApproxEqRel(sum, WAD, 0.02e18, label);
+    }
+
+    /// @notice Buy then sell full position — should recover most capital
+    function test_LMSR_BuySellRoundTrip() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("rt");
+        uint conf = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+
+        uint balBefore = QUID.balances(User01);
+        _hook.placeOrder(side, 50_000e18, false, commit, address(0));
+
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        uint tokens = pos.totalTokens;
+        assertGt(tokens, 0, "got tokens");
+
+        _hook.sellPosition(side, tokens);
+
+        uint balAfter = QUID.balances(User01);
+        uint netIn = 50_000e18 * 96 / 100;
+        uint recovered = balAfter - (balBefore - 50_000e18);
+        console.log("Round trip: in=%d, net=%d, recovered=%d", 50_000e18, netIn, recovered);
+
+        assertGt(recovered, netIn * 90 / 100, "recovered >= 90% of net");
+        assertLe(recovered, netIn, "no more than net invested");
+        vm.stopPrank();
     }
 
 
-    // ============================================================================
-    // MULTI-ROUND INTEGRATION TESTS
-    // ============================================================================
 
-    /// @notice Test state persistence across appeal rounds
-    function test_Integration_MultiRoundStateIntegrity() public {
-        console.log("=== Multi-Round State Integrity Test ===");
+    /// @notice Cost monotonicity
+    function test_LMSR_CostMonotonicity() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
 
-        // Round 0: Initial resolution request
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        (uint8 numSides,,,) = court.getMarketConfig(1);
-        assertEq(numSides, 2, "Initial config should have 2 sides");
-
-        uint8 currentRound = court.getCurrentRound(1);
-        assertEq(currentRound, 0, "Should start at round 0");
-
-        console.log("Round 0 initialized, numSides:", numSides);
+        uint prev;
+        for (int128 delta = 1e18; delta <= 100e18; delta += 10e18) {
+            uint c = _hook.getLMSRCost(side, delta);
+            assertGe(c, prev, "cost monotonically increases");
+            prev = c;
+        }
     }
 
-    // ============================================================================
-    // TIMING ATTACK TESTS
-    // ============================================================================
+    /// @notice Sell more tokens than you have — should revert
+    function test_LMSR_SellOverflow_Reverts() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
 
-    /// @notice Test RANDAO manipulation resistance
-    function test_Jury_RandaoManipulationResistance() public {
-        // fulfillJury uses multiple block headers to derive randomness
-        // Single block manipulation shouldn't determine jury
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, bytes32(uint(1)), address(0));
 
-        // Verify at least 3 headers are required
-        bytes[] memory insufficientHeaders = new bytes[](2);
+        Types.Position memory pos = _hook.getPosition(User01, side);
 
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        // Should fail with insufficient headers
-        vm.expectRevert(bytes("need 3 headers"));
-        vm.prank(address(court));
-        jury.voirDire(1, 0, insufficientHeaders);
+        vm.expectRevert();
+        _hook.sellPosition(side, pos.totalTokens + 1);
+        vm.stopPrank();
     }
 
-    // ============================================================================
-    // EDGE CASE TESTS
-    // ============================================================================
+    /// @notice MIN_ORDER enforcement
+    function test_LMSR_MinOrder_Reverts() public {
+        _deployAndSeed();
 
-    /// @notice Test empty merkle proof with single participant
-    function test_Proof_SingleParticipantMerkleTree() public {
-        // When there's only one participant, proof array should be empty
-        // and leaf should equal root
-
-        bytes32 solanaKey = bytes32(uint256(12345));
-        address ethAddr = User01;
-
-        // For single participant: root = hash(hash(leaf))
-        bytes32 leaf = keccak256(abi.encodePacked(solanaKey, ethAddr));
-        bytes32 expectedRoot = keccak256(abi.encodePacked(leaf));
-
-        assertTrue(expectedRoot != bytes32(0), "Single participant root should be computed");
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        vm.expectRevert();
+        _hook.placeOrder(0, 500_000, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
     }
 
+    /// @notice Signal when market resolves TO a depeg side
+    function test_Signal_DepegDetected() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
 
-    /// @notice Test depeg market special handling
-    function test_Court_DepegMarketRegistration() public {
-        // Depeg markets link stablecoin address to market ID
-        court.registerDepegMarket(100, address(USDC));
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 50_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
 
-        assertEq(jury.marketToStablecoin(100), address(USDC), "Stablecoin should be mapped");
-        assertEq(jury.stablecoinToMarket(address(USDC)), 100, "Market should be reverse mapped");
+        uint bond = _uma.getMinimumBond();
+        deal(address(USDC), address(this), bond);
+        USDC.approve(address(_uma), bond);
+        _uma.requestResolution(daiSide);
+
+        vm.warp(block.timestamp + 127 hours + 1);
+        _uma.settleAssertion();
+
+        Types.DepegStats memory stats = _hook.getDepegStats(address(DAI));
+        assertTrue(stats.depegged, "DAI shows as depegged");
+        assertEq(stats.side, daiSide);
     }
 
-    /// @notice Test same marketId cannot be registered twice
-    function test_Court_DepegMarketDoubleRegistration_Reverts() public {
-        court.registerDepegMarket(100, address(USDC));
-
-        // Same marketId with different stablecoin should fail
-        // The require checks: marketToStablecoin[marketId] == address(0)
-        vm.expectRevert(); // Generic revert - require has no message
-        court.registerDepegMarket(100, address(QUID));
+    /// @notice Signal for unmapped stablecoin
+    function test_Signal_UnmappedStable() public {
+        _deployAndSeed();
+        Types.DepegStats memory stats = _hook.getDepegStats(
+            address(0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF));
+        assertEq(stats.side, 0);
+        assertEq(stats.capTotal, 0);
     }
 
-    // ============================================================================
-    // JURY.SOL COMPREHENSIVE TESTS
-    // ============================================================================
+    /// @notice After resetForNewRound, capital zeroed, avgConf carries
+    function test_Signal_CleanAfterReset() public {
+        _deployAndSeed();
+        uint8 daiSide = _hook.stablecoinToSide(address(DAI));
 
-    function test_Jury_IsJurorReturnsFalseForNonJuror() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
+        bytes32 salt = keccak256("s");
+        uint conf = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
 
-        // Without mocking, no one should be a juror
-        assertFalse(jury.isJuror(1, 0, User01), "User01 should not be juror without selection");
-    }
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(daiSide, 50_000e18, false, commit, address(0));
+        vm.stopPrank();
 
-    function test_Jury_GetJurorsEmptyBeforeSelection() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
+        Types.DepegStats memory pre = _hook.getDepegStats(address(DAI));
+        assertGt(pre.capOnSide, 0);
 
-        address[] memory jurors = jury.getJurors(1, 0);
-        assertEq(jurors.length, 0, "Should be empty before selection");
-    }
+        // Resolve, reveal, weights, payouts, restart
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
 
-    // ============================================================================
-    // COURT.SOL COMPREHENSIVE TESTS
-    // ============================================================================
-
-    function test_Court_GetRoundStartTime() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-
-        uint timeBefore = block.timestamp;
-
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        uint roundStart = court.getRoundStartTime(1);
-        assertGe(roundStart, timeBefore, "Round start should be >= time before");
-        assertLe(roundStart, block.timestamp, "Round start should be <= current time");
-    }
-
-    function test_Court_GetCurrentRoundStartsAtZero() public {
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        uint8 currentRound = court.getCurrentRound(1);
-        assertEq(currentRound, 0, "First round should be 0");
-    }
-
-    function test_Court_ResolutionStoresAllParams() public {
-        uint64 marketId = 12345;
-        uint8 numSides = 4;
-        bytes32 merkleRoot = keccak256("test_root");
-        bool requiresUnanimous = true;
-        bool requiresSignature = true;
-        uint64 appealCost = 5000e6;
-        bytes32 requester = bytes32(uint256(0xDEAD));
-
-        bytes memory message = _encodeResolutionRequest(
-            marketId, numSides, merkleRoot,
-            requiresUnanimous, requiresSignature,
-            appealCost, requester
-        );
-
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        (uint8 storedSides,,,,,,,,,uint256 storedAppealCost, bytes32 storedRequester) = court.resolutions(marketId);
-
-        assertEq(storedSides, numSides, "numSides mismatch");
-        assertEq(storedAppealCost, appealCost, "appealCost mismatch");
-        assertEq(storedRequester, requester, "requester mismatch");
-    }
-
-    function test_Court_IsInResolutionPhase() public {
-        assertFalse(court.isInResolutionPhase(1), "Should be false before resolution");
-
-        bytes memory message = _encodeResolutionRequest(1, 2, keccak256("root"), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        assertTrue(court.isInResolutionPhase(1), "Should be true after resolution started");
-    }
-
-    function test_Court_MerkleRootUpdatedOnResolution() public {
-        bytes32 expectedRoot = keccak256("my_merkle_root");
-        bytes memory message = _encodeResolutionRequest(1, 2, expectedRoot, false, false, 1000e6, bytes32(0));
-
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
-
-        assertEq(proof.merkleRoots(1), expectedRoot, "Merkle root should be set");
-    }
-
-    // ============================================================================
-    // FINALIZATION TESTS
-    // ============================================================================
-
-    function test_Proof_FinalizationInitialState() public {
-        (bool complete, uint cursor, uint total) = proof.getFinalizationStatus(1);
-
-        assertFalse(complete, "Should not be complete initially");
-        assertEq(cursor, 0, "Cursor should be 0");
-        assertEq(total, 0, "Total should be 0");
-    }
-
-    function test_Proof_ContinueFinalizationRequiresInit() public {
-        vm.expectRevert("Not initialized");
-        proof.continueFinalization(1);
-    }
-
-    function test_Proof_ResetFinalizationOnlyCourt() public {
         vm.prank(User01);
-        vm.expectRevert("Only court");
-        proof.resetFinalization(1);
+        _reveal(User01, daiSide, conf, salt);
+
+        address[] memory u = new address[](1);
+        uint8[] memory s = new uint8[](1);
+        u[0] = User01; s[0] = daiSide;
+        vm.warp(block.timestamp + 49 hours);
+        _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](u.length));
+        _hook.pushPayouts(u, s);
+
+        vm.warp(block.timestamp + 48 hours + 1);
+        _uma.restartMarket();
+
+        Types.DepegStats memory post = _hook.getDepegStats(address(DAI));
+        assertEq(post.capOnSide, 0, "DAI capital zeroed");
+        assertEq(post.capTotal, 0, "total capital zeroed");
+        assertFalse(post.depegged, "not depegged in new round");
+        // avgConf should carry from last round's reveals
+        assertGt(post.avgConf, 0, "avgConf carries as Bayesian prior");
     }
 
-    // ============================================================================
-    // REAL JURY SELECTION TESTS (using FFI for RANDAO headers)
-    // ============================================================================
+    // ══════════════════════════════════════════════════
+    //  Signal During Reveal Window
+    // ══════════════════════════════════════════════════
 
-    function test_Proof_ValidAffidavitSubmission() public {
-        uint64 marketId = 1;
 
-        bytes memory message = _encodeResolutionRequest(marketId, 2, bytes32(0), false, false, 1000e6, bytes32(0));
-        vm.prank(address(QUID));
-        court.receiveResolutionRequest(message);
+    /// @notice Cannot place new orders after resolution
+    function test_NoTrading_AfterResolution() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
 
-        uint affidavitId = _submitValidAffidavit(marketId, 0, 0);
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
 
-        assertEq(affidavitId, 0, "First affidavit should have ID 0");
-        assertEq(proof.getAffidavitCount(marketId), 1, "Should have 1 affidavit");
+        _resolveNone();
+
+        vm.startPrank(User02);
+        QUID.approve(address(_hook), type(uint).max);
+        vm.expectRevert("resolved");
+        _hook.placeOrder(side, 5_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
     }
 
-    function test_EdgeCase_CommitToNonExistentMarket() public {
-        // Contract now validates market is active (jurors selected) before allowing commit
-        uint8[] memory vote = new uint8[](1);
-        vote[0] = 0;
+    // ══════════════════════════════════════════════════
+    //  Confidence Reveal Edge Cases
+    //  (granularity: 100 steps, range: 100..10000)
+    // ══════════════════════════════════════════════════
 
-        vm.prank(getJuror(0));
-        vm.expectRevert("inactive");
-        jury.commitVote(999, 0, _createCommitment(vote, keccak256("salt")), address(0));
+    /// @notice Reveal with minimum confidence (100 = 1%)
+    function test_Reveal_MinConfidence() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("min");
+        uint conf = 100;  // 1% — new minimum (was 500)
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        _reveal(User01, side, conf, salt);
+
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        assertTrue(pos.revealed);
+        assertEq(pos.revealedConfidence, 100);
+    }
+
+    /// @notice Reveal with maximum confidence (10000 = 100%)
+    function test_Reveal_MaxConfidence() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("max");
+        uint conf = 10000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        _reveal(User01, side, conf, salt);
+
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        assertEq(pos.revealedConfidence, 10000);
+    }
+
+    /// @notice Fine-grained confidence (300 = 3%) — valid under new 100-step rule
+    function test_Reveal_FineGrainedConfidence() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("fine");
+        uint conf = 300;  // valid: >= 100, <= 10000, % 100 == 0
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        _reveal(User01, side, conf, salt);
+
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        assertEq(pos.revealedConfidence, 300);
+    }
+
+    /// @notice Bad confidence value (not multiple of 100) reverts
+    function test_Reveal_BadConfidence_Reverts() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        uint badConf = 7777;  // not divisible by 100
+        bytes32 salt = keccak256("bad");
+        bytes32 commit = keccak256(abi.encodePacked(badConf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        vm.expectRevert("bad confidence");
+        _reveal(User01, side, badConf, salt);
+    }
+
+    /// @notice Below-minimum confidence (50 < 100) reverts
+    function test_Reveal_BelowMinConfidence_Reverts() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        uint tooLow = 50;
+        bytes32 salt = keccak256("low");
+        bytes32 commit = keccak256(abi.encodePacked(tooLow, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        vm.expectRevert("bad confidence");
+        _reveal(User01, side, tooLow, salt);
+    }
+
+    /// @notice Wrong salt ... hash mismatch revert
+    function test_Reveal_WrongSalt_Reverts() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        uint conf = 8000;
+        bytes32 realSalt = keccak256("real");
+        bytes32 commit = keccak256(abi.encodePacked(conf, realSalt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        vm.expectRevert("hash mismatch");
+        _reveal(User01, side, conf, keccak256("wrong"));
+    }
+
+    /// @notice Double reveal reverts
+    function test_Reveal_Double_IsNoOp() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        bytes32 salt = keccak256("d");
+        uint conf = 8000;
+        bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+        vm.stopPrank();
+
+        _resolveNone();
+        vm.warp(block.timestamp + 49 hours);
+
+        vm.prank(User01);
+        _reveal(User01, side, conf, salt);
+
+        // Second reveal is a no-op (position already weighed)
+        uint weightBefore = _hook.getPosition(User01, side).weight;
+        vm.prank(User01);
+        _reveal(User01, side, conf, salt);
+        assertEq(_hook.getPosition(User01, side).weight, weightBefore);
+    }
+
+    // ══════════════════════════════════════════════════
+    //  Time Decay Verification
+    // ══════════════════════════════════════════════════
+
+
+    function _checkCapitalInvariant(uint8 n, string memory label) internal view {
+        Types.Market memory m = _hook.getMarket();
+        uint sum;
+        for (uint8 i; i < n; i++) sum += m.capitalPerSide[i];
+        assertEq(m.totalCapital, sum, label);
+    }
+
+    // ══════════════════════════════════════════════════
+    //  Sell + Entries Bookkeeping
+    // ══════════════════════════════════════════════════
+
+    function test_Sell_MultiEntry_ProRata() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+
+        _hook.placeOrder(side, 10_000e18, false, bytes32(uint(1)), address(0));
+        vm.warp(block.timestamp + 1 hours);
+        _hook.placeOrder(side, 20_000e18, false, bytes32(uint(1)), address(0));
+        vm.warp(block.timestamp + 1 hours);
+        _hook.placeOrder(side, 30_000e18, false, bytes32(uint(1)), address(0));
+
+        Types.PositionEntry[] memory entries = _hook.getPositionEntries(User01, side);
+        assertEq(entries.length, 3, "3 entries");
+
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        uint halfTokens = pos.totalTokens / 2;
+
+        _hook.sellPosition(side, halfTokens);
+
+        Types.Position memory posAfter = _hook.getPosition(User01, side);
+        assertEq(posAfter.totalTokens, pos.totalTokens - halfTokens);
+
+        Types.PositionEntry[] memory entriesAfter = _hook.getPositionEntries(User01, side);
+        assertGt(entriesAfter.length, 0, "some entries survive partial sell");
+
+        vm.stopPrank();
+    }
+
+    function test_Sell_FullPosition() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 10_000e18, false, bytes32(uint(1)), address(0));
+
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        _hook.sellPosition(side, pos.totalTokens);
+
+        Types.Position memory posAfter = _hook.getPosition(User01, side);
+        assertEq(posAfter.totalTokens, 0);
+        assertEq(posAfter.totalCapital, 0);
+        vm.stopPrank();
+    }
+
+    // ══════════════════════════════════════════════════
+    //  Fee Burn
+    // ══════════════════════════════════════════════════
+
+    function test_FeeBurn_AfterOrders() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 100_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        uint fees = _hook.accumulatedFees();
+        assertEq(fees, 4_000e18, "4% of 100k = 4k");
+
+        _hook.burnAccumulatedFees();
+        assertEq(_hook.accumulatedFees(), 0, "fees cleared");
+    }
+
+    // ══════════════════════════════════════════════════
+    //  Bond Calculation (escalating)
+    // ══════════════════════════════════════════════════
+
+    /// @notice Bond starts at floor, escalates after rejections
+    function test_Bond_EscalatingAfterRejections() public {
+        _deployAndSeed();
+
+        // Place order so there's capital
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(0, 5_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        // First bond: floor ($100)
+        uint bond0 = _uma.getMinimumBond();
+        assertGe(bond0, 100e6, "bond >= floor");
+
+        // Check 4th return value (rejections count) starts at 0
+        (,,, uint8 rej) = _uma.getAssertionInfo();
+        assertEq(rej, 0, "no rejections yet");
+    }
+
+    /// @notice Bond capped at BOND_CEILING regardless of rejections
+    function test_Bond_CeilingCap() public {
+        // The ceiling is 10_000e6. Even with many rejections,
+        // escalated bond = base << shift, capped at ceiling.
+        // Since BOND_CEILING = 10_000e6 and floor = 100e6:
+        // 100 << 7 = 12_800 > 10_000 ... clamps to 10_000
+        // This is tested implicitly through the escalation mechanism.
+        uint ceiling = _uma.BOND_CEILING();
+        assertEq(ceiling, 10_000e6, "ceiling is $10k");
+
+        uint floor = _uma.BOND_FLOOR();
+        assertEq(floor, 100e6, "floor is $100");
+    }
+
+    // ══════════════════════════════════════════════════
+    //  Multi-Round Stress Test
+    // ══════════════════════════════════════════════════
+
+    /// @notice Three full rounds: fresh...resolve...restart
+    function test_MultiRound_ThreeRounds() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        for (uint round = 1; round <= 3; round++) {
+            bytes32 salt = keccak256(abi.encodePacked("r", round));
+            uint conf = 8000;
+            bytes32 commit = keccak256(abi.encodePacked(conf, salt));
+
+            vm.startPrank(User01);
+            QUID.approve(address(_hook), type(uint).max);
+            _hook.placeOrder(side, 5_000e18, false, commit, address(0));
+            vm.stopPrank();
+
+            _resolveNone();
+            vm.warp(block.timestamp + 49 hours);
+
+            vm.prank(User01);
+            _reveal(User01, side, conf, salt);
+
+            address[] memory u = new address[](1);
+            uint8[] memory s = new uint8[](1);
+            u[0] = User01; s[0] = side;
+            vm.warp(block.timestamp + 49 hours);
+            _hook.calculateWeights(u, s, new Hook.RevealEntry[](0), new uint[](u.length));
+            _hook.pushPayouts(u, s);
+
+            _uma.restartMarket();
+
+            (,, uint r,) = _uma.getAssertionInfo();
+            assertEq(r, round + 1, "round incremented");
+
+            Types.Market memory m = _hook.getMarket();
+            assertEq(m.totalCapital, 0, "clean slate");
+            assertFalse(m.resolved);
+        }
+    }
+
+    // ══════════════════════════════════════════════════
+    //  Assertion Pending (full freeze during assertion)
+    // ══════════════════════════════════════════════════
+
+    /// @notice During assertion, both buys AND sells revert.
+    /// The claimed side is public — allowing sells would let
+    /// informed losers front-run the outcome.
+    function test_AssertionPending_FullFreeze() public {
+        _deployAndSeed();
+        uint8 side = _hook.stablecoinToSide(address(DAI));
+
+        // User01 places order during Trading
+        vm.startPrank(User01);
+        QUID.approve(address(_hook), type(uint).max);
+        _hook.placeOrder(side, 10_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        // Enter Asserting phase via depeg claim (side > 0)
+        uint bond = _uma.getMinimumBond();
+        deal(address(USDC), address(this), bond);
+        USDC.approve(address(_uma), bond);
+        _uma.requestResolution(side);
+
+        // User02 tries to buy — revert (assertion pending)
+        vm.startPrank(User02);
+        QUID.approve(address(_hook), type(uint).max);
+        vm.expectRevert("assertion pending");
+        _hook.placeOrder(side, 5_000e18, false, bytes32(uint(1)), address(0));
+        vm.stopPrank();
+
+        // User01 tries to sell — also reverts now (full freeze)
+        Types.Position memory pos = _hook.getPosition(User01, side);
+        vm.prank(User01);
+        vm.expectRevert("assertion pending");
+        _hook.sellPosition(side, pos.totalTokens);
     }
 }

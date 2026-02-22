@@ -7,14 +7,10 @@ import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 import {ReentrancyGuard} from "solmate/src/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "v4-core/src/libraries/FullMath.sol";
 import {WETH as WETH9} from "solmate/src/tokens/WETH.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
-import {IAToken} from "aave-v3/interfaces/IAToken.sol";
-import {IPool} from "aave-v3/interfaces/IPool.sol";
-
 import {BasketLib} from "./imports/BasketLib.sol";
 import {stdMath} from "forge-std/StdMath.sol";
 import {Types} from "./imports/Types.sol";
@@ -36,17 +32,14 @@ contract Vogue is
     // range = between ticks
     int24 public UPPER_TICK;
     int24 public LOWER_TICK;
-    uint lastScaledBalance;
-    uint lastLiquidityIndex;
+    uint internal lastVogueETH; // for yield delta
     uint public LAST_REPACK;
     // ^ timestamp allows us
     // to measure APY% for
     uint public USD_FEES;
     uint public ETH_FEES;
     Basket QUID; Aux AUX;
-    address public aWETH;
     uint public YIELD;
-    IPool public AAVE;
 
     // V4.POOLED_ETH() = principal + ALL compounded fees (even unclaimed)
     // totalShares = sum of all LP.pooled_eth = principal + claimed fees
@@ -64,12 +57,11 @@ contract Vogue is
 
     mapping(address => uint[]) public positions;
     // ^ allows several selfManaged positions...
-    constructor(address _aave)
+    constructor()
         Ownable(msg.sender) {
-        AAVE = IPool(_aave);
     }   fallback() external payable {}
 
-     modifier onlyAux {
+     modifier onlyUs {
         require(msg.sender == address(AUX)
              || msg.sender == address(V4)
              || msg.sender == address(this), "403"); _;
@@ -78,14 +70,11 @@ contract Vogue is
     function setup(address _quid,
         address _aux, address _core) external {
         require(address(AUX) == address(0), "!");
-        AUX = Aux(payable(_aux));
-        V4 = VogueCore(_core);
+        AUX = Aux(payable(_aux)); V4 = VogueCore(_core);
         QUID = Basket(_quid); renounceOwnership();
         require(QUID.V4() == address(this), "?");
         WETH = WETH9(payable(address(AUX.WETH())));
         WETH.approve(address(AUX), type(uint).max);
-        aWETH = AAVE.getReserveAToken(address(WETH));
-        WETH.approve(address(AAVE), type(uint).max);
         (uint160 sqrtPriceX96,,) = V4.poolStats(0, 0);
         token1isETH = V4.token1isETH();
         (LOWER_TICK,, UPPER_TICK,) = _updateTicks(
@@ -97,7 +86,6 @@ contract Vogue is
         returns (int24 newLowerTick, int24 newUpperTick) {
         int24 targetTick = TickMath.getTickAtSqrtPrice(
                            currentSqrtPrice) - distance;
-
         if (distance < 0) { // above the current price
             newLowerTick = _alignTick(targetTick, width);
             newUpperTick = _alignTick(targetTick + range, width);
@@ -137,12 +125,13 @@ contract Vogue is
         uint128 liquidity;
         if (token == address(0)) { amount = _depositETH(
                                      msg.sender, amount);
-            if (token1isETH) { require(newLowerTick > currentUpperTick);
+            if (token1isETH) {
+                require(newLowerTick > currentUpperTick);
                 liquidity = LiquidityAmounts.getLiquidityForAmount1(
                              TickMath.getSqrtPriceAtTick(newLowerTick),
                              TickMath.getSqrtPriceAtTick(newUpperTick), amount);
-            }
-            else { require(newUpperTick < currentLowerTick);
+            } else {
+                require(newUpperTick < currentLowerTick);
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
                              TickMath.getSqrtPriceAtTick(newLowerTick),
                              TickMath.getSqrtPriceAtTick(newUpperTick), amount);
@@ -159,13 +148,13 @@ contract Vogue is
                 // Above current = buy ETH with USD (provide $)
                 // Below current = sell ETH for USD (provide ETH)
                 liquidity = LiquidityAmounts.getLiquidityForAmount0(
-                          TickMath.getSqrtPriceAtTick(newLowerTick),
-                          TickMath.getSqrtPriceAtTick(newUpperTick), amount);
+                           TickMath.getSqrtPriceAtTick(newLowerTick),
+                           TickMath.getSqrtPriceAtTick(newUpperTick), amount);
             } else {
                 require(newLowerTick > currentUpperTick);
                 liquidity = LiquidityAmounts.getLiquidityForAmount1(
-                          TickMath.getSqrtPriceAtTick(newLowerTick),
-                          TickMath.getSqrtPriceAtTick(newUpperTick), amount);
+                           TickMath.getSqrtPriceAtTick(newLowerTick),
+                           TickMath.getSqrtPriceAtTick(newUpperTick), amount);
             }
         } Types.SelfManaged memory newPosition = Types.SelfManaged({
               created: block.number, owner: msg.sender,
@@ -179,7 +168,6 @@ contract Vogue is
                 newLowerTick, newUpperTick, address(0));
     }
 
-
     function pendingRewards(address user) public
         view returns (uint ethReward, uint usdReward) {
         Types.Deposit memory LP = autoManaged[user];
@@ -189,10 +177,8 @@ contract Vogue is
         uint usdOwed = FullMath.mulDiv(LP.pooled_eth, USD_FEES, WAD);
 
         // Saturating subtraction to prevent underflow
-        ethReward = ethOwed > LP.fees_eth ?
-                    ethOwed - LP.fees_eth : 0;
-        usdReward = usdOwed > LP.fees_usd ?
-                    usdOwed - LP.fees_usd : 0;
+        ethReward = ethOwed > LP.fees_eth ? ethOwed - LP.fees_eth : 0;
+        usdReward = usdOwed > LP.fees_usd ? usdOwed - LP.fees_usd : 0;
     }
 
     // withdrawal by LP of ETH specifically, depositor may
@@ -211,15 +197,13 @@ contract Vogue is
         if (fees_eth > 0) { // rewards
             LP.pooled_eth += fees_eth;
             totalShares += fees_eth;
-        } // Handle USD rewards by
-        // dilutive minting of QD
+        } // Handle USD rewards
         fees_usd += LP.usd_owed;
         if (fees_usd > 0) {
             LP.usd_owed = 0;
             QUID.mint(msg.sender,
             fees_usd, address(QUID), 0);
         }
-
         // Cap withdrawal at user's total balance
         // (i.e. principal + compounded rewards)
         amount = Math.min(amount, LP.pooled_eth);
@@ -244,8 +228,7 @@ contract Vogue is
             if (amount > sent) { uint shortfall = amount - sent;
                 // FIX: Re-read POOLED_ETH after modLP reduced it
                 uint currentPooledETH = V4.POOLED_ETH();
-                uint available = BasketLib.aaveAvailable(
-                            address(AAVE), address(WETH));
+                uint available = AUX.vogueETH();
                 uint excess = available > currentPooledETH
                             ? available - currentPooledETH : 0;
 
@@ -265,18 +248,19 @@ contract Vogue is
                 amount = Math.min(sent, amount);
                 LP.pooled_eth -= amount;
                 totalShares -= amount;
+                // _sendETH / arbETH reduced vogueETH but lastVogueETH
+                // is stale-high → next _syncYield sees current < last → skips.
+                // Re-sync bookmark so gap yield isn't lost.
+                lastVogueETH = AUX.vogueETH();
             } else { // Pool delivered enough
                 // (or more) - burn full amount
                 LP.pooled_eth -= amount;
                 totalShares -= amount;
             }
-        } if (LP.pooled_eth == 0)
-          delete autoManaged[msg.sender];
-
-        else { LP.fees_eth = FullMath.mulDiv(
-                LP.pooled_eth, ETH_FEES, WAD);
-               LP.fees_usd = FullMath.mulDiv(
-                LP.pooled_eth, USD_FEES, WAD);
+        } if (LP.pooled_eth == 0) delete autoManaged[msg.sender];
+        else {
+            LP.fees_eth = FullMath.mulDiv(LP.pooled_eth, ETH_FEES, WAD);
+            LP.fees_usd = FullMath.mulDiv(LP.pooled_eth, USD_FEES, WAD);
         }
     }
 
@@ -285,14 +269,23 @@ contract Vogue is
     function deposit(uint amount)
         external payable nonReentrant {
         uint price = AUX.getTWAP(1800);
-        require(price > 0, "Invalid TWAP");
+        require(price > 0, "TWAP");
         uint deltaETH; uint deltaUSD;
         if (amount == 0 && msg.value == 0) return;
-        amount = _depositETH(msg.sender, amount);
 
+        // _repack MUST run before _depositETH so that _syncYield
+        // reads the AAVE balance *before* the new deposit lands.
+        // Otherwise the deposit is misattributed as AAVE yield,
+        // inflating ETH_FEES and double-counting into pooled_eth.
         Types.Deposit storage LP = autoManaged[msg.sender];
         (uint160 sqrtPriceX96, int24 tickLower,
          int24 tickUpper,) = _repack();
+
+        amount = _depositETH(msg.sender, amount);
+        // Advance the yield bookmark past the deposit so the
+        // *next* _syncYield doesn't mistake it for yield either.
+        lastVogueETH += amount;
+
         uint eth_fees = ETH_FEES;
         uint usd_fees = USD_FEES;
         if (LP.pooled_eth > 0) {
@@ -311,22 +304,26 @@ contract Vogue is
             V4.modLP(sqrtPriceX96, deltaETH, deltaUSD,
                     tickLower, tickUpper, msg.sender);
         } // withdraw and refund excess from vault...
-        if (deltaETH < amount)
+        if (deltaETH < amount) {
             _sendETH(amount - deltaETH, msg.sender);
+            // _sendETH may pull from vogueETH, stale WETH, or native ETH.
+            // Re-sync bookmark to actual vogueETH so _syncYield
+            // doesn't misattribute the refunded portion as yield.
+            lastVogueETH = AUX.vogueETH();
+        }
     }
 
     function addLiquidityHelper(
         uint deltaETH, uint price) public
-        onlyAux returns (uint, uint) { //
+        onlyUs returns (uint, uint) {
         uint[13] memory deposits = AUX.get_deposits();
         uint liquidTotal = deposits[12] - deposits[11]
                             + AUX.getUSYCRedeemable();
-
+                            
         uint committed = V4.POOLED_USD() * 1e12;
         if (committed >= liquidTotal) return (0, 0);
         uint surplus = liquidTotal - committed;
-        uint aaveAvail = BasketLib.aaveAvailable(
-                    address(AAVE), address(WETH));
+        uint aaveAvail = AUX.vogueETH();
 
         uint pooledETH = V4.POOLED_ETH();
         uint availableETH = aaveAvail > pooledETH
@@ -350,7 +347,7 @@ contract Vogue is
         return (usdOut, deltaETH);
     }
 
-     // pull liquidity from
+     // pull liquidity from. . .
     function pull(uint id, // existing self-managed position
         int percent, address token) external nonReentrant {
         Types.SelfManaged storage position = selfManaged[id];
@@ -367,7 +364,7 @@ contract Vogue is
 
         uint[] storage myIds = positions[msg.sender];
         uint lastIndex = myIds.length > 0 ?
-                      myIds.length - 1 : 0;
+                         myIds.length - 1 : 0;
 
         if (percent == 100) { delete selfManaged[id];
             for (uint i = 0; i <= lastIndex; i++) {
@@ -409,15 +406,7 @@ contract Vogue is
                     FullMath.mulDiv(price, fees, WAD)) * 365 days,
                       WAD, denom) / WAD;
             }
-        }
-        LAST_REPACK = block.timestamp;
-    }
-
-    /// @notice Deposit WETH returned from flash loan
-    /// @dev Called by Aux after flash loan callback
-    function depositFlashReturn() external onlyAux {
-        uint amount = WETH.balanceOf(address(this));
-        AAVE.supply(address(WETH), amount, address(this), 0);
+        } LAST_REPACK = block.timestamp;
     }
 
     function _depositETH(address sender,
@@ -436,77 +425,54 @@ contract Vogue is
                                 address(this), took);
                                         sent += took;
             }
-        } if (sent > 0) AAVE.supply(address(WETH),
-                          sent, address(this), 0);
-    }
-
-    function _takeWETH(uint howMuch)
-        internal returns (uint withdrawn) {
-        withdrawn = Math.min(howMuch, BasketLib.aaveAvailable(
-                                 address(AAVE), address(WETH)));
-
-        if (withdrawn == 0) return 0;
-        withdrawn = AAVE.withdraw(address(WETH),
-                      withdrawn, address(this));
+        } if (sent > 0) {
+            // Sweep ALL WETH to AAVE — captures sent + any residual.
+            // Only `sent` is returned for LP accounting; any extra
+            // goes to vogueETH and _syncYield distributes it as yield.
+            uint toDeposit = WETH.balanceOf(address(this));
+            AUX.vogueETHOp(toDeposit, 0);
+        }
     }
 
     function takeETH(uint howMuch, address recipient)
-       external onlyAux returns (uint sent) {
+       external onlyUs returns (uint sent) {
        sent = _sendETH(howMuch, recipient);
     }
 
-    function depositYield(uint amount)
-        external onlyAux { if (amount == 0) return;
-        _syncYield(); // capture vault yield before anything else
-        WETH.transferFrom(msg.sender, address(this), amount);
-        AAVE.supply(address(WETH), amount, address(this), 0);
-        lastScaledBalance = IAToken(aWETH).scaledBalanceOf(address(this));
-        // Attribute yield to all LPs proportionally
-        if (totalShares > 0)
-            ETH_FEES += FullMath.mulDiv(
-               amount, WAD, totalShares);
-    }
-
-    /// @notice Sync AAVE yield into ETH_FEES unconditionally
-    /// @dev Called at top of _repack so yield is always current
-    /// before any deposit/withdraw snapshot is set
+    /// @notice Sync AAVE yield into ETH_FEES
+    /// @dev Reads Vogue's entitled ETH from Aux
     function _syncYield() internal {
-        uint currentScaled = IAToken(aWETH).scaledBalanceOf(address(this));
-        uint currentIndex = AAVE.getReserveNormalizedIncome(address(WETH));
-        if (lastScaledBalance > 0 && currentIndex > lastLiquidityIndex) {
-            uint aaveYield = FullMath.mulDiv(lastScaledBalance,
-                        currentIndex - lastLiquidityIndex, RAY);
+        uint current = AUX.vogueETHOp(0, 2);
+        if (lastVogueETH > 0 && current > lastVogueETH) {
+            uint aaveYield = current - lastVogueETH;
             if (totalShares > 0)
-                ETH_FEES += FullMath.mulDiv(aaveYield, WAD, totalShares);
-        }
-        lastScaledBalance = currentScaled;
-        lastLiquidityIndex = currentIndex;
+                ETH_FEES += FullMath.mulDiv(
+                aaveYield, WAD, totalShares);
+        } lastVogueETH = current;
     }
 
     function _sendETH(uint howMuch,
        address toWhom) internal returns (uint sent) {
         uint alreadyInETH = address(this).balance;
-        if (alreadyInETH >= howMuch) {
-            // Already have enough
-            sent = howMuch;
-        } else {
-            uint needed = howMuch - alreadyInETH;
-            uint withdrawn = _takeWETH(needed);
-            WETH.withdraw(withdrawn);
-            sent = withdrawn + alreadyInETH;
+        if (alreadyInETH >= howMuch) sent = howMuch;
+        else { uint needed = howMuch - alreadyInETH;
+            uint inWETH = WETH.balanceOf(address(this));
+            if (needed > inWETH) {
+                uint got = AUX.vogueETHOp(
+                       needed - inWETH, 1);
+                             inWETH += got;
+            }  WETH.withdraw(inWETH);
+            sent = inWETH + alreadyInETH;
         }
         (bool success, ) = payable(toWhom).call{
-                                    value: sent }("");
+                                   value: sent }("");
         if (!success) sent = 0;
-        // NOTE: On failed transfer, ETH remains in contract.
-        // This is acceptable as it gets reused by next caller.
     }
 
     function _repack() internal returns (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper, uint128 myLiquidity) {
         _syncYield(); // capture vault yield before anything else
-        int24 currentTick;
-        tickUpper = UPPER_TICK; tickLower = LOWER_TICK;
+        int24 currentTick; tickUpper = UPPER_TICK; tickLower = LOWER_TICK;
         (sqrtPriceX96, currentTick, myLiquidity) = V4.poolStats(
                                             tickLower, tickUpper);
 
@@ -530,13 +496,12 @@ contract Vogue is
                  delta0, delta1) = V4.repack(myLiquidity, sqrtPriceX96,
                         tickLower, tickUpper, newTickLower, newTickUpper);
                 YIELD = _calculateYield(fees0, fees1, delta0, delta1, price);
-            }
-            LOWER_TICK = newTickLower; UPPER_TICK = newTickUpper;
+            } LOWER_TICK = newTickLower; UPPER_TICK = newTickUpper;
             tickLower = newTickLower; tickUpper = newTickUpper;
         }
     }
 
-    function repack() public onlyAux returns (uint160 sqrtPriceX96,
+    function repack() public onlyUs returns (uint160 sqrtPriceX96,
         int24 tickLower, int24 tickUpper, uint128 myLiquidity) {
         (sqrtPriceX96, tickLower, tickUpper, myLiquidity) = _repack();
     }

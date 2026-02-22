@@ -1,0 +1,17 @@
+
+{
+  "chainSelectorName": "ethereum-mainnet",
+  "isTestnet": true,
+
+  "umaContractAddress": "0x194c5428f0CC9A8e8BE18811907dfb2892a1c40B",
+  "auxContractAddress": "0x607b9ae1cCD1A853C4802De15388494FD804e396",
+
+  "coingeckoApiUrl": "https://pro-api.coingecko.com/api/v3",
+  "coinmarketcapApiUrl": "https://pro-api.coinmarketcap.com/v1",
+  "defillamaApiUrl": "https://stablecoins.llama.fi",
+
+  "depegThresholdBps": 100,
+  "analysisWindowHours": 168,
+  "watchdogMinConfidence": 80,
+  "watchdogMinVendors": 2
+}

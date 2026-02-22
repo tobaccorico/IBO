@@ -8,26 +8,21 @@ import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {ISwapRouter} from "../src/imports/v3/ISwapRouter.sol";
 import {INonfungiblePositionManager} from "../src/imports/v3/INonfungiblePositionManager.sol";
 
-import {AuxArb as Aux} from "../src/AuxArb.sol";
 import {Amp} from "../src/Amp.sol";
-import {VogueArb as Vogue} from "../src/VogueArb.sol";
+import {UMA} from "../src/UMA.sol";
+import {Hook} from "../src/Hook.sol";
+import {Vogue} from "../src/Vogue.sol";
 import {Rover} from "../src/Rover.sol";
 import {Basket} from "../src/Basket.sol";
-import {BasketLib} from "../src/BasketLib.sol";
+
 import {VogueCore} from "../src/VogueCore.sol";
 import {Types} from "../src/imports/Types.sol";
-import {MessageCodec} from "../src/imports/MessageCodec.sol";
-import {Proof} from "../src/Proof.sol";
-import {Jury} from "../src/Jury.sol";
-import {Court} from "../src/Court.sol";
+import {BasketLib} from "../src/imports/BasketLib.sol";
 
 import {Script} from "forge-std/Script.sol";
+import {AuxArb as Aux} from "../src/L2/AuxArb.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IERC4626} from "forge-std/interfaces/IERC4626.sol";
-
-// forge script scripts/DeployL1.s.sol:Deploy --rpc-url mainnet --broadcast --verify
-// If verification fails during deployment (network issues, etc.), you can retry later:
-// forge script scripts/DeployL1.s.sol:Deploy --rpc-url mainnet --resume --verify
 
 contract Deploy is Script {
 
@@ -35,6 +30,8 @@ contract Deploy is Script {
     address public aavePool = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
     address public aaveData = 0x13c833256BD767da2320d727a3691BAff3770E39;
     address public aaveAddr = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
+    address constant UMA_OOV3 = 0xa6147867264374F324524E30C02C331cF28aa879;
+    // address public JAM = 0xbeb0b0623f66bE8cE162EbDfA2ec543A522F4ea6;
 
     INonfungiblePositionManager public nfpm = INonfungiblePositionManager(0xC36442b4a4522E871399CD717aBDD847Ab11FE88);
     ISwapRouter public V3router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
@@ -63,10 +60,6 @@ contract Deploy is Script {
 
     address[] public STABLECOINS;
     address[] public VAULTS;
-
-    Proof public proof;
-    Jury public jury;
-    Court public court;
     Basket public QUID;
 
     VogueCore public CORE;
@@ -74,6 +67,8 @@ contract Deploy is Script {
     Rover public V3;
     Aux public AUX;
     Amp public AMP;
+    Hook public HOOK;
+    UMA public _uma;
 
     function run() public { // handle private key...
         string memory privateKeyStr = vm.envString(
@@ -105,14 +100,14 @@ contract Deploy is Script {
         ];
 
         vm.startBroadcast(deployerPrivateKey);
-
+        _uma = new UMA(UMA_OOV3, address(USDC));
         AMP = new Amp(aavePool, aaveData, aaveAddr);
         V3 = new Rover(address(AMP), address(WETH),
             address(USDC), address(nfpm),
             address(WETHv3pool),
             address(V3router));
 
-        V4 = new Vogue(aavePool);
+        V4 = new Vogue();
         CORE = new VogueCore(poolManager);
         AUX = new Aux(address(V4),
             address(CORE), address(AMP),
@@ -121,37 +116,30 @@ contract Deploy is Script {
             STABLECOINS, VAULTS);
 
         AMP.setup(payable(address(V3)), address(AUX));
-        QUID = new Basket(address(V4), address(AUX));
+        QUID = new Basket(address(V4), address(AUX),
+                      address(_uma), address(USDC));
+        HOOK = new Hook(address(_uma), address(QUID));
+
+        // ── Wire everything up ──
+        QUID.setHook(address(HOOK));
+        _uma.setQUID(address(QUID));
+        _uma.setHook(address(HOOK));
 
         CORE.setup(address(V4), address(AUX), address(WETHv3pool));
         V4.setup(address(QUID), address(AUX), address(CORE));
-
-        jury = new Jury(address(QUID));
-        proof = new Proof(address(QUID));
-
-        court = new Court(
-            address(QUID),
-            address(jury),
-            address(proof));
-
-        jury.setup(address(court), address(proof));
-        proof.setCourt(address(court));
-        proof.setJury(address(jury));
-
-        AUX.setQuid(address(QUID),
-        address(jury), address(court));
+        // AUX.setQuid(address(QUID), JAM);
+        AUX.setQuid(address(QUID));
         V3.setAux(address(AUX));
 
         console.log("=== Deployed Addresses ===");
+        console.log("UMA:", address(_uma));
         console.log("AMP:", address(AMP));
         console.log("V3 (Rover):", address(V3));
         console.log("V4 (Vogue):", address(V4));
         console.log("CORE (VogueCore):", address(CORE));
         console.log("AUX:", address(AUX));
         console.log("QUID (Basket):", address(QUID));
-        console.log("Jury:", address(jury));
-        console.log("Proof:", address(proof));
-        console.log("Court:", address(court));
+        console.log("HOOK:", address(HOOK));
 
         vm.stopBroadcast();
     }

@@ -1,0 +1,27 @@
+{
+    "name": "solidity-math-utils",
+    "version": "2.2.0",
+    "description": "Solidity Mathematical Utilities",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/barakman/solidity-math-utils.git"
+    },
+    "author": "Barak Manos",
+    "license": "SEE LICENSE IN https://raw.githubusercontent.com/bancorprotocol/contracts-solidity/master/LICENSE",
+    "files": [
+        "project/contracts/*.sol",
+        "project/contracts/common/*.sol"
+    ],
+    "scripts": {
+        "build": "hardhat compile",
+        "test": "hardhat test --bail",
+        "verify": "hardhat coverage"
+    },
+    "devDependencies": {
+        "@nomiclabs/hardhat-truffle5": "2.1.0",
+        "@nomiclabs/hardhat-web3": "2.1.0",
+        "decimal.js": "10.6.0",
+        "hardhat": "2.28.0",
+        "solidity-coverage": "0.8.17"
+    }
+}

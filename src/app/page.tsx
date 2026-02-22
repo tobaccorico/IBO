@@ -38,12 +38,15 @@ const iface = new ethers.Interface([
   'function swap(address token, bool forETH, uint256 amount, uint256 waitable) payable returns (uint256)',
   'function getTWAP(uint32 period) view returns (uint256)',
   'function redeem(uint256 amount)',
+  // Basket functions
+  'function totalMatureBalanceOf(address owner) view returns (uint256)',
   // Aux leverage functions
   'function leverETH(uint256 amount) payable',
   'function leverUSD(uint256 amount, address token)',
   // Aux metrics - total USD in basket and accumulated yield
   'function get_metrics(bool force) returns (uint256, uint256)',
   'function getAverageYield() view returns (uint256)',
+  'function get_deposits() returns (uint256[13])',
   'function getFee(address token) view returns (uint256)',
   // VogueCore - POOLED_ETH
   'function POOLED_ETH() view returns (uint256)',
@@ -52,13 +55,19 @@ const iface = new ethers.Interface([
   'function YIELD() view returns (uint256)',
   'function ETH_FEES() view returns (uint256)',
   'function USD_FEES() view returns (uint256)',
+  // Vogue self-managed LP
+  'function outOfRange(uint256 amount, address token, int24 distance, int24 range) payable returns (uint256)',
+  'function pull(uint256 id, int256 percent, address token)',
+  'function positions(address user, uint256 index) view returns (uint256)',
+  'function selfManaged(uint256 id) view returns (uint256 created, address owner, int24 lower, int24 upper, int256 liq)',
+  'function autoManaged(address user) view returns (uint256 pooled_eth, uint256 fees_eth, uint256 fees_usd, uint256 usd_owed)',
 ])
 
 const encodeBalanceOf = (address: string) => iface.encodeFunctionData('balanceOf', [address])
 const encodeAllowance = (owner: string, spender: string) => iface.encodeFunctionData('allowance', [owner, spender])
 const encodeApprove = (spender: string, amount: bigint) => iface.encodeFunctionData('approve', [spender, amount])
 const encodeCurrentMonth = () => iface.encodeFunctionData('currentMonth', [])
-const encodeMint = (pledge: string, amount: bigint, token: string, when: number) => 
+const encodeMint = (pledge: string, amount: bigint, token: string, when: number) =>
   iface.encodeFunctionData('mint', [pledge, amount, token, when])
 const encodeDeposit = (amount: bigint) => iface.encodeFunctionData('deposit', [amount])
 const encodeWithdraw = (amount: bigint) => iface.encodeFunctionData('withdraw', [amount])
@@ -66,17 +75,115 @@ const encodeSwap = (token: string, forETH: boolean, amount: bigint, waitable: nu
   iface.encodeFunctionData('swap', [token, forETH, amount, waitable])
 const encodeGetTWAP = (period: number) => iface.encodeFunctionData('getTWAP', [period])
 const encodeRedeem = (amount: bigint) => iface.encodeFunctionData('redeem', [amount])
+const encodeTotalMatureBalanceOf = (owner: string) => iface.encodeFunctionData('totalMatureBalanceOf', [owner])
 const encodePooledETH = () => iface.encodeFunctionData('POOLED_ETH', [])
 const encodeLeverETH = (amount: bigint) => iface.encodeFunctionData('leverETH', [amount])
 const encodeLeverUSD = (amount: bigint, token: string) => iface.encodeFunctionData('leverUSD', [amount, token])
 // Metrics functions
 const encodeGetMetrics = (force: boolean) => iface.encodeFunctionData('get_metrics', [force])
 const encodeGetAverageYield = () => iface.encodeFunctionData('getAverageYield', [])
+const encodeGetDeposits = () => iface.encodeFunctionData('get_deposits', [])
 const encodeGetFee = (token: string) => iface.encodeFunctionData('getFee', [token])
 const encodeTotalShares = () => iface.encodeFunctionData('totalShares', [])
 const encodeYield = () => iface.encodeFunctionData('YIELD', [])
 const encodeETHFees = () => iface.encodeFunctionData('ETH_FEES', [])
 const encodeUSDFees = () => iface.encodeFunctionData('USD_FEES', [])
+// Vogue self-managed LP
+const encodeOutOfRange = (amount: bigint, token: string, distance: number, range: number) =>
+  iface.encodeFunctionData('outOfRange', [amount, token, distance, range])
+const encodePull = (id: bigint, percent: number, token: string) =>
+  iface.encodeFunctionData('pull', [id, percent, token])
+const encodePositions = (user: string, index: number) =>
+  iface.encodeFunctionData('positions', [user, index])
+const encodeSelfManaged = (id: bigint) =>
+  iface.encodeFunctionData('selfManaged', [id])
+const encodeAutoManaged = (user: string) =>
+  iface.encodeFunctionData('autoManaged', [user])
+
+// ============== HOOK (Prediction Market) Interface ==============
+// Keeper/delegate address — auto-set on every placeOrder so keeper can batchReveal on behalf of users
+const HOOK_DELEGATE = '0x89CA5f6Af99A6106d0148a8839E153BB02010ef0'
+
+const hookIface = new ethers.Interface([
+  'function placeOrder(uint8 side, uint256 capital, bool autoRollover, bytes32 commitHash, address delegate)',
+  'function sellPosition(uint8 side, uint256 tokensToSell)',
+  'function batchReveal(address user, uint8 side, tuple(uint256 confidence, bytes32 salt)[] reveals)',
+  'function recommit(uint8 side, bytes32 newCommitHash)',
+  'function settleAssertion()',
+  'function calculateWeights(address[] users, uint8[] sides)',
+  'function pushPayouts(address[] users, uint8[] sides)',
+  'function burnAccumulatedFees()',
+  'function getMarket() view returns (tuple(uint256 marketId, uint8 numSides, uint256 startTime, uint256 roundStartTime, int128 b, uint32 roundNumber, bool resolved, uint8 winningSide, uint256 resolutionTimestamp, uint256 totalCapital, uint32 positionsTotal, uint32 positionsRevealed, uint32 positionsPaidOut, uint256 totalWinnerCapital, uint256 totalLoserCapital, uint256 totalWinnerWeight, uint256 totalLoserWeight, bool weightsComplete, bool payoutsComplete, bool assertionPending, int128[12] q, uint256[12] capitalPerSide))',
+  'function getPosition(address user, uint8 side) view returns (tuple(address user, uint8 side, uint256 totalCapital, uint256 totalTokens, bytes32 commitmentHash, uint256 entryTimestamp, uint32 lastRound, bool revealed, uint256 revealedConfidence, uint256 weight, bool paidOut, bool autoRollover, address delegate))',
+  'function getAllPrices() view returns (uint256[])',
+  'function getCapitalPerSide() view returns (uint256[12])',
+  'function getRoundStartTime() view returns (uint40)',
+  'function getMarketCapital() view returns (uint256)',
+  'function disputeFrozen() view returns (bool)',
+  'function accumulatedFees() view returns (uint256)',
+])
+const encodeGetMarket = () => hookIface.encodeFunctionData('getMarket', [])
+const encodeGetPosition = (user: string, side: number) => hookIface.encodeFunctionData('getPosition', [user, side])
+const encodeGetAllPrices = () => hookIface.encodeFunctionData('getAllPrices', [])
+const encodeGetCapitalPerSide = () => hookIface.encodeFunctionData('getCapitalPerSide', [])
+const encodeHookPlaceOrder = (side: number, capital: bigint, autoRollover: boolean, commitHash: string) =>
+  hookIface.encodeFunctionData('placeOrder', [side, capital, autoRollover, commitHash, HOOK_DELEGATE])
+const encodeHookSell = (side: number, tokens: bigint) =>
+  hookIface.encodeFunctionData('sellPosition', [side, tokens])
+const encodeHookBatchReveal = (user: string, side: number, reveals: { confidence: number; salt: string }[]) =>
+  hookIface.encodeFunctionData('batchReveal', [user, side, reveals.map(r => ({ confidence: r.confidence, salt: r.salt }))])
+const encodeHookRecommit = (side: number, newCommitHash: string) =>
+  hookIface.encodeFunctionData('recommit', [side, newCommitHash])
+const encodeHookSettle = () =>
+  hookIface.encodeFunctionData('settleAssertion', [])
+const encodeDisputeFrozen = () => hookIface.encodeFunctionData('disputeFrozen', [])
+
+// Generate commitment hash: keccak256(abi.encodePacked(confidence, salt))
+const generateCommitHash = (confidence: number, salt: string): string => {
+  const packed = ethers.solidityPacked(['uint256', 'bytes32'], [confidence, salt])
+  return ethers.keccak256(packed)
+}
+const generateSalt = (): string => ethers.hexlify(ethers.randomBytes(32))
+
+// Retrieve stored confidence entries from localStorage for a given position
+const getStoredConfidences = (chainId: number, mktId: number, side: number, user: string): { confidence: number; salt: string; commitHash: string }[] => {
+  try {
+    const key = `hook-conf-${chainId}-${mktId}-${side}-${user}`
+    const raw = localStorage.getItem(key)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed
+    if (parsed.confidence && parsed.salt) return [parsed] // legacy single entry
+    return []
+  } catch { return [] }
+}
+
+// Compute capital-weighted average confidence from stored entries
+// Since we don't store per-entry capital, we use a simple average
+const getAverageStoredConfidence = (entries: { confidence: number }[]): number | null => {
+  if (entries.length === 0) return null
+  const sum = entries.reduce((acc, e) => acc + e.confidence, 0)
+  return sum / entries.length
+}
+
+// Estimate expected payout if this side wins
+// Formula: capital + (capital / capitalOnMySide) × capitalOnOtherSides
+// Adjusted by confidence multiplier: (myConfidence / neutralConfidence)
+// This is a proportional estimate assuming average confidence distribution
+const estimateExpectedPayout = (
+  myCapital: number, mySideCapital: number, totalMarketCapital: number,
+  myConfidence: number | null, neutralConfidence: number = 5000
+): { base: number; adjusted: number | null } => {
+  if (mySideCapital <= 0 || totalMarketCapital <= 0) return { base: myCapital, adjusted: null }
+  const otherSidesCapital = totalMarketCapital - mySideCapital
+  const myShare = myCapital / mySideCapital
+  const basePayout = myCapital + myShare * otherSidesCapital
+  if (myConfidence === null || myConfidence <= 0) return { base: basePayout, adjusted: null }
+  // Confidence multiplier: >50% = above average weight, <50% = below
+  const confMultiplier = myConfidence / neutralConfidence
+  const adjustedPayout = myCapital + myShare * otherSidesCapital * confMultiplier
+  return { base: basePayout, adjusted: adjustedPayout }
+}
 
 // USDT addresses - requires allowance reset to 0 before setting new allowance
 const USDT_ADDRESSES: Record<number, string> = {
@@ -103,19 +210,19 @@ const doApproval = async (
   setStatus?: (s: string) => void
 ): Promise<boolean> => {
   const maxUint256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
-  
+
   // Check current allowance
   const allowanceResult = await window.ethereum.request({
     method: 'eth_call',
     params: [{ to: tokenAddress, data: encodeAllowance(ownerAddress, spender) }, 'latest'],
   })
   const currentAllowance = BigInt(allowanceResult)
-  
+
   // If allowance is sufficient, no need to approve
   if (currentAllowance >= amount) {
     return true
   }
-  
+
   // USDT special case: must reset to 0 first if current allowance > 0
   if (isUSDT(tokenAddress, chainId) && currentAllowance > 0n) {
     setStatus?.('Resetting USDT allowance to 0...')
@@ -138,7 +245,7 @@ const doApproval = async (
       if (receipt?.status === '0x0') throw new Error('USDT allowance reset failed')
     }
   }
-  
+
   // Now set the new allowance
   setStatus?.('Approving token...')
   const approveTx = await window.ethereum.request({
@@ -149,7 +256,7 @@ const doApproval = async (
       data: encodeApprove(spender, maxUint256),
     }],
   })
-  
+
   // Wait for approval
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 1000))
@@ -164,7 +271,7 @@ const doApproval = async (
 }
 
 export default function QuidApp() {
-  const [chainId, setChainId] = useState(1) // Default to Ethereum L1
+  const [chainId, setChainId] = useState(42161) // Default to Arbitrum
   const [protocol, setProtocol] = useState<'v3' | 'v4'>('v4')
   const [activeTab, setActiveTab] = useState('mint')
   const [connected, setConnected] = useState(false)
@@ -176,7 +283,7 @@ export default function QuidApp() {
   // Mint state
   const [mintAmount, setMintAmount] = useState('')
   const [selectedToken, setSelectedToken] = useState<StableToken | null>(null)
-  const [maturityMonths, setMaturityMonths] = useState(1)
+  const [maturityMonths, setMaturityMonths] = useState(12)
   const [currentMonth, setCurrentMonth] = useState(0)
 
   // Token balances and allowances
@@ -194,15 +301,53 @@ export default function QuidApp() {
   // Deposit/Withdraw state
   const [depositAmount, setDepositAmount] = useState('')
   const [withdrawAmount, setWithdrawAmount] = useState('')
+  const [depositSubTab, setDepositSubTab] = useState<'auto' | 'selfManaged'>('auto')
+
+  // Self-managed LP state (Vogue.outOfRange)
+  const [oorAmount, setOorAmount] = useState('')
+  const [oorToken, setOorToken] = useState<'eth' | 'usd'>('eth')
+  const [oorDistance, setOorDistance] = useState(5) // UI shows %, maps to distance * 100 ticks
+  const [oorRange, setOorRange] = useState(2) // UI shows %, maps to range * 100 ticks
+  const [oorStable, setOorStable] = useState<StableToken | null>(null) // selected stablecoin for USD side
+  const [selfManagedPositions, setSelfManagedPositions] = useState<
+    { id: bigint; lower: number; upper: number; liq: bigint }[]
+  >([])
+  const [pullPercent, setPullPercent] = useState(100)
+  const [pullToken, setPullToken] = useState<string>('0x0000000000000000000000000000000000000000') // ETH default
+
+  // Auto-managed LP info
+  const [autoManagedInfo, setAutoManagedInfo] = useState<{
+    pooled: number; feesEth: number; feesUsd: number; usdOwed: number
+  } | null>(null)
 
   // QD token state
   const [qdBalance, setQdBalance] = useState('0')
   const [redeemAmount, setRedeemAmount] = useState('')
   const [matureQdBalance, setMatureQdBalance] = useState('0') // For future redeem gating
-  
+  // (haircut vote UI removed — vote still in contract for depeg pricing)
+
   // UI state
   const [showAboutModal, setShowAboutModal] = useState(false)
-  const [aboutPage, setAboutPage] = useState(0) // 0 = first diagram, 1 = second
+  const [showWaiver, setShowWaiver] = useState(false)
+  const [waiverAccepted, setWaiverAccepted] = useState(false)
+  const [waiverChecked, setWaiverChecked] = useState(false)
+
+  // Hook (Prediction Market) state
+  const MARKET_ID = 1 // canonical depeg market
+  const [hookMarket, setHookMarket] = useState<any>(null)
+  const [hookPrices, setHookPrices] = useState<number[]>([])
+  const [hookCapitals, setHookCapitals] = useState<number[]>([])
+  const [hookPositions, setHookPositions] = useState<Record<number, any>>({}) // side → position
+  const [hookOrderSide, setHookOrderSide] = useState(0) // 0 = "none depegs"
+  const [hookOrderAmount, setHookOrderAmount] = useState('')
+  const [hookConfidence, setHookConfidence] = useState(5000) // 50% default
+  const [hookAutoRollover, setHookAutoRollover] = useState(false)
+  const [hookSalt, setHookSalt] = useState('')
+  const [hookCommitHash, setHookCommitHash] = useState('')
+  const [hookSellTokens, setHookSellTokens] = useState('')
+  const [hookSubTab, setHookSubTab] = useState<'overview' | 'order' | 'position'>('overview')
+  const [hookLoading, setHookLoading] = useState(false)
+  const [hookFrozen, setHookFrozen] = useState(false)
 
   // Swap state
   const [swapDirection, setSwapDirection] = useState<'toETH' | 'toUSD'>('toETH')
@@ -215,10 +360,12 @@ export default function QuidApp() {
   const [swapFee, setSwapFee] = useState(0) // Fee in basis points for specific token swaps
 
   // Protocol metrics (fetched from contracts)
-  const [ethPrice, setEthPrice] = useState(3500)
+  const [ethPrice, setEthPrice] = useState(0)
   const [basketMetrics, setBasketMetrics] = useState({ total: 0, yield: 0, avgYield: 0 }) // USD in basket
   const [ethMetrics, setEthMetrics] = useState({ totalShares: 0, ethFees: 0, usdFees: 0 }) // ETH LP metrics
-  const [tvl, setTvl] = useState({ v3: 0, v4: 0 })
+  const [pooledETH, setPooledETH] = useState(0) // Total ETH deposited by LPs
+  const [auxDeposits, setAuxDeposits] = useState<number[]>([]) // Per-stablecoin deposits from get_deposits
+  const [showDepositsBreakdown, setShowDepositsBreakdown] = useState(false)
 
   const chain = CHAINS[chainId]
   const contracts = CONTRACTS[chainId]
@@ -262,9 +409,9 @@ export default function QuidApp() {
     const balances: Record<string, string> = {}
     const allowances: Record<string, string> = {}
 
-    try {
-      for (const token of stables) {
-        // Get balance
+    // Fetch each token balance individually — one bad address must not kill everything
+    for (const token of stables) {
+      try {
         const balResult = await window.ethereum.request({
           method: 'eth_call',
           params: [{ to: token.address, data: encodeBalanceOf(address) }, 'latest'],
@@ -279,84 +426,94 @@ export default function QuidApp() {
           })
           allowances[token.address] = BigInt(allowResult).toString()
         }
-      }
-
-      setTokenBalances(balances)
-      setTokenAllowances(allowances)
-
-      // Auto-select first token with balance
-      const firstWithBalance = stables.find((t) => BigInt(balances[t.address] || 0) > 0n)
-      if (firstWithBalance && !selectedToken) {
-        setSelectedToken(firstWithBalance)
-      }
-
-      // Fetch current month from basket
-      if (contracts.basket !== '0x0000000000000000000000000000000000000000') {
-        try {
-          const monthResult = await window.ethereum.request({
-            method: 'eth_call',
-            params: [{ to: contracts.basket, data: encodeCurrentMonth() }, 'latest'],
-          })
-          setCurrentMonth(Number(BigInt(monthResult)))
-        } catch {
-          console.log('Could not fetch currentMonth')
-        }
-
-        // Fetch QD balance
-        try {
-          const qdResult = await window.ethereum.request({
-            method: 'eth_call',
-            params: [{ to: contracts.basket, data: encodeBalanceOf(address) }, 'latest'],
-          })
-          const qdBal = BigInt(qdResult)
-          setQdBalance(qdBal.toString())
-          console.log('QD Balance:', qdBal.toString())
-        } catch (e) {
-          console.log('Could not fetch QD balance:', e)
-        }
-      }
-
-      // Fetch raw ETH balance
-      try {
-        const ethBal = await window.ethereum.request({
-          method: 'eth_getBalance',
-          params: [address, 'latest'],
-        })
-        setEthBalance((parseInt(ethBal, 16) / 1e18).toFixed(6))
       } catch (e) {
-        console.log('Could not fetch ETH balance:', e)
+        console.log(`Could not fetch balance for ${token.symbol} (${token.address}):`, e)
+        balances[token.address] = '0'
+      }
+    }
+
+    setTokenBalances(balances)
+    setTokenAllowances(allowances)
+
+    // Auto-select first token with balance
+    const firstWithBalance = stables.find((t) => BigInt(balances[t.address] || 0) > 0n)
+    if (firstWithBalance && !selectedToken) {
+      setSelectedToken(firstWithBalance)
+    }
+
+    // Fetch current month from basket
+    if (contracts.basket !== '0x0000000000000000000000000000000000000000') {
+      try {
+        const monthResult = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{ to: contracts.basket, data: encodeCurrentMonth() }, 'latest'],
+        })
+        setCurrentMonth(Number(BigInt(monthResult)))
+      } catch {
+        console.log('Could not fetch currentMonth')
       }
 
-      // Fetch WETH balance
-      if (contracts.weth && contracts.weth !== '0x0000000000000000000000000000000000000000') {
-        try {
-          const wethResult = await window.ethereum.request({
-            method: 'eth_call',
-            params: [{ to: contracts.weth, data: encodeBalanceOf(address) }, 'latest'],
-          })
-          const wethBal = BigInt(wethResult)
-          setWethBalance((Number(wethBal) / 1e18).toFixed(6))
-          console.log('WETH Balance:', Number(wethBal) / 1e18)
-        } catch (e) {
-          console.log('Could not fetch WETH balance:', e)
-        }
+      // Fetch QD balance
+      try {
+        const qdResult = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{ to: contracts.basket, data: encodeBalanceOf(address) }, 'latest'],
+        })
+        const qdBal = BigInt(qdResult)
+        setQdBalance(qdBal.toString())
+        console.log('QD Balance:', qdBal.toString())
+      } catch (e) {
+        console.log('Could not fetch QD balance:', e)
       }
-    } catch (e) {
-      console.error('Error fetching balances:', e)
-    } finally {
-      setLoadingBalances(false)
+
+      // Fetch mature QD balance (redeemable)
+      try {
+        const matureResult = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{ to: contracts.basket, data: encodeTotalMatureBalanceOf(address) }, 'latest'],
+        })
+        setMatureQdBalance(BigInt(matureResult).toString())
+      } catch (e) {
+        console.log('Could not fetch mature QD balance:', e)
+      }
     }
+
+    // Fetch raw ETH balance
+    try {
+      const ethBal = await window.ethereum.request({
+        method: 'eth_getBalance',
+        params: [address, 'latest'],
+      })
+      setEthBalance((parseInt(ethBal, 16) / 1e18).toFixed(6))
+    } catch (e) {
+      console.log('Could not fetch ETH balance:', e)
+    }
+
+    // Fetch WETH balance
+    if (contracts.weth && contracts.weth !== '0x0000000000000000000000000000000000000000') {
+      try {
+        const wethResult = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{ to: contracts.weth, data: encodeBalanceOf(address) }, 'latest'],
+        })
+        const wethBal = BigInt(wethResult)
+        setWethBalance((Number(wethBal) / 1e18).toFixed(6))
+        console.log('WETH Balance:', Number(wethBal) / 1e18)
+      } catch (e) {
+        console.log('Could not fetch WETH balance:', e)
+      }
+    }
+
+    setLoadingBalances(false)
   }, [address, stables, contracts.aux, contracts.basket, contracts.weth, selectedToken])
 
   // Fetch ETH price and TVL from contracts
   useEffect(() => {
     const fetchMetrics = async () => {
       if (!window.ethereum) return
-      
-      let auxTvl = 0
-      let vogueTvl = 0
-      let price = 3500 // fallback
-      
+
+      let price = 0
+
       // Fetch ETH price from Aux.getTWAP(1800) - returns price in WAD (1e18)
       if (contracts.aux && contracts.aux !== '0x0000000000000000000000000000000000000000') {
         try {
@@ -364,63 +521,66 @@ export default function QuidApp() {
             method: 'eth_call',
             params: [{ to: contracts.aux, data: encodeGetTWAP(1800) }, 'latest'],
           })
-          const priceWad = BigInt(twapResult)
-          price = Number(priceWad) / 1e18
-          console.log('ETH Price from TWAP:', price)
+          price = Number(BigInt(twapResult)) / 1e18
           setEthPrice(price)
         } catch (e) {
           console.log('Could not fetch TWAP price:', e)
         }
-        
+
         // Fetch Basket metrics via get_metrics(false) → returns (total, yield)
-        // Note: get_metrics is not a view function, so we use eth_call which simulates the transaction
         try {
           const metricsResult = await window.ethereum.request({
             method: 'eth_call',
             params: [{ to: contracts.aux, data: encodeGetMetrics(false) }, 'latest'],
           })
-          // Decode tuple - first 32 bytes is total, next 32 is yield
           const total = BigInt('0x' + metricsResult.slice(2, 66))
           const yieldVal = BigInt('0x' + metricsResult.slice(66, 130))
-          auxTvl = Number(total) / 1e18
+          const auxTvl = Number(total) / 1e18
           const yieldUsd = Number(yieldVal) / 1e18
-          console.log('Basket Total (USD):', auxTvl, 'Yield:', yieldUsd)
-          
-          // Fetch average yield APY
+
           let avgYield = 0
           try {
             const yieldResult = await window.ethereum.request({
               method: 'eth_call',
               params: [{ to: contracts.aux, data: encodeGetAverageYield() }, 'latest'],
             })
-            avgYield = Number(BigInt(yieldResult)) / 1e16 // Convert from WAD basis to %
-            console.log('Basket Average Yield APY:', avgYield, '%')
+            avgYield = Number(BigInt(yieldResult)) / 1e16 // WAD basis → %
           } catch (e) {
             console.log('Could not fetch average yield:', e)
           }
-          
+
           setBasketMetrics({ total: auxTvl, yield: yieldUsd, avgYield })
         } catch (e) {
           console.log('Could not fetch Basket metrics:', e)
         }
+
+        // Fetch per-stablecoin deposits breakdown
+        try {
+          const depositsResult = await window.ethereum.request({
+            method: 'eth_call',
+            params: [{ to: contracts.aux, data: encodeGetDeposits() }, 'latest'],
+          })
+          const decoded = iface.decodeFunctionResult('get_deposits', depositsResult)
+          const arr = decoded[0] as bigint[]
+          setAuxDeposits(arr.map((v: bigint) => Number(v) / 1e18))
+        } catch (e) {
+          console.log('Could not fetch deposits breakdown:', e)
+        }
       }
-      
-      // Fetch Vogue TVL and yield metrics
+
+      // Fetch Vogue pooled ETH (total deposited by LPs)
       if (contracts.vogueCore && contracts.vogueCore !== '0x0000000000000000000000000000000000000000') {
         try {
           const pooledResult = await window.ethereum.request({
             method: 'eth_call',
             params: [{ to: contracts.vogueCore, data: encodePooledETH() }, 'latest'],
           })
-          const pooledEthWei = BigInt(pooledResult)
-          const pooledEth = Number(pooledEthWei) / 1e18
-          vogueTvl = pooledEth * price
-          console.log('Vogue POOLED_ETH:', pooledEth, 'TVL (USD):', vogueTvl)
+          setPooledETH(Number(BigInt(pooledResult)) / 1e18)
         } catch (e) {
           console.log('Could not fetch VogueCore POOLED_ETH:', e)
         }
       }
-      
+
       // Fetch Vogue ETH and USD fees
       if (contracts.vogue && contracts.vogue !== '0x0000000000000000000000000000000000000000') {
         try {
@@ -438,21 +598,15 @@ export default function QuidApp() {
               params: [{ to: contracts.vogue, data: encodeUSDFees() }, 'latest'],
             }),
           ])
-          const totalShares = Number(BigInt(sharesResult)) / 1e18
-          const ethFees = Number(BigInt(ethFeesResult)) / 1e18
-          const usdFees = Number(BigInt(usdFeesResult)) / 1e18
-          console.log('Vogue totalShares:', totalShares, 'ETH_FEES:', ethFees, 'USD_FEES:', usdFees)
-          setEthMetrics({ totalShares, ethFees, usdFees })
+          setEthMetrics({
+            totalShares: Number(BigInt(sharesResult)) / 1e18,
+            ethFees: Number(BigInt(ethFeesResult)) / 1e18,
+            usdFees: Number(BigInt(usdFeesResult)) / 1e18,
+          })
         } catch (e) {
           console.log('Could not fetch Vogue fee metrics:', e)
         }
       }
-      
-      // v3 shows Aux USD TVL, v4 shows Vogue ETH TVL (converted to USD)
-      setTvl({ 
-        v3: auxTvl > 0 ? auxTvl : 0, 
-        v4: vogueTvl > 0 ? vogueTvl : 0 
-      })
     }
     fetchMetrics()
   }, [chainId, contracts.vogueCore, contracts.vogue, contracts.aux])
@@ -479,7 +633,7 @@ export default function QuidApp() {
           if (CHAINS[numericChainId]?.enabled) {
             setChainId(numericChainId)
           } else {
-            setChainId(8453) // Default to Base if current chain is disabled
+            setChainId(42161) // Default to Arbitrum
           }
         }
       } else {
@@ -557,7 +711,13 @@ export default function QuidApp() {
   const mintTokens = useCallback(async () => {
     if (!selectedToken || !mintAmount || !contracts.basket) return
     if (txMutex) return
-    
+
+    // Require waiver acceptance before first mint
+    if (!waiverAccepted) {
+      setShowWaiver(true)
+      return
+    }
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
@@ -591,7 +751,7 @@ export default function QuidApp() {
         setTxStatus
       )
       console.log('Approval complete!')
-      
+
       setTokenAllowances(prev => ({
         ...prev,
         [selectedToken.address]: 'max'
@@ -600,7 +760,7 @@ export default function QuidApp() {
       // Now mint
       setTxStatus('Minting QD tokens...')
       const data = encodeMint(address, amount, selectedToken.address, targetMonth)
-      
+
       console.log('=== MINT TX ===')
       console.log('To (Basket):', contracts.basket)
       console.log('Mint params:')
@@ -637,13 +797,13 @@ export default function QuidApp() {
       setIsLoading(false)
       setTxMutex(false)
     }
-  }, [selectedToken, mintAmount, contracts.basket, contracts.aux, address, currentMonth, maturityMonths, chainId, fetchBalances, txMutex])
+  }, [selectedToken, mintAmount, contracts.basket, contracts.aux, address, currentMonth, maturityMonths, chainId, fetchBalances, txMutex, waiverAccepted])
 
   // Deposit ETH to LP
   const depositETH = useCallback(async () => {
     if (!depositAmount || !connected) return
     if (txMutex) return
-    
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
@@ -655,11 +815,11 @@ export default function QuidApp() {
       const totalWei = ethers.parseEther(depositAmount)
       const rawEthWei = ethers.parseEther(ethBalance)
       const wethWei = ethers.parseEther(wethBalance || '0')
-      
+
       // Determine how much to send as msg.value vs WETH amount
       let msgValue: bigint
       let wethAmount: bigint
-      
+
       if (totalWei <= rawEthWei) {
         // Can cover entirely with raw ETH
         msgValue = totalWei
@@ -671,7 +831,7 @@ export default function QuidApp() {
       } else {
         throw new Error('Insufficient ETH + WETH balance')
       }
-      
+
       console.log('=== DEPOSIT DEBUG ===')
       console.log('Protocol:', protocol)
       console.log('Contract:', contractAddr)
@@ -694,12 +854,12 @@ export default function QuidApp() {
           data: encodeDeposit(wethAmount),
         }],
       })
-      
+
       console.log('Deposit tx hash:', hash)
       setTxHash(hash)
       setTxStatus('Transaction submitted!')
       setDepositAmount('')
-      
+
       setTimeout(() => {
         fetchBalances()
         setTxStatus(null)
@@ -718,7 +878,7 @@ export default function QuidApp() {
   const withdrawETH = useCallback(async () => {
     if (!withdrawAmount || !connected) return
     if (txMutex) return
-    
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
@@ -728,7 +888,7 @@ export default function QuidApp() {
     try {
       const contractAddr = protocol === 'v4' ? contracts.vogue : contracts.rover
       const amountWei = ethers.parseEther(withdrawAmount)
-      
+
       console.log('=== WITHDRAW DEBUG ===')
       console.log('Protocol:', protocol)
       console.log('Contract:', contractAddr)
@@ -743,12 +903,12 @@ export default function QuidApp() {
           data: encodeWithdraw(amountWei),
         }],
       })
-      
+
       console.log('Withdraw tx hash:', hash)
       setTxHash(hash)
       setTxStatus('Transaction submitted!')
       setWithdrawAmount('')
-      
+
       setTimeout(async () => {
         try {
           const balance = await window.ethereum.request({
@@ -769,27 +929,178 @@ export default function QuidApp() {
     }
   }, [withdrawAmount, connected, protocol, contracts.vogue, contracts.rover, address, txMutex])
 
-  /* REDEEM COMMENTED OUT - Waiting for totalMatureBalanceOf contract function
+  // Fetch self-managed positions from Vogue.positions(address, index)
+  const fetchSelfManagedPositions = useCallback(async () => {
+    if (!address || !window.ethereum || !contracts.vogue || contracts.vogue === '0x0000000000000000000000000000000000000000') return
+    const contractAddr = protocol === 'v4' ? contracts.vogue : contracts.rover
+    if (protocol !== 'v4') return // Self-managed only on Vogue (v4)
+
+    const positions: { id: bigint; lower: number; upper: number; liq: bigint }[] = []
+    try {
+      for (let i = 0; i < 50; i++) { // safety cap
+        try {
+          const idResult = await window.ethereum.request({
+            method: 'eth_call',
+            params: [{ to: contractAddr, data: encodePositions(address, i) }, 'latest'],
+          })
+          const posId = BigInt(idResult)
+          if (posId === 0n) break
+
+          // Fetch selfManaged struct
+          const smResult = await window.ethereum.request({
+            method: 'eth_call',
+            params: [{ to: contractAddr, data: encodeSelfManaged(posId) }, 'latest'],
+          })
+          const decoded = iface.decodeFunctionResult('selfManaged', smResult)
+          const liq = BigInt(decoded[4].toString())
+          if (liq > 0n) {
+            positions.push({
+              id: posId,
+              lower: Number(decoded[2]),
+              upper: Number(decoded[3]),
+              liq,
+            })
+          }
+        } catch { break } // Array out of bounds = no more positions
+      }
+    } catch (e) {
+      console.log('Error fetching self-managed positions:', e)
+    }
+    setSelfManagedPositions(positions)
+  }, [address, contracts.vogue, contracts.rover, protocol])
+
+  // Fetch auto-managed LP info
+  const fetchAutoManagedInfo = useCallback(async () => {
+    if (!address || !window.ethereum || protocol !== 'v4') return
+    const contractAddr = contracts.vogue
+    if (!contractAddr || contractAddr === '0x0000000000000000000000000000000000000000') return
+    try {
+      const result = await window.ethereum.request({
+        method: 'eth_call',
+        params: [{ to: contractAddr, data: encodeAutoManaged(address) }, 'latest'],
+      })
+      const decoded = iface.decodeFunctionResult('autoManaged', result)
+      setAutoManagedInfo({
+        pooled: Number(BigInt(decoded[0].toString())) / 1e18,
+        feesEth: Number(BigInt(decoded[1].toString())) / 1e18,
+        feesUsd: Number(BigInt(decoded[2].toString())) / 1e18,
+        usdOwed: Number(BigInt(decoded[3].toString())) / 1e18,
+      })
+    } catch (e) {
+      console.log('Could not fetch autoManaged info:', e)
+    }
+  }, [address, contracts.vogue, protocol])
+
+  // Fetch LP data when deposit/withdraw tabs are active
+  useEffect(() => {
+    if ((activeTab === 'deposit' || activeTab === 'withdraw') && connected && address) {
+      fetchSelfManagedPositions()
+      fetchAutoManagedInfo()
+    }
+  }, [activeTab, connected, address, fetchSelfManagedPositions, fetchAutoManagedInfo])
+
+  // Open out-of-range self-managed position via Vogue.outOfRange
+  const openOutOfRange = useCallback(async () => {
+    if (!oorAmount || !connected || protocol !== 'v4') return
+    if (txMutex) return
+    const contractAddr = contracts.vogue
+    if (!contractAddr || contractAddr === '0x0000000000000000000000000000000000000000') return
+
+    setTxMutex(true); setIsLoading(true); setError(null); setTxHash(null)
+    setTxStatus('Opening out-of-range position...')
+
+    try {
+      const distanceTicks = oorDistance * 100 // UI% → tick distance (e.g. 5% → 500)
+      const rangeTicks = oorRange * 100       // UI% → tick range (e.g. 2% → 200)
+
+      let msgValue = 0n
+      let amount: bigint
+      let tokenAddr: string
+
+      if (oorToken === 'eth') {
+        tokenAddr = '0x0000000000000000000000000000000000000000'
+        const totalWei = ethers.parseEther(oorAmount)
+        const rawEthWei = ethers.parseEther(ethBalance)
+        const wethWei = ethers.parseEther(wethBalance || '0')
+
+        if (totalWei <= rawEthWei) {
+          msgValue = totalWei; amount = 0n
+        } else if (totalWei <= rawEthWei + wethWei) {
+          msgValue = rawEthWei; amount = totalWei - rawEthWei
+        } else {
+          throw new Error('Insufficient ETH + WETH balance')
+        }
+        // If using WETH portion, approve Vogue
+        if (amount > 0n) {
+          await doApproval(contracts.weth, contractAddr, amount, address, chainId, setTxStatus)
+          setTxStatus('Opening out-of-range position...')
+        }
+        amount = amount // WETH param (Vogue handles ETH via msg.value + WETH via amount)
+      } else {
+        // USD side - use selected stablecoin
+        if (!oorStable) throw new Error('Select a stablecoin')
+        tokenAddr = oorStable.address
+        amount = ethers.parseUnits(oorAmount, oorStable.decimals)
+        await doApproval(oorStable.address, contracts.aux, amount, address, chainId, setTxStatus)
+        setTxStatus('Opening out-of-range position...')
+        msgValue = 0n
+      }
+
+      const data = encodeOutOfRange(amount, tokenAddr, distanceTicks, rangeTicks)
+      const hash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{
+          from: address, to: contractAddr, data,
+          ...(msgValue > 0n ? { value: '0x' + msgValue.toString(16) } : {}),
+        }],
+      })
+
+      setTxHash(hash); setTxStatus('Position created!')
+      setOorAmount('')
+      setTimeout(() => { fetchSelfManagedPositions(); fetchBalances(); setTxStatus(null) }, 5000)
+    } catch (err: any) {
+      setError(err.message || 'OutOfRange failed'); setTxStatus(null)
+    } finally { setIsLoading(false); setTxMutex(false) }
+  }, [oorAmount, oorToken, oorStable, oorDistance, oorRange, connected, protocol, contracts.vogue, contracts.weth, contracts.aux, address, ethBalance, wethBalance, chainId, txMutex, fetchSelfManagedPositions, fetchBalances])
+
+  // Pull (withdraw) self-managed position via Vogue.pull
+  const pullSelfManaged = useCallback(async (posId: bigint) => {
+    if (!connected || txMutex) return
+    const contractAddr = contracts.vogue
+    if (!contractAddr || contractAddr === '0x0000000000000000000000000000000000000000') return
+
+    setTxMutex(true); setIsLoading(true); setError(null); setTxHash(null)
+    setTxStatus(`Withdrawing position #${posId}...`)
+
+    try {
+      const data = encodePull(posId, pullPercent, pullToken)
+      const hash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: address, to: contractAddr, data }],
+      })
+      setTxHash(hash); setTxStatus('Withdrawal submitted!')
+      setTimeout(() => { fetchSelfManagedPositions(); fetchBalances(); setTxStatus(null) }, 5000)
+    } catch (err: any) {
+      setError(err.message || 'Pull failed'); setTxStatus(null)
+    } finally { setIsLoading(false); setTxMutex(false) }
+  }, [connected, contracts.vogue, address, pullPercent, pullToken, txMutex, fetchSelfManagedPositions, fetchBalances])
+
   // Redeem QD tokens for stablecoins
   const redeemQD = useCallback(async () => {
-    if (!redeemAmount || !connected || !contracts.aux) return
-    if (BigInt(matureQdBalance) <= 0n) return // Only allow if mature balance exists
+    if (!redeemAmount || !connected || !contracts.aux || !contracts.basket) return
+    if (BigInt(matureQdBalance) <= 0n) return
     if (txMutex) return
-    
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
     setTxHash(null)
-    setTxStatus('Redeeming QD tokens...')
 
     try {
-      const amount = ethers.parseUnits(redeemAmount, 18) // QD is 18 decimals
-      
-      console.log('=== REDEEM DEBUG ===')
-      console.log('Aux contract:', contracts.aux)
-      console.log('Amount:', redeemAmount, 'QD')
-      console.log('Amount (wei):', amount.toString())
+      const amount = ethers.parseUnits(redeemAmount, 18)
 
+      // Redeem via Aux
+      setTxStatus('Redeeming QD tokens...')
       const hash = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [{
@@ -798,13 +1109,12 @@ export default function QuidApp() {
           data: encodeRedeem(amount),
         }],
       })
-      
+
       console.log('Redeem tx hash:', hash)
       setTxHash(hash)
       setTxStatus('Transaction submitted!')
       setRedeemAmount('')
-      
-      // Refresh balances after delay
+
       setTimeout(() => {
         fetchBalances()
         setTxStatus(null)
@@ -817,8 +1127,7 @@ export default function QuidApp() {
       setIsLoading(false)
       setTxMutex(false)
     }
-  }, [redeemAmount, connected, contracts.aux, address, txMutex, fetchBalances, matureQdBalance])
-  END REDEEM COMMENT */
+  }, [redeemAmount, connected, contracts.aux, contracts.basket, address, txMutex, fetchBalances, matureQdBalance])
 
   // Swap tokens via Aux.swap
   // forETH = true: USD → ETH (sell stablecoin for ETH)
@@ -826,12 +1135,12 @@ export default function QuidApp() {
   const swapTokens = useCallback(async () => {
     if (!swapAmount || !connected || !contracts.aux) return
     if (txMutex) return
-    
+
     // For USD→ETH, need a token selected
     if (swapDirection === 'toETH' && !swapToken) return
     // For ETH→USD with token mode, need a token selected
     if (swapDirection === 'toUSD' && swapOutputMode === 'token' && !swapToken) return
-    
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
@@ -841,12 +1150,12 @@ export default function QuidApp() {
     try {
       const forETH = swapDirection === 'toETH'
       const waitable = 5 // blocks to wait
-      
+
       // For ETH→USD, determine the output token (QUID or specific stablecoin)
-      const outputToken = swapDirection === 'toUSD' && swapOutputMode === 'quid' 
+      const outputToken = swapDirection === 'toUSD' && swapOutputMode === 'quid'
         ? contracts.basket  // QUID address
         : swapToken!.address
-      
+
       console.log('=== SWAP DEBUG ===')
       console.log('Direction:', swapDirection, '(forETH:', forETH, ')')
       console.log('Token:', swapDirection === 'toUSD' && swapOutputMode === 'quid' ? 'QUID' : swapToken?.symbol, outputToken)
@@ -858,13 +1167,13 @@ export default function QuidApp() {
         // amount is stablecoin amount, need to approve Aux first
         const decimals = swapToken!.decimals
         const amount = ethers.parseUnits(swapAmount, decimals)
-        
+
         // Check/do approval for the stablecoin to Aux (handles USDT reset)
         await doApproval(swapToken!.address, contracts.aux, amount, address, chainId, setTxStatus)
-        
+
         setTxStatus('Swapping USD → ETH...')
         const swapData = encodeSwap(swapToken!.address, true, amount, waitable)
-        
+
         const hash = await window.ethereum.request({
           method: 'eth_sendTransaction',
           params: [{
@@ -873,22 +1182,22 @@ export default function QuidApp() {
             data: swapData,
           }],
         })
-        
+
         console.log('Swap tx hash:', hash)
         setTxHash(hash)
         setTxStatus('Transaction submitted!')
-        
+
       } else {
         // ETH → USD: User sells ETH for stablecoin (or QUID)
         // _depositETH combines raw ETH (msg.value) + WETH (amount param)
         const totalWei = ethers.parseEther(swapAmount)
         const rawEthWei = ethers.parseEther(ethBalance)
         const wethWei = ethers.parseEther(wethBalance || '0')
-        
+
         // Determine how much to send as msg.value vs WETH amount
         let msgValue: bigint
         let wethAmount: bigint
-        
+
         if (totalWei <= rawEthWei) {
           // Can cover entirely with raw ETH
           msgValue = totalWei
@@ -900,18 +1209,18 @@ export default function QuidApp() {
         } else {
           throw new Error('Insufficient ETH + WETH balance')
         }
-        
+
         console.log('Sending ETH:', Number(msgValue) / 1e18, 'WETH amount:', Number(wethAmount) / 1e18)
-        
+
         // If using WETH, need approval
         if (wethAmount > 0n) {
           await doApproval(contracts.weth, contracts.aux, wethAmount, address, chainId, setTxStatus)
         }
-        
+
         setTxStatus(swapOutputMode === 'quid' ? 'Swapping ETH → QUID...' : 'Swapping ETH → USD...')
         // swap(token, forETH=false, amount=wethAmount, waitable)
         const swapData = encodeSwap(outputToken, false, wethAmount, waitable)
-        
+
         const hash = await window.ethereum.request({
           method: 'eth_sendTransaction',
           params: [{
@@ -921,18 +1230,18 @@ export default function QuidApp() {
             value: '0x' + msgValue.toString(16),
           }],
         })
-        
+
         console.log('Swap tx hash:', hash)
         setTxHash(hash)
         setTxStatus('Transaction submitted!')
       }
-      
+
       setSwapAmount('')
       setTimeout(() => {
         fetchBalances()
         setTxStatus(null)
       }, 5000)
-      
+
     } catch (err: any) {
       console.error('Swap error:', err)
       setError(err.message || 'Swap failed')
@@ -947,7 +1256,7 @@ export default function QuidApp() {
   const leverETH = useCallback(async () => {
     if (!swapAmount || !connected || !contracts.aux) return
     if (txMutex) return
-    
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
@@ -958,10 +1267,10 @@ export default function QuidApp() {
       const totalWei = ethers.parseEther(swapAmount)
       const rawEthWei = ethers.parseEther(ethBalance)
       const wethWei = ethers.parseEther(wethBalance || '0')
-      
+
       let msgValue: bigint
       let wethAmount: bigint
-      
+
       if (totalWei <= rawEthWei) {
         msgValue = totalWei
         wethAmount = 0n
@@ -971,7 +1280,7 @@ export default function QuidApp() {
       } else {
         throw new Error('Insufficient ETH + WETH balance')
       }
-      
+
       console.log('=== LEVER ETH DEBUG ===')
       console.log('Total amount:', swapAmount, 'ETH')
       console.log('Raw ETH (msg.value):', Number(msgValue) / 1e18)
@@ -992,12 +1301,12 @@ export default function QuidApp() {
           data: encodeLeverETH(wethAmount),
         }],
       })
-      
+
       console.log('LeverETH tx hash:', hash)
       setTxHash(hash)
       setTxStatus('Transaction submitted!')
       setSwapAmount('')
-      
+
       setTimeout(() => {
         fetchBalances()
         setTxStatus(null)
@@ -1016,7 +1325,7 @@ export default function QuidApp() {
   const leverUSD = useCallback(async () => {
     if (!swapAmount || !connected || !contracts.aux || !swapToken) return
     if (txMutex) return
-    
+
     setTxMutex(true)
     setIsLoading(true)
     setError(null)
@@ -1026,7 +1335,7 @@ export default function QuidApp() {
     try {
       const decimals = swapToken.decimals
       const amount = ethers.parseUnits(swapAmount, decimals)
-      
+
       console.log('=== LEVER USD DEBUG ===')
       console.log('Token:', swapToken.symbol)
       console.log('Amount:', swapAmount)
@@ -1043,12 +1352,12 @@ export default function QuidApp() {
           data: encodeLeverUSD(amount, swapToken.address),
         }],
       })
-      
+
       console.log('LeverUSD tx hash:', hash)
       setTxHash(hash)
       setTxStatus('Transaction submitted!')
       setSwapAmount('')
-      
+
       setTimeout(() => {
         fetchBalances()
         setTxStatus(null)
@@ -1062,6 +1371,321 @@ export default function QuidApp() {
       setTxMutex(false)
     }
   }, [swapAmount, swapToken, connected, contracts.aux, address, chainId, txMutex, fetchBalances])
+
+  // ============== HOOK (Prediction Market) Functions ==============
+
+  // Get the non-vault stables for the current chain (these are the market sides)
+  const marketStables = useMemo(() => stables.filter(s => !s.isVault), [stables])
+
+  // Side labels: 0 = "No Depeg", 1..N = stablecoin symbols
+  const sideLabels = useMemo(() => {
+    const labels = ['No Depeg']
+    for (const s of marketStables) labels.push(s.symbol)
+    return labels
+  }, [marketStables])
+
+  // Fetch Hook market data
+  const fetchHookData = useCallback(async () => {
+    if (!window.ethereum || !contracts.hook || contracts.hook === '0x0000000000000000000000000000000000000000') return
+    setHookLoading(true)
+    try {
+      // Fetch market state
+      const marketResult = await window.ethereum.request({
+        method: 'eth_call',
+        params: [{ to: contracts.hook, data: encodeGetMarket() }, 'latest'],
+      })
+      const decoded = hookIface.decodeFunctionResult('getMarket', marketResult)
+      const m = decoded[0]
+      setHookMarket({
+        numSides: Number(m.numSides),
+        roundNumber: Number(m.roundNumber),
+        totalCapital: Number(m.totalCapital) / 1e18,
+        resolved: m.resolved,
+        winningSide: Number(m.winningSide),
+        assertionPending: m.assertionPending,
+        weightsComplete: m.weightsComplete,
+        payoutsComplete: m.payoutsComplete,
+        positionsTotal: Number(m.positionsTotal),
+        positionsRevealed: Number(m.positionsRevealed),
+        roundStartTime: Number(m.roundStartTime),
+        resolutionTimestamp: Number(m.resolutionTimestamp),
+      })
+
+      // Fetch LMSR prices
+      if (Number(m.numSides) > 0) {
+        try {
+          const pricesResult = await window.ethereum.request({
+            method: 'eth_call',
+            params: [{ to: contracts.hook, data: encodeGetAllPrices() }, 'latest'],
+          })
+          const pricesDecoded = hookIface.decodeFunctionResult('getAllPrices', pricesResult)
+          setHookPrices(pricesDecoded[0].map((p: bigint) => Number(p) / 1e18))
+        } catch { setHookPrices([]) }
+
+        try {
+          const capsResult = await window.ethereum.request({
+            method: 'eth_call',
+            params: [{ to: contracts.hook, data: encodeGetCapitalPerSide() }, 'latest'],
+          })
+          const capsDecoded = hookIface.decodeFunctionResult('getCapitalPerSide', capsResult)
+          setHookCapitals(capsDecoded[0].map((c: bigint) => Number(c) / 1e18))
+        } catch { setHookCapitals([]) }
+      }
+
+      // Fetch dispute status
+      try {
+        const frozenResult = await window.ethereum.request({
+          method: 'eth_call',
+          params: [{ to: contracts.hook, data: encodeDisputeFrozen() }, 'latest'],
+        })
+        setHookFrozen(BigInt(frozenResult) !== 0n)
+      } catch {}
+
+      // Fetch user positions per side
+      if (address && Number(m.numSides) > 0) {
+        const positions: Record<number, any> = {}
+        for (let side = 0; side < Number(m.numSides); side++) {
+          try {
+            const posResult = await window.ethereum.request({
+              method: 'eth_call',
+              params: [{ to: contracts.hook, data: encodeGetPosition(address, side) }, 'latest'],
+            })
+            const pos = hookIface.decodeFunctionResult('getPosition', posResult)[0]
+            if (pos.user !== '0x0000000000000000000000000000000000000000') {
+              positions[side] = {
+                totalCapital: Number(pos.totalCapital) / 1e18,
+                totalTokens: Number(pos.totalTokens) / 1e18,
+                revealed: pos.revealed,
+                revealedConfidence: Number(pos.revealedConfidence),
+                weight: Number(pos.weight),
+                paidOut: pos.paidOut,
+                autoRollover: pos.autoRollover,
+                lastRound: Number(pos.lastRound),
+                commitmentHash: pos.commitmentHash,
+              }
+            }
+          } catch {}
+        }
+        setHookPositions(positions)
+      }
+    } catch (e) {
+      console.error('Hook data fetch error:', e)
+    } finally {
+      setHookLoading(false)
+    }
+  }, [contracts.hook, address, stables])
+
+  // Refresh Hook data when predictions tab is active
+  useEffect(() => {
+    if (activeTab === 'predictions' && contracts.hook && contracts.hook !== '0x0000000000000000000000000000000000000000') {
+      fetchHookData()
+      const interval = setInterval(fetchHookData, 30000) // refresh every 30s
+      return () => clearInterval(interval)
+    }
+  }, [activeTab, chainId, contracts.hook, fetchHookData])
+
+  // Place order on Hook
+  const placeHookOrder = useCallback(async () => {
+    if (!hookOrderAmount || !connected || !contracts.hook || !contracts.basket) return
+    if (contracts.hook === '0x0000000000000000000000000000000000000000') return
+    if (txMutex) return
+
+    setTxMutex(true)
+    setIsLoading(true)
+    setError(null)
+    setTxHash(null)
+
+    try {
+      const capital = ethers.parseUnits(hookOrderAmount, 18) // QD is 18 decimals
+      if (capital < ethers.parseUnits('1', 18)) throw new Error('Minimum order is 1 QD')
+
+      // Generate salt and commit hash
+      const salt = generateSalt()
+      const commitHash = generateCommitHash(hookConfidence, salt)
+
+      // Approve QD (basket) to Hook
+      setTxStatus('Approving QD to Hook...')
+      await doApproval(contracts.basket, contracts.hook, capital, address, chainId, setTxStatus)
+
+      setTxStatus('Placing order...')
+      const data = encodeHookPlaceOrder(hookOrderSide, capital, hookAutoRollover, commitHash)
+
+      const hash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: address, to: contracts.hook, data }],
+      })
+
+      setTxHash(hash)
+      setTxStatus('Order submitted!')
+
+      // Store confidence data — APPEND to array (each entry has its own commitHash)
+      const confEntry = { confidence: hookConfidence, salt, commitHash }
+      const storageKey = `hook-conf-${chainId}-${MARKET_ID}-${hookOrderSide}-${address}`
+      try {
+        const existing = JSON.parse(localStorage.getItem(storageKey) || '[]')
+        existing.push(confEntry)
+        localStorage.setItem(storageKey, JSON.stringify(existing))
+      } catch { localStorage.setItem(storageKey, JSON.stringify([confEntry])) }
+      // Post to backend API for keeper retrieval
+      const confData = { user: address, mktId: MARKET_ID, side: hookOrderSide, confidence: hookConfidence, salt, chainId, commitHash }
+      try {
+        await fetch('/api/confidences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(confData),
+        })
+      } catch (e) { console.warn('Could not store confidence to API:', e) }
+
+      setHookSalt(salt)
+      setHookCommitHash(commitHash)
+      setHookOrderAmount('')
+
+      setTimeout(() => { fetchHookData(); fetchBalances(); setTxStatus(null) }, 5000)
+    } catch (err: any) {
+      setError(err.message || 'Order failed')
+      setTxStatus(null)
+    } finally {
+      setIsLoading(false)
+      setTxMutex(false)
+    }
+  }, [hookOrderAmount, hookOrderSide, hookConfidence, hookAutoRollover, connected, contracts.hook, contracts.basket, address, chainId, txMutex, fetchHookData, fetchBalances])
+
+  // Sell Hook position
+  const sellHookPosition = useCallback(async () => {
+    if (!hookSellTokens || !connected || !contracts.hook) return
+    if (txMutex) return
+
+    setTxMutex(true)
+    setIsLoading(true)
+    setError(null)
+    setTxHash(null)
+    setTxStatus('Selling position...')
+
+    try {
+      const tokens = ethers.parseUnits(hookSellTokens, 18) // LMSR tokens are 18 decimals (WAD)
+      const data = encodeHookSell(hookOrderSide, tokens)
+
+      const hash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: address, to: contracts.hook, data }],
+      })
+
+      setTxHash(hash)
+      setTxStatus('Sell submitted!')
+      setHookSellTokens('')
+      setTimeout(() => { fetchHookData(); fetchBalances(); setTxStatus(null) }, 5000)
+    } catch (err: any) {
+      setError(err.message || 'Sell failed')
+      setTxStatus(null)
+    } finally {
+      setIsLoading(false)
+      setTxMutex(false)
+    }
+  }, [hookSellTokens, hookOrderSide, connected, contracts.hook, address, txMutex, fetchHookData, fetchBalances])
+
+  // Reveal confidence (batchReveal)
+  const revealHookConfidence = useCallback(async () => {
+    if (!connected || !contracts.hook) return
+    if (txMutex) return
+
+    setTxMutex(true)
+    setIsLoading(true)
+    setError(null)
+    setTxHash(null)
+    setTxStatus('Revealing confidence...')
+
+    try {
+      // Load ALL stored confidences for this position (each entry has its own commitHash)
+      const storageKey = `hook-conf-${chainId}-${MARKET_ID}-${hookOrderSide}-${address}`
+      const stored = localStorage.getItem(storageKey)
+      let reveals: { confidence: number; salt: string }[]
+
+      if (stored) {
+        const entries = JSON.parse(stored)
+        if (Array.isArray(entries) && entries.length > 0) {
+          reveals = entries.map((e: any) => ({ confidence: e.confidence, salt: e.salt }))
+        } else if (entries.confidence && entries.salt) {
+          // Legacy single-entry format
+          reveals = [{ confidence: entries.confidence, salt: entries.salt }]
+        } else {
+          throw new Error('No stored confidence found locally')
+        }
+      } else {
+        // API fallback — returns all entries sorted by createdAt
+        const resp = await fetch(`/api/confidences?user=${address}&mktId=${MARKET_ID}&side=${hookOrderSide}&chainId=${chainId}`)
+        if (resp.ok) {
+          const data = await resp.json()
+          if (data.confidences?.length > 0) {
+            reveals = data.confidences.map((c: any) => ({ confidence: c.confidence, salt: c.salt }))
+          } else {
+            throw new Error('No stored confidence found. You need the original salt to reveal.')
+          }
+        } else {
+          throw new Error('No stored confidence found. You need the original salt to reveal.')
+        }
+      }
+
+      const data = encodeHookBatchReveal(address, hookOrderSide, reveals)
+      const hash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: address, to: contracts.hook, data }],
+      })
+
+      setTxHash(hash)
+      setTxStatus('Reveal submitted!')
+      setTimeout(() => { fetchHookData(); setTxStatus(null) }, 5000)
+    } catch (err: any) {
+      setError(err.message || 'Reveal failed')
+      setTxStatus(null)
+    } finally {
+      setIsLoading(false)
+      setTxMutex(false)
+    }
+  }, [connected, contracts.hook, address, chainId, hookOrderSide, txMutex, fetchHookData])
+
+  // Recommit rollover position
+  const recommitHookPosition = useCallback(async () => {
+    if (!connected || !contracts.hook) return
+    if (txMutex) return
+
+    setTxMutex(true)
+    setIsLoading(true)
+    setError(null)
+    setTxHash(null)
+    setTxStatus('Recommitting...')
+
+    try {
+      const salt = generateSalt()
+      const commitHash = generateCommitHash(hookConfidence, salt)
+
+      const data = encodeHookRecommit(hookOrderSide, commitHash)
+      const hash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: address, to: contracts.hook, data }],
+      })
+
+      // Recommit clears old entries — new round, fresh commitment
+      const storageKey = `hook-conf-${chainId}-${MARKET_ID}-${hookOrderSide}-${address}`
+      const confEntry = { confidence: hookConfidence, salt, commitHash }
+      localStorage.setItem(storageKey, JSON.stringify([confEntry]))
+      // Clear old entries in API and store new one
+      const confData = { user: address, mktId: MARKET_ID, side: hookOrderSide, confidence: hookConfidence, salt, chainId, commitHash }
+      try {
+        await fetch(`/api/confidences?user=${address}&mktId=${MARKET_ID}&side=${hookOrderSide}&chainId=${chainId}`, { method: 'DELETE' })
+        await fetch('/api/confidences', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(confData) })
+      } catch {}
+
+      setTxHash(hash)
+      setTxStatus('Recommit submitted!')
+      setTimeout(() => { fetchHookData(); setTxStatus(null) }, 5000)
+    } catch (err: any) {
+      setError(err.message || 'Recommit failed')
+      setTxStatus(null)
+    } finally {
+      setIsLoading(false)
+      setTxMutex(false)
+    }
+  }, [connected, contracts.hook, address, chainId, hookOrderSide, hookConfidence, txMutex, fetchHookData])
 
   // Format token balance for display
   const getTokenBalance = (token: StableToken) => {
@@ -1169,47 +1793,80 @@ export default function QuidApp() {
           </div>
         </div>
 
-        {/* Stats Cards - Only show when we have data */}
-        {(tvl[protocol] > 0 || basketMetrics.avgYield > 0 || ethMetrics.totalShares > 0) && (
-        <div className="grid grid-cols-4 gap-4 mb-8">
-          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-              {protocol === 'v3' ? 'Basket TVL' : 'ETH Pool TVL'}
+        {/* Stats Cards - Only show when we have real data */}
+        {(basketMetrics.total > 0 || pooledETH > 0 || ethPrice > 0) && (
+        <div className="grid grid-cols-5 gap-3 mb-8">
+          {/* Aux Total Deposits */}
+          <div className="p-4 rounded-xl bg-white/5 border border-white/10 relative">
+            <div className="flex items-center gap-1 mb-1">
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Aux Deposits</p>
+              <button
+                onClick={() => setShowDepositsBreakdown(!showDepositsBreakdown)}
+                className="w-4 h-4 rounded-full bg-white/10 text-[9px] text-gray-400 hover:bg-white/20 flex items-center justify-center"
+                title="Show breakdown"
+              >
+                i
+              </button>
+            </div>
+            <p className="text-xl font-bold">
+              {basketMetrics.total > 0 ? `$${formatNumber(basketMetrics.total, 0)}` : '—'}
             </p>
-            <p className="text-2xl font-bold">
-              {tvl[protocol] >= 1000000 
-                ? `$${formatNumber(tvl[protocol] / 1e6, 2)}M`
-                : tvl[protocol] >= 1000
-                  ? `$${formatNumber(tvl[protocol] / 1e3, 2)}K`
-                  : `$${formatNumber(tvl[protocol], 2)}`
+            {showDepositsBreakdown && auxDeposits.length > 0 && (
+              <div className="absolute top-full left-0 mt-1 z-20 w-64 p-3 rounded-xl bg-[#111318] border border-white/10 shadow-xl">
+                <p className="text-[10px] text-gray-500 mb-2 uppercase">Per-stablecoin deposits</p>
+                {(() => {
+                  const nonVault = stables.filter(s => !s.isVault)
+                  const labels = [...nonVault.map(s => s.symbol), 'USYC']
+                  return labels.map((label, idx) => {
+                    const val = auxDeposits[idx + 1] || 0 // amounts[1..11]
+                    if (val < 0.01) return null
+                    return (
+                      <div key={label} className="flex justify-between text-xs py-0.5">
+                        <span className="text-gray-400">{label}</span>
+                        <span className="text-white">${formatNumber(val, 2)}</span>
+                      </div>
+                    )
+                  }).filter(Boolean)
+                })()}
+                {auxDeposits[12] > 0 && (
+                  <div className="flex justify-between text-xs pt-1 mt-1 border-t border-white/10">
+                    <span className="text-gray-400">Available</span>
+                    <span className="text-cyan-400">${formatNumber(auxDeposits[12], 2)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {/* Aux Yield */}
+          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Aux Yield</p>
+            <p className="text-xl font-bold text-green-400">
+              {basketMetrics.avgYield > 0 ? `${basketMetrics.avgYield.toFixed(2)}%` : '—'}
+            </p>
+          </div>
+          {/* ETH Pool (total deposited by LPs) */}
+          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">ETH Pool</p>
+            <p className="text-xl font-bold">
+              {pooledETH > 0 ? `${formatNumber(pooledETH, 2)} ETH` : '—'}
+            </p>
+          </div>
+          {/* Vogue Yield */}
+          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Vogue Yield</p>
+            <p className="text-xl font-bold text-green-400">
+              {ethMetrics.totalShares > 0
+                ? `${((ethMetrics.ethFees / ethMetrics.totalShares) * 100).toFixed(2)}%`
+                : '—'
               }
             </p>
           </div>
-          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-              {protocol === 'v3' ? 'USD Yield' : 'ETH Yield'}
-            </p>
-            <p className="text-2xl font-bold text-green-400">
-              {protocol === 'v3' 
-                ? `${basketMetrics.avgYield.toFixed(2)}%`
-                : `${((ethMetrics.ethFees / ethMetrics.totalShares) * 100).toFixed(2)}%`
-              }
-            </p>
-          </div>
-          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-              {protocol === 'v3' ? 'Basket Yield' : 'Swap Fees'}
-            </p>
-            <p className="text-xl font-bold text-cyan-400">
-              {protocol === 'v3' 
-                ? `$${formatNumber(basketMetrics.yield, 2)}`
-                : `$${formatNumber(ethMetrics.usdFees * ethPrice + ethMetrics.ethFees, 2)}`
-              }
-            </p>
-          </div>
+          {/* ETH Price */}
           <div className="p-4 rounded-xl bg-white/5 border border-white/10">
             <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">ETH Price</p>
-            <p className="text-2xl font-bold">${formatNumber(ethPrice, 0)}</p>
+            <p className="text-xl font-bold">
+              {ethPrice > 0 ? `$${formatNumber(ethPrice, 0)}` : '—'}
+            </p>
           </div>
         </div>
         )}
@@ -1224,7 +1881,7 @@ export default function QuidApp() {
                 activeTab === tab ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
               }`}
             >
-              {tab === 'mint' ? 'Mint QD' : tab === 'predictions' ? '📊 Markets' : tab}
+              {tab === 'mint' ? 'Mint QD' : tab === 'predictions' ? '📊 De-pegs' : tab}
             </button>
           ))}
         </div>
@@ -1383,7 +2040,7 @@ export default function QuidApp() {
                       ))}
                     </div>
 
-                    <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-2 gap-4">
+                    <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-3 gap-4">
                       <div>
                         <p className="text-xs text-gray-500 mb-1">Redeemable</p>
                         <p className="text-sm font-medium text-white">{maturityDate}</p>
@@ -1391,7 +2048,19 @@ export default function QuidApp() {
                       <div>
                         <p className="text-xs text-gray-500 mb-1">Yield Bonus</p>
                         <p className="text-sm font-medium text-green-400">
-                          +{(((maturityMonths + 1) / 12) * (basketMetrics.avgYield || 10)).toFixed(2)}%
+                          {basketMetrics.avgYield > 0
+                            ? `+${(basketMetrics.avgYield * (maturityMonths + 1) / 12).toFixed(2)}%`
+                            : '—'
+                          }
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">Multiplier</p>
+                        <p className="text-sm font-medium text-cyan-400">
+                          {basketMetrics.avgYield > 0
+                            ? `${(1 + (basketMetrics.avgYield / 100) * (maturityMonths + 1) / 12).toFixed(3)}x`
+                            : '—'
+                          }
                         </p>
                       </div>
                     </div>
@@ -1405,7 +2074,7 @@ export default function QuidApp() {
                       <p className="mt-3 text-xs text-green-400/80">🏆 Maximum yield bonus! Tokens locked for 1 year.</p>
                     )}
                     {maturityMonths === 13 && (
-                      <p className="mt-3 text-xs text-purple-400/80">🌱 For seed investors that receive a 3x ROI on their $</p>
+                      <p className="mt-3 text-xs text-purple-400/80">🌱 Seed round: 2× average yield premium, 13-month lock. Early believer bonus.</p>
                     )}
                   </div>
 
@@ -1428,8 +2097,7 @@ export default function QuidApp() {
                 </>
               )}
 
-              {/* REDEEM UI COMMENTED OUT - Waiting for totalMatureBalanceOf contract function
-              Redeem Section - Only shows when user has mature QD balance
+              {/* Redeem Section - shows when user has mature QD balance */}
               {connected && BigInt(matureQdBalance) > 0n && (
                 <div className="mt-6 pt-6 border-t border-white/10">
                   <div className="flex justify-between items-center mb-3">
@@ -1456,19 +2124,19 @@ export default function QuidApp() {
                       <span className="text-sm text-gray-400">QD</span>
                     </div>
                   </div>
+
                   <button
                     onClick={redeemQD}
                     disabled={!connected || isLoading || !redeemAmount || parseFloat(redeemAmount) <= 0 || txMutex || BigInt(matureQdBalance) <= 0n}
                     className="w-full py-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isLoading && txStatus?.includes('Redeem') ? (txStatus || 'Processing...') : 'Redeem for Stablecoins'}
+                    {isLoading && txStatus?.includes('Redeem') ? (txStatus || 'Processing...') : 'Redeem'}
                   </button>
                   <p className="mt-2 text-xs text-gray-500 text-center">
-                    Only mature QD tokens can be redeemed. Immature tokens will remain in your wallet.
+                    Only mature QD tokens can be redeemed.
                   </p>
                 </div>
               )}
-              END REDEEM UI COMMENT */}
 
               {!connected && (
                 <button
@@ -1484,57 +2152,247 @@ export default function QuidApp() {
           {/* DEPOSIT TAB */}
           {activeTab === 'deposit' && (
             <div className="space-y-6">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Deposit ETH to LP</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    placeholder="0.0"
-                    className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-cyan-500/50 focus:outline-none text-xl"
-                  />
+              {/* Sub-tab toggle: Auto LP / Self-Managed */}
+              <div className="flex gap-1 p-1 rounded-lg bg-white/5">
+                <button
+                  onClick={() => setDepositSubTab('auto')}
+                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+                    depositSubTab === 'auto' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  Auto LP
+                </button>
+                <button
+                  onClick={() => setDepositSubTab('selfManaged')}
+                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+                    depositSubTab === 'selfManaged' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                  disabled={protocol !== 'v4'}
+                  title={protocol !== 'v4' ? 'Self-managed positions are only available on Vogue (V4)' : ''}
+                >
+                  Self-Managed LP {protocol !== 'v4' && '(V4 only)'}
+                </button>
+              </div>
+
+              {/* AUTO LP sub-tab */}
+              {depositSubTab === 'auto' && (
+                <>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">Deposit ETH to LP</label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={depositAmount}
+                        onChange={(e) => setDepositAmount(e.target.value)}
+                        placeholder="0.0"
+                        className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-cyan-500/50 focus:outline-none text-xl"
+                      />
+                      <button
+                        onClick={() => setDepositAmount(combinedEthBalance.toFixed(6))}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 rounded-md bg-white/10 text-xs text-cyan-400 hover:bg-white/20"
+                      >
+                        MAX
+                      </button>
+                    </div>
+                    <p className="mt-2 text-sm text-gray-500">
+                      Balance: {formatNumber(combinedEthBalance, 4)} ETH ({ethBalance} raw + {wethBalance} WETH)
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-black/20 border border-white/5">
+                    <div className="flex justify-between text-sm mb-2">
+                      <span className="text-gray-400">Protocol</span>
+                      <span className="text-white">{protocol === 'v4' ? 'Vogue (UniV4)' : 'Rover (UniV3)'}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Est. Daily Yield</span>
+                      <span className="text-green-400">
+                        ~${formatNumber(parseFloat(depositAmount || '0') * ethPrice * ((ethMetrics.totalShares > 0 ? (ethMetrics.ethFees / ethMetrics.totalShares) * 100 : 10) / 365 / 100), 2)}
+                        /day
+                      </span>
+                    </div>
+                  </div>
+
                   <button
-                    onClick={() => setDepositAmount(combinedEthBalance.toFixed(6))}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 rounded-md bg-white/10 text-xs text-cyan-400 hover:bg-white/20"
+                    onClick={depositETH}
+                    disabled={!connected || isLoading || !depositAmount || txMutex}
+                    className="w-full py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    MAX
+                    {isLoading && activeTab === 'deposit' ? (txStatus || 'Processing...') : connected ? 'Deposit ETH' : 'Connect Wallet'}
                   </button>
-                </div>
-                <p className="mt-2 text-sm text-gray-500">
-                  Balance: {formatNumber(combinedEthBalance, 4)} ETH ({ethBalance} raw + {wethBalance} WETH)
-                </p>
-              </div>
+                </>
+              )}
 
-              <div className="p-4 rounded-xl bg-black/20 border border-white/5">
-                <div className="flex justify-between text-sm mb-2">
-                  <span className="text-gray-400">Protocol</span>
-                  <span className="text-white">{protocol === 'v4' ? 'Vogue (UniV4)' : 'Rover (UniV3)'}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Est. Daily Yield</span>
-                  <span className="text-green-400">
-                    ~${formatNumber(parseFloat(depositAmount || '0') * ethPrice * ((ethMetrics.totalShares > 0 ? (ethMetrics.ethFees / ethMetrics.totalShares) * 100 : 10) / 365 / 100), 2)}
-                    /day
-                  </span>
-                </div>
-              </div>
+              {/* SELF-MANAGED LP sub-tab (outOfRange) */}
+              {depositSubTab === 'selfManaged' && protocol === 'v4' && (
+                <>
+                  {/* Token side toggle */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">Deposit Side</label>
+                    <div className="inline-flex p-1 rounded-lg bg-black/30 border border-white/10">
+                      <button
+                        onClick={() => setOorToken('eth')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                          oorToken === 'eth' ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        ETH
+                      </button>
+                      <button
+                        onClick={() => setOorToken('usd')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                          oorToken === 'usd' ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        Stablecoin
+                      </button>
+                    </div>
+                  </div>
 
-              <button
-                onClick={depositETH}
-                disabled={!connected || isLoading || !depositAmount || txMutex}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading && activeTab === 'deposit' ? (txStatus || 'Processing...') : connected ? 'Deposit ETH' : 'Connect Wallet'}
-              </button>
+                  {/* Stablecoin selector (only for USD side) */}
+                  {oorToken === 'usd' && (
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">Select Stablecoin</label>
+                      <div className="grid grid-cols-5 gap-2">
+                        {stables.filter(t => !t.isVault).map((token) => {
+                          const balance = tokenBalances[token.address] ? formatUnits(tokenBalances[token.address], token.decimals) : '0'
+                          const isSelected = oorStable?.address === token.address
+                          return (
+                            <button
+                              key={token.address}
+                              onClick={() => setOorStable(token)}
+                              className={`p-2 rounded-lg text-xs font-medium border transition-all ${
+                                isSelected
+                                  ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+                                  : 'bg-white/5 border-white/10 text-gray-400 hover:border-white/20'
+                              }`}
+                            >
+                              {token.symbol}
+                              <span className="block text-[10px] text-gray-500 mt-0.5">{formatNumber(parseFloat(balance), 2)}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Amount */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Amount ({oorToken === 'eth' ? 'ETH' : oorStable?.symbol || 'USD'})
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={oorAmount}
+                        onChange={(e) => setOorAmount(e.target.value)}
+                        placeholder="0.0"
+                        className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-cyan-500/50 focus:outline-none text-xl"
+                      />
+                      <button
+                        onClick={() => {
+                          if (oorToken === 'eth') {
+                            setOorAmount(combinedEthBalance.toFixed(6))
+                          } else if (oorStable) {
+                            const bal = tokenBalances[oorStable.address]
+                            if (bal) setOorAmount(formatUnits(bal, oorStable.decimals))
+                          }
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 rounded-md bg-white/10 text-xs text-cyan-400 hover:bg-white/20"
+                      >
+                        MAX
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Distance from current price */}
+                  <div className="p-4 rounded-xl bg-black/20 border border-white/5">
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-sm text-gray-400">Distance from Current Price</label>
+                      <span className="text-sm font-bold text-cyan-400">
+                        {oorDistance > 0 ? '+' : ''}{oorDistance}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={-50}
+                      max={50}
+                      step={1}
+                      value={oorDistance}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (v !== 0) setOorDistance(v)
+                      }}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                      <span>-50% (below)</span>
+                      <span>0%</span>
+                      <span>+50% (above)</span>
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-2">
+                      {oorDistance > 0
+                        ? oorToken === 'eth'
+                          ? 'Position above current price — provides ETH if price rises'
+                          : 'Position above current price — provides USD if price drops'
+                        : oorToken === 'eth'
+                          ? 'Position below current price — provides ETH if price drops'
+                          : 'Position below current price — provides USD if price rises'
+                      }
+                    </p>
+                  </div>
+
+                  {/* Range width */}
+                  <div className="p-4 rounded-xl bg-black/20 border border-white/5">
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-sm text-gray-400">Range Width</label>
+                      <span className="text-sm font-bold text-cyan-400">{oorRange}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      step={0.5}
+                      value={oorRange}
+                      onChange={(e) => setOorRange(Number(e.target.value))}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                      <span>1% (tight)</span>
+                      <span>10% (wide)</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={openOutOfRange}
+                    disabled={
+                      !connected || isLoading || !oorAmount || parseFloat(oorAmount) <= 0 || txMutex ||
+                      oorDistance === 0 ||
+                      (oorToken === 'usd' && !oorStable)
+                    }
+                    className="w-full py-4 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading && depositSubTab === 'selfManaged'
+                      ? (txStatus || 'Processing...')
+                      : connected ? 'Open Out-of-Range Position' : 'Connect Wallet'}
+                  </button>
+
+                  <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/20">
+                    <p className="text-xs text-purple-400">
+                      Self-managed positions provide single-sided liquidity out of the current price range. Your position earns fees only if the price moves into your range. Use <strong>pull</strong> in the Withdraw tab to close.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
           {/* WITHDRAW TAB */}
           {activeTab === 'withdraw' && (
             <div className="space-y-6">
+              {/* Auto-managed withdrawal */}
               <div>
-                <label className="block text-sm text-gray-400 mb-2">Withdraw Amount (ETH)</label>
+                <label className="block text-sm text-gray-400 mb-2">Withdraw Auto LP (ETH)</label>
                 <div className="relative">
                   <input
                     type="number"
@@ -1543,21 +2401,34 @@ export default function QuidApp() {
                     placeholder="0.0"
                     className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-cyan-500/50 focus:outline-none text-xl"
                   />
-                  <button className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 rounded-md bg-white/10 text-xs text-cyan-400 hover:bg-white/20">
+                  <button
+                    onClick={() => {
+                      if (autoManagedInfo && autoManagedInfo.pooled > 0) {
+                        setWithdrawAmount(autoManagedInfo.pooled.toFixed(6))
+                      }
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 rounded-md bg-white/10 text-xs text-cyan-400 hover:bg-white/20"
+                  >
                     MAX
                   </button>
                 </div>
-                <p className="mt-2 text-sm text-gray-500">Deposited: 0.00 ETH</p>
+                <p className="mt-2 text-sm text-gray-500">
+                  Deposited: {autoManagedInfo ? formatNumber(autoManagedInfo.pooled, 4) : '0.00'} ETH
+                </p>
               </div>
 
               <div className="p-4 rounded-xl bg-black/20 border border-white/5">
                 <div className="flex justify-between text-sm mb-2">
-                  <span className="text-gray-400">Pending ETH Rewards</span>
-                  <span className="text-green-400">+0.00 ETH</span>
+                  <span className="text-gray-400">Accrued ETH Fees</span>
+                  <span className="text-green-400">
+                    +{autoManagedInfo ? formatNumber(autoManagedInfo.feesEth, 6) : '0.00'} ETH
+                  </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Pending USD Rewards</span>
-                  <span className="text-green-400">+$0.00 (as QD)</span>
+                  <span className="text-gray-400">Accrued USD Fees</span>
+                  <span className="text-green-400">
+                    +${autoManagedInfo ? formatNumber(autoManagedInfo.feesUsd, 2) : '0.00'} (as QD)
+                  </span>
                 </div>
               </div>
 
@@ -1566,8 +2437,78 @@ export default function QuidApp() {
                 disabled={!connected || isLoading || !withdrawAmount || txMutex}
                 className="w-full py-4 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50"
               >
-                {isLoading && activeTab === 'withdraw' ? (txStatus || 'Processing...') : 'Withdraw'}
+                {isLoading && activeTab === 'withdraw' ? (txStatus || 'Processing...') : 'Withdraw Auto LP'}
               </button>
+
+              {/* Self-managed positions — only shown when user has some */}
+              {protocol === 'v4' && selfManagedPositions.length > 0 && (
+                <div className="pt-6 border-t border-white/10">
+                  <h3 className="text-sm font-medium text-gray-300 mb-3">Self-Managed Positions</h3>
+
+                  {/* Pull settings */}
+                  <div className="mb-4 p-3 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs text-gray-400">Withdraw %</label>
+                      <span className="text-xs font-bold text-cyan-400">{pullPercent}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1} max={100} value={pullPercent}
+                      onChange={(e) => setPullPercent(Number(e.target.value))}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs text-gray-400">Receive as</label>
+                      <div className="inline-flex p-0.5 rounded-lg bg-black/30 border border-white/10">
+                        <button
+                          onClick={() => setPullToken('0x0000000000000000000000000000000000000000')}
+                          className={`px-3 py-1 rounded text-xs transition-all ${
+                            pullToken === '0x0000000000000000000000000000000000000000'
+                              ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-400'
+                          }`}
+                        >
+                          ETH
+                        </button>
+                        {stables.filter(s => !s.isVault).slice(0, 4).map(s => (
+                          <button
+                            key={s.address}
+                            onClick={() => setPullToken(s.address)}
+                            className={`px-3 py-1 rounded text-xs transition-all ${
+                              pullToken === s.address ? 'bg-cyan-500/20 text-cyan-400' : 'text-gray-400'
+                            }`}
+                          >
+                            {s.symbol}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Position cards */}
+                  <div className="space-y-2">
+                    {selfManagedPositions.map((pos) => (
+                      <div
+                        key={pos.id.toString()}
+                        className="p-3 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-white">Position #{pos.id.toString()}</p>
+                          <p className="text-[10px] text-gray-500">
+                            Ticks: [{pos.lower}, {pos.upper}] • Liq: {formatNumber(Number(pos.liq) / 1e18, 4)}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => pullSelfManaged(pos.id)}
+                          disabled={isLoading || txMutex}
+                          className="px-4 py-2 rounded-lg bg-gradient-to-r from-orange-500 to-red-500 text-xs font-bold hover:opacity-90 disabled:opacity-50"
+                        >
+                          Pull {pullPercent}%
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1611,7 +2552,7 @@ export default function QuidApp() {
                     onClick={() => chain.hasLeverage && setSwapSpeed('wait')}
                     disabled={!chain.hasLeverage}
                     className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                      !chain.hasLeverage 
+                      !chain.hasLeverage
                         ? 'text-gray-600 cursor-not-allowed'
                         : swapSpeed === 'wait' ? 'bg-purple-500/20 text-purple-400' : 'text-gray-400 hover:text-white'
                     }`}
@@ -1627,7 +2568,7 @@ export default function QuidApp() {
                 <label className="block text-sm text-gray-400 mb-2">
                   {swapDirection === 'toETH' ? 'Stablecoin to Sell' : 'Output Token'}
                 </label>
-                
+
                 {/* For ETH → USD, show QUID option first */}
                 {swapDirection === 'toUSD' && (
                   <div className="mb-3">
@@ -1657,17 +2598,17 @@ export default function QuidApp() {
                     </button>
                   </div>
                 )}
-                
+
                 {/* Stablecoin selection */}
                 {swapDirection === 'toUSD' && (
                   <p className="text-xs text-gray-500 mb-2">Or select a specific stablecoin (has fee):</p>
                 )}
-                <div className="grid grid-cols-4 gap-2">
-                  {stables.filter(t => !t.isVault).slice(0, 8).map((token) => {
+                <div className="grid grid-cols-5 gap-2">
+                  {stables.filter(t => !t.isVault).map((token) => {
                     const isSelected = swapOutputMode === 'token' && swapToken?.address === token.address
                     const balance = swapDirection === 'toETH' ? getTokenBalance(token) : null
                     const hasBalance = balance ? parseFloat(balance) > 0 : true
-                    
+
                     return (
                       <button
                         key={token.address}
@@ -1705,7 +2646,7 @@ export default function QuidApp() {
                     )
                   })}
                 </div>
-                
+
                 {/* Show fee for specific token selection */}
                 {swapDirection === 'toUSD' && swapOutputMode === 'token' && swapToken && (
                   <p className="mt-2 text-xs text-yellow-400/80">
@@ -1746,7 +2687,7 @@ export default function QuidApp() {
                   </div>
                 </div>
                 <p className="mt-2 text-sm text-gray-500">
-                  {swapDirection === 'toETH' 
+                  {swapDirection === 'toETH'
                     ? `Balance: ${swapToken ? formatNumber(parseFloat(getTokenBalance(swapToken)), 4) : '0'} ${swapToken?.symbol || ''}`
                     : `Balance: ${formatNumber(combinedEthBalance, 4)} ETH (${ethBalance} raw + ${wethBalance} WETH)`
                   }
@@ -1806,7 +2747,7 @@ export default function QuidApp() {
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-400">Potential Return</span>
-                    <span className="text-green-400">Higher than instant (if favorable)</span>
+                    <span className="text-green-400">Higher than instant (always, but extent varies)</span>
                   </div>
                 </div>
               )}
@@ -1826,10 +2767,10 @@ export default function QuidApp() {
                   }
                 }}
                 disabled={
-                  !connected || 
-                  isLoading || 
-                  !swapAmount || 
-                  parseFloat(swapAmount) <= 0 || 
+                  !connected ||
+                  isLoading ||
+                  !swapAmount ||
+                  parseFloat(swapAmount) <= 0 ||
                   txMutex ||
                   // For USD→ETH, need a token selected
                   (swapDirection === 'toETH' && !swapToken) ||
@@ -1837,20 +2778,20 @@ export default function QuidApp() {
                   (swapDirection === 'toUSD' && swapSpeed === 'instant' && swapOutputMode === 'token' && !swapToken)
                 }
                 className={`w-full py-4 rounded-xl font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed ${
-                  swapSpeed === 'instant' 
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600' 
+                  swapSpeed === 'instant'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600'
                     : 'bg-gradient-to-r from-purple-500 to-indigo-600'
                 }`}
               >
-                {isLoading && activeTab === 'swap' 
-                  ? (txStatus || 'Processing...') 
-                  : connected 
+                {isLoading && activeTab === 'swap'
+                  ? (txStatus || 'Processing...')
+                  : connected
                     ? swapSpeed === 'instant' ? 'Swap Now' : 'Open Position'
                     : 'Connect Wallet'}
               </button>
 
               <p className="text-xs text-gray-500 text-center">
-                {swapSpeed === 'instant' 
+                {swapSpeed === 'instant'
                   ? 'Instant swaps execute via Aux with ~5 block delay for sandwich protection'
                   : 'Wait positions use AAVE leverage. A keeper bot monitors and pivots at ±2.5% price moves.'
                 }
@@ -1860,42 +2801,343 @@ export default function QuidApp() {
 
           {/* PREDICTIONS TAB */}
           {activeTab === 'predictions' && (
-            <div className="space-y-6">
-              <div className="text-center py-12">
-                <div className="text-6xl mb-4">🚀</div>
-                <h3 className="text-2xl font-bold mb-2">Prediction Markets</h3>
-                <p className="text-gray-400 mb-6 max-w-md mx-auto">
-                  Trade on outcomes of real-world events. Stocks, crypto, sports, elections, and more.
-                </p>
-                <div className="inline-block px-6 py-3 rounded-xl bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30">
-                  <p className="text-purple-400 font-medium">Deploying Soon</p>
+            <div className="space-y-4">
+              {/* Hook not deployed warning */}
+              {(!contracts.hook || contracts.hook === '0x0000000000000000000000000000000000000000') ? (
+                <div className="text-center py-12">
+                  <div className="text-4xl mb-4">🔮</div>
+                  <h3 className="text-xl font-bold mb-2">Depeg Prediction Market</h3>
+                  <p className="text-gray-400 mb-4">Hook contract not yet deployed on {chain.name}.</p>
+                  <div className="inline-block px-4 py-2 rounded-xl bg-yellow-500/10 border border-yellow-500/30">
+                    <p className="text-yellow-400 text-sm">Awaiting deployment</p>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                  <p className="text-sm text-gray-400 mb-2">📈 Stocks & Indices</p>
-                  <p className="text-xs text-gray-500">Trade on price movements of major stocks and indices</p>
-                </div>
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                  <p className="text-sm text-gray-400 mb-2">🏆 Sports</p>
-                  <p className="text-xs text-gray-500">Bet on game outcomes, player stats, and tournaments</p>
-                </div>
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                  <p className="text-sm text-gray-400 mb-2">🗳️ Politics</p>
-                  <p className="text-xs text-gray-500">Trade on election results and policy decisions</p>
-                </div>
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                  <p className="text-sm text-gray-400 mb-2">🌐 World Events</p>
-                  <p className="text-xs text-gray-500">Predict outcomes of major global events</p>
-                </div>
-              </div>
-              
-              <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-center">
-                <p className="text-sm text-cyan-400">
-                  💡 Prediction markets will use QUID as the settlement currency with LMSR pricing
-                </p>
-              </div>
+              ) : (
+                <>
+                  {/* Market Header */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold">Stablecoin Depeg Market</h3>
+                      <p className="text-xs text-gray-500">
+                        Round #{hookMarket?.roundNumber || '—'} • {hookMarket?.positionsTotal || 0} positions
+                        {hookMarket?.resolved ? ' • ✅ Resolved' : hookMarket?.assertionPending ? ' • ⏳ Assertion Pending' : hookFrozen ? ' • 🔒 Disputed' : ' • 🟢 Trading'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-bold">${formatNumber(hookMarket?.totalCapital || 0, 2)}</p>
+                      <p className="text-xs text-gray-500">Total Capital</p>
+                    </div>
+                  </div>
+
+                  {/* Sub-tabs */}
+                  <div className="flex gap-1 p-1 rounded-lg bg-white/5">
+                    {(['overview', 'order', 'position'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setHookSubTab(tab as any)}
+                        className={`flex-1 py-1.5 rounded text-xs font-medium capitalize transition-all ${
+                          hookSubTab === tab ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
+                        }`}
+                      >
+                        {tab === 'overview' ? '📊 Prices' : tab === 'order' ? '📝 Order' : '💼 Position'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* OVERVIEW — LMSR prices + capital per side */}
+                  {hookSubTab === 'overview' && (
+                    <div className="space-y-3">
+                      {hookPrices.length > 0 ? (
+                        <div className="space-y-2">
+                          {hookPrices.map((price, i) => {
+                            const label = sideLabels[i] || `Side ${i}`
+                            const capital = hookCapitals[i] || 0
+                            const pct = (price * 100)
+                            const isWinner = hookMarket?.resolved && hookMarket?.winningSide === i
+                            return (
+                              <div key={i} className={`p-3 rounded-xl border transition-all ${
+                                isWinner ? 'bg-green-500/10 border-green-500/30' : 'bg-white/5 border-white/10'
+                              }`}>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-sm font-medium">
+                                    {i === 0 ? '🛡️' : '⚠️'} {label}
+                                    {isWinner && ' ✅'}
+                                  </span>
+                                  <span className="text-sm font-bold" style={{ color: pct > 20 && i > 0 ? '#f59e0b' : '#06b6d4' }}>
+                                    {pct.toFixed(1)}%
+                                  </span>
+                                </div>
+                                <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full transition-all"
+                                    style={{
+                                      width: `${Math.min(pct, 100)}%`,
+                                      background: i === 0 ? '#06b6d4' : pct > 20 ? '#f59e0b' : '#3b82f6'
+                                    }}
+                                  />
+                                </div>
+                                <p className="text-xs text-gray-500 mt-1">${formatNumber(capital, 2)} capital</p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-6 text-gray-500 text-sm">
+                          {hookLoading ? 'Loading market data...' : 'No market data available'}
+                        </div>
+                      )}
+
+                      {hookMarket?.roundStartTime > 0 && (
+                        <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                          <p className="text-xs text-gray-500">
+                            Round started: {new Date(hookMarket.roundStartTime * 1000).toLocaleString()}
+                          </p>
+                          {hookMarket.resolved && hookMarket.resolutionTimestamp > 0 && (
+                            <p className="text-xs text-gray-500">
+                              Resolved: {new Date(hookMarket.resolutionTimestamp * 1000).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ORDER — Place order */}
+                  {hookSubTab === 'order' && (
+                    <div className="space-y-4">
+                      {/* Side selector */}
+                      <div>
+                        <label className="text-xs text-gray-400 mb-2 block">Predict which (if any) stablecoin depegs</label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {sideLabels.slice(0, hookMarket?.numSides || sideLabels.length).map((label, i) => (
+                            <button
+                              key={i}
+                              onClick={() => setHookOrderSide(i)}
+                              className={`p-2 rounded-lg text-xs font-medium border transition-all ${
+                                hookOrderSide === i
+                                  ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+                                  : 'bg-white/5 border-white/10 text-gray-400 hover:border-white/20'
+                              }`}
+                            >
+                              {i === 0 ? '🛡️' : '⚠️'} {label}
+                              {hookPrices[i] !== undefined && (
+                                <span className="block text-[10px] text-gray-500 mt-0.5">{(hookPrices[i] * 100).toFixed(1)}%</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Amount */}
+                      <div>
+                        <label className="text-xs text-gray-400 mb-1 block">Amount (QD)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            value={hookOrderAmount}
+                            onChange={(e) => setHookOrderAmount(e.target.value)}
+                            placeholder="100"
+                            min="1"
+                            className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50"
+                          />
+                          {parseFloat(qdBalance) > 0 && (
+                            <button
+                              onClick={() => setHookOrderAmount((Number(qdBalance) / 1e18).toFixed(2))}
+                              className="px-3 py-1 text-xs text-cyan-400 border border-cyan-500/30 rounded-lg hover:bg-cyan-500/10"
+                            >
+                              MAX
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">QD Balance: {formatNumber(Number(qdBalance) / 1e18, 2)} • 4% fee on entry</p>
+                      </div>
+
+                      {/* Confidence slider */}
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-400">Confidence</label>
+                          <span className="text-xs font-bold text-cyan-400">{(hookConfidence / 100).toFixed(0)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={100}
+                          max={10000}
+                          step={100}
+                          value={hookConfidence}
+                          onChange={(e) => setHookConfidence(parseInt(e.target.value))}
+                          className="w-full"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Higher confidence = more weight if correct, less if wrong. Commit-reveal: hidden until resolution.</p>
+                      </div>
+
+                      {/* Auto rollover toggle */}
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
+                        <div>
+                          <p className="text-sm">Auto-rollover</p>
+                          <p className="text-xs text-gray-500">Automatically re-enter next round (2% fee vs 4%)</p>
+                        </div>
+                        <button
+                          onClick={() => setHookAutoRollover(!hookAutoRollover)}
+                          className={`w-12 h-6 rounded-full transition-all ${hookAutoRollover ? 'bg-cyan-500' : 'bg-white/20'}`}
+                        >
+                          <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${hookAutoRollover ? 'translate-x-6' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={placeHookOrder}
+                        disabled={!connected || isLoading || !hookOrderAmount || parseFloat(hookOrderAmount) < 1 || txMutex || hookMarket?.resolved || hookFrozen || hookMarket?.assertionPending}
+                        className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-purple-500 to-pink-600 hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isLoading && activeTab === 'predictions' ? (txStatus || 'Processing...') : connected ? 'Place Order' : 'Connect Wallet'}
+                      </button>
+
+                      {(hookMarket?.resolved || hookFrozen || hookMarket?.assertionPending) && (
+                        <p className="text-xs text-yellow-400 text-center">
+                          {hookMarket?.resolved ? 'Market resolved — new orders disabled' : hookFrozen ? 'Market frozen — dispute in progress' : 'Assertion pending — sell only'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* POSITION — View and manage positions */}
+                  {hookSubTab === 'position' && (
+                    <div className="space-y-3">
+                      {Object.keys(hookPositions).length > 0 ? (
+                        Object.entries(hookPositions).map(([sideStr, pos]) => {
+                          const side = parseInt(sideStr)
+                          const label = sideLabels[side] || `Side ${side}`
+                          const isStale = hookMarket && pos.lastRound < hookMarket.roundNumber
+
+                          // Load stored confidence from localStorage (pre-reveal)
+                          const storedEntries = address && chainId ? getStoredConfidences(chainId, MARKET_ID, side, address) : []
+                          const avgStoredConf = getAverageStoredConfidence(storedEntries)
+
+                          // Compute expected payout
+                          const mySideCapital = hookCapitals[side] || 0
+                          const totalCap = hookMarket?.totalCapital || 0
+                          const displayConf = pos.revealed ? pos.revealedConfidence : avgStoredConf
+                          const payout = estimateExpectedPayout(pos.totalCapital, mySideCapital, totalCap, displayConf)
+
+                          return (
+                            <div key={side} className={`p-4 rounded-xl border ${isStale ? 'bg-yellow-500/5 border-yellow-500/20' : 'bg-white/5 border-white/10'}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-medium">{side === 0 ? '🛡️' : '⚠️'} {label}</span>
+                                {isStale && <span className="text-xs text-yellow-400 px-2 py-0.5 rounded bg-yellow-500/10">Stale</span>}
+                                {pos.revealed && <span className="text-xs text-green-400 px-2 py-0.5 rounded bg-green-500/10">Revealed</span>}
+                                {pos.paidOut && <span className="text-xs text-cyan-400 px-2 py-0.5 rounded bg-cyan-500/10">Paid</span>}
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div>
+                                  <span className="text-gray-500">Capital:</span>
+                                  <span className="ml-1 text-white">${formatNumber(pos.totalCapital, 2)}</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Tokens:</span>
+                                  <span className="ml-1 text-white">{formatNumber(pos.totalTokens, 2)}</span>
+                                </div>
+
+                                {/* Confidence — revealed or from localStorage */}
+                                {pos.revealed ? (
+                                  <div>
+                                    <span className="text-gray-500">Confidence:</span>
+                                    <span className="ml-1 text-green-400">{(pos.revealedConfidence / 100).toFixed(0)}% ✓</span>
+                                  </div>
+                                ) : avgStoredConf !== null ? (
+                                  <div>
+                                    <span className="text-gray-500">Confidence:</span>
+                                    <span className="ml-1 text-yellow-400" title={`${storedEntries.length} commit(s) stored locally`}>
+                                      ~{(avgStoredConf / 100).toFixed(0)}% 🔒
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <span className="text-gray-500">Confidence:</span>
+                                    <span className="ml-1 text-gray-600">hidden</span>
+                                  </div>
+                                )}
+
+                                <div>
+                                  <span className="text-gray-500">Rollover:</span>
+                                  <span className="ml-1 text-white">{pos.autoRollover ? 'Yes' : 'No'}</span>
+                                </div>
+                              </div>
+
+                              {/* Expected payout estimate */}
+                              {!isStale && !pos.paidOut && totalCap > 0 && mySideCapital > 0 && (
+                                <div className="mt-2 p-2 rounded-lg bg-white/[0.03] border border-white/5">
+                                  <p className="text-[10px] text-gray-500 mb-1">If {label} wins:</p>
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="text-sm font-bold text-emerald-400">
+                                      ≈ ${formatNumber(payout.adjusted !== null ? payout.adjusted : payout.base, 2)}
+                                    </span>
+                                    <span className="text-[10px] text-gray-500">
+                                      ({((payout.adjusted !== null ? payout.adjusted : payout.base) / pos.totalCapital * 100 - 100).toFixed(0)}% return)
+                                    </span>
+                                  </div>
+                                  {payout.adjusted !== null && Math.abs(payout.adjusted - payout.base) > 0.01 && (
+                                    <p className="text-[10px] text-gray-600 mt-0.5">
+                                      Proportional: ${formatNumber(payout.base, 2)} • Conf-adjusted: ${formatNumber(payout.adjusted, 2)}
+                                    </p>
+                                  )}
+                                  <p className="text-[10px] text-gray-600 mt-0.5">
+                                    Pool: ${formatNumber(totalCap, 0)} total • ${formatNumber(mySideCapital, 0)} on {label}
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Sell controls (only if not stale and market not resolved) */}
+                              {!isStale && !hookMarket?.resolved && (
+                                <div className="mt-3 flex gap-2">
+                                  <input
+                                    type="number"
+                                    value={hookOrderSide === side ? hookSellTokens : ''}
+                                    onChange={(e) => { setHookOrderSide(side); setHookSellTokens(e.target.value) }}
+                                    placeholder="Tokens to sell"
+                                    className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50"
+                                  />
+                                  <button
+                                    onClick={() => { setHookOrderSide(side); sellHookPosition() }}
+                                    disabled={!hookSellTokens || parseFloat(hookSellTokens) <= 0 || txMutex || hookFrozen}
+                                    className="px-3 py-2 text-xs rounded-lg bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 disabled:opacity-50"
+                                  >
+                                    Sell
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Stale actions */}
+                              {isStale && (
+                                <div className="mt-3">
+                                  {pos.autoRollover ? (
+                                    <button
+                                      onClick={() => { setHookOrderSide(side); recommitHookPosition() }}
+                                      disabled={txMutex || hookMarket?.resolved || hookMarket?.assertionPending}
+                                      className="w-full px-3 py-2 text-xs rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30 disabled:opacity-50"
+                                    >
+                                      Recommit
+                                    </button>
+                                  ) : (
+                                    <p className="text-xs text-yellow-400/70 text-center">
+                                      ⏳ Capital will be returned automatically during next payout cycle
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      ) : (
+                        <div className="text-center py-8 text-gray-500 text-sm">
+                          {connected ? 'No positions found for this market' : 'Connect wallet to view positions'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1904,75 +3146,98 @@ export default function QuidApp() {
         <div className="mt-8 p-4 rounded-xl bg-white/5 border border-white/10">
           <p className="text-xs text-gray-500 mb-2">Contract Addresses ({chain.name})</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-gray-400">Basket (QD):</span>
-              <a
-                href={`${chain.explorer}/address/${contracts.basket}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:underline"
-              >
-                {shortenAddress(contracts.basket)}
-              </a>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">{protocol === 'v4' ? 'Vogue' : 'Rover'}:</span>
-              <a
-                href={`${chain.explorer}/address/${protocol === 'v4' ? contracts.vogue : contracts.rover}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:underline"
-              >
-                {shortenAddress(protocol === 'v4' ? contracts.vogue : contracts.rover)}
-              </a>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Aux:</span>
-              <a
-                href={`${chain.explorer}/address/${contracts.aux}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:underline"
-              >
-                {shortenAddress(contracts.aux)}
-              </a>
-            </div>
+            {[
+              { label: 'Basket (QD)', addr: contracts.basket },
+              { label: protocol === 'v4' ? 'Vogue' : 'Rover', addr: protocol === 'v4' ? contracts.vogue : contracts.rover },
+              { label: 'VogueCore', addr: contracts.vogueCore },
+              { label: 'Aux', addr: contracts.aux },
+              { label: 'Amp', addr: contracts.amp },
+              { label: 'Hook', addr: contracts.hook },
+              { label: 'UMA', addr: contracts.uma },
+            ].filter(c => c.addr && c.addr !== '0x0000000000000000000000000000000000000000').map(({ label, addr }) => (
+              <div key={label} className="flex justify-between">
+                <span className="text-gray-400">{label}:</span>
+                <a
+                  href={`${chain.explorer}/address/${addr}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-400 hover:underline"
+                >
+                  {shortenAddress(addr)}
+                </a>
+              </div>
+            ))}
           </div>
         </div>
 
+        {/* Waiver Modal — must be signed before minting */}
+        {showWaiver && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={() => setShowWaiver(false)}>
+            <div className="relative w-full max-w-2xl max-h-[90vh] bg-[#111318] border border-gray-700 rounded-xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="px-6 pt-5 pb-3 border-b border-gray-700 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-white">Smart Contract Usage Waiver and Release</h2>
+                <button onClick={() => { setShowWaiver(false); setWaiverChecked(false); }} className="text-gray-400 hover:text-white text-xl">×</button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-6 py-4 text-sm text-gray-300 space-y-4 leading-relaxed">
+                <p>By checking the box below, I acknowledge, represent, warrant, and agree to the following terms before using the smart contract (&quot;Contract&quot;) served through this website:</p>
+                <p><strong className="text-white">No Liability for Providers.</strong> I release and hold harmless the authors, developers, deployers, operators, and affiliates of the Contract (the &quot;Providers&quot;) from all claims, losses, damages, or liabilities related to my use, including smart contract failures, financial losses, or blockchain risks. After funding its cost of doing business, there is no profit retainer for the creators—the Providers provide the Contract strictly at cost.</p>
+                <p><strong className="text-white">Full Assumption of Risks.</strong> Blockchain and smart contracts carry high risks of total fund loss. I assume all such risks voluntarily. No warranties are made regarding security, performance, or results.</p>
+                <div>
+                  <p className="text-white font-medium mb-2">My Representations:</p>
+                  <p className="ml-4">• I am at least 18 years old and legally competent.</p>
+                  <p className="ml-4">• I am not on any OFAC sanctions lists, blocked persons lists, or equivalent.</p>
+                  <p className="ml-4">• I am not in any OFAC-sanctioned country (e.g., Cuba, Iran, North Korea, Syria, Crimea).</p>
+                  <p className="ml-4">• My use complies with all laws.</p>
+                </div>
+                <p><strong className="text-white">Indemnification.</strong> I will defend and indemnify the Providers against any claims from my use or breach.</p>
+                <p>This is governed by Cayman law. Checking confirms I understand and agree.</p>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-700 space-y-3">
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={waiverChecked}
+                    onChange={(e) => setWaiverChecked(e.target.checked)}
+                    className="mt-0.5 w-5 h-5 rounded border-gray-600 bg-gray-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 cursor-pointer accent-cyan-500"
+                  />
+                  <span className="text-sm text-gray-200">I agree to the above Waiver and Release of Liability</span>
+                </label>
+                <button
+                  onClick={() => {
+                    if (waiverChecked) {
+                      setWaiverAccepted(true)
+                      setShowWaiver(false)
+                    }
+                  }}
+                  disabled={!waiverChecked}
+                  className={`w-full py-3 rounded-lg font-semibold text-sm transition-all ${
+                    waiverChecked
+                      ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:shadow-lg hover:shadow-cyan-500/25'
+                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  Accept & Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* About Us Modal */}
         {showAboutModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={() => { setShowAboutModal(false); setAboutPage(0); }}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={() => setShowAboutModal(false)}>
             <div className="relative max-w-4xl max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-              <button 
-                onClick={() => { setShowAboutModal(false); setAboutPage(0); }}
+              <button
+                onClick={() => setShowAboutModal(false)}
                 className="absolute top-2 right-2 z-10 w-10 h-10 rounded-full bg-black/50 text-white hover:bg-black/70 flex items-center justify-center text-2xl"
               >
                 ×
               </button>
-              <img 
-                src={aboutPage === 0 ? "/how-it-works.png" : "/how-it-works-2.png"} 
-                alt="How QU!D Protocol Works" 
-                className="rounded-lg" 
+              <img
+                src="/how-it-works.png"
+                alt="How QU!D Protocol Works"
+                className="rounded-lg"
               />
-              {/* Pagination Controls */}
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-black/70 px-4 py-2 rounded-full">
-                <button 
-                  onClick={() => setAboutPage(0)}
-                  disabled={aboutPage === 0}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
-                >
-                  ←
-                </button>
-                <span className="text-white text-sm">{aboutPage + 1} / 2</span>
-                <button 
-                  onClick={() => setAboutPage(1)}
-                  disabled={aboutPage === 1}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
-                >
-                  →
-                </button>
-              </div>
             </div>
           </div>
         )}
