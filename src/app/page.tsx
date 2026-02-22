@@ -622,19 +622,45 @@ export default function QuidApp() {
           setAddress(accounts[0])
           setConnected(true)
 
-          const balance = await window.ethereum.request({
-            method: 'eth_getBalance',
-            params: [accounts[0], 'latest'],
-          })
-          setEthBalance((parseInt(balance, 16) / 1e18).toFixed(4))
-
           const currentChainId = await window.ethereum.request({ method: 'eth_chainId' })
           const numericChainId = parseInt(currentChainId, 16)
           if (CHAINS[numericChainId]?.enabled) {
             setChainId(numericChainId)
           } else {
-            setChainId(42161) // Default to Arbitrum
+            // MetaMask is on a disabled chain — actually switch it to Arbitrum
+            try {
+              await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: CHAINS[42161].hex }],
+              })
+            } catch (switchErr: any) {
+              // If chain not added, try to add it
+              if (switchErr.code === 4902) {
+                try {
+                  await window.ethereum.request({
+                    method: 'wallet_addEthereumChain',
+                    params: [{
+                      chainId: CHAINS[42161].hex,
+                      chainName: 'Arbitrum One',
+                      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                      rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+                      blockExplorerUrls: ['https://arbiscan.io'],
+                    }],
+                  })
+                } catch {
+                  console.log('Could not add Arbitrum network')
+                }
+              }
+            }
+            setChainId(42161)
           }
+
+          // Fetch ETH balance AFTER chain is settled
+          const balance = await window.ethereum.request({
+            method: 'eth_getBalance',
+            params: [accounts[0], 'latest'],
+          })
+          setEthBalance((parseInt(balance, 16) / 1e18).toFixed(4))
         }
       } else {
         setError('Please install MetaMask or another Web3 wallet')
@@ -668,13 +694,23 @@ export default function QuidApp() {
         }
       }
 
-      const handleChainChanged = (newChainId: string) => {
+      const handleChainChanged = async (newChainId: string) => {
         const numericChainId = parseInt(newChainId, 16)
         if (CHAINS[numericChainId]?.enabled) {
           setChainId(numericChainId)
           setSelectedToken(null)
           setTokenBalances({})
           setTokenAllowances({})
+        } else {
+          // User switched to a disabled chain — switch MetaMask back to Arbitrum
+          try {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: CHAINS[42161].hex }],
+            })
+          } catch {
+            console.log('Could not auto-switch back to Arbitrum')
+          }
         }
       }
 
